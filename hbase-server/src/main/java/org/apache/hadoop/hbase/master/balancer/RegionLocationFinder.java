@@ -71,7 +71,8 @@ class RegionLocationFinder {
   private volatile ClusterStatus status;
   private MasterServices services;
   private final ListeningExecutorService executor;
-  private long lastFullRefresh = 0;
+  // Do not scheduleFullRefresh at master startup
+  private long lastFullRefresh = EnvironmentEdgeManager.currentTime();
 
   private CacheLoader<HRegionInfo, HDFSBlocksDistribution> loader =
       new CacheLoader<HRegionInfo, HDFSBlocksDistribution>() {
@@ -139,6 +140,11 @@ class RegionLocationFinder {
 
   }
 
+  // For test
+  LoadingCache<HRegionInfo, HDFSBlocksDistribution> getCache() {
+    return cache;
+  }
+
   /**
    * Refresh all the region locations.
    *
@@ -168,9 +174,8 @@ class RegionLocationFinder {
     return includesUserTables;
   }
 
-  protected List<ServerName> getTopBlockLocations(
-      HDFSBlocksDistribution blocksDistribution) {
-    List<String> topHosts = blocksDistribution.getTopHosts();
+  protected List<ServerName> getTopBlockLocations(HRegionInfo region) {
+    List<String> topHosts = getBlockDistribution(region).getTopHosts();
     return mapHostNameToServerName(topHosts);
   }
 
@@ -300,11 +305,33 @@ class RegionLocationFinder {
     }
   }
 
-  public ListenableFuture<HDFSBlocksDistribution> asyncGetBlockDistribution(HRegionInfo hri) {
+  private ListenableFuture<HDFSBlocksDistribution> asyncGetBlockDistribution(HRegionInfo hri) {
     try {
       return loader.reload(hri, EMPTY_BLOCK_DISTRIBUTION);
     } catch (Exception e) {
       return Futures.immediateFuture(EMPTY_BLOCK_DISTRIBUTION);
+    }
+  }
+
+  public void refreshAndWait(Collection<HRegionInfo> hris) {
+    ArrayList<ListenableFuture<HDFSBlocksDistribution>> regionLocationFutures =
+        new ArrayList<ListenableFuture<HDFSBlocksDistribution>>(hris.size());
+    for (HRegionInfo hregionInfo : hris) {
+      regionLocationFutures.add(asyncGetBlockDistribution(hregionInfo));
+    }
+    int index = 0;
+    for (HRegionInfo hregionInfo : hris) {
+      ListenableFuture<HDFSBlocksDistribution> future = regionLocationFutures
+          .get(index);
+      try {
+        cache.put(hregionInfo, future.get());
+      } catch (InterruptedException ite) {
+      } catch (ExecutionException ee) {
+        LOG.debug(
+            "IOException during HDFSBlocksDistribution computation. for region = "
+                + hregionInfo.getEncodedName(), ee);
+      }
+      index++;
     }
   }
 }

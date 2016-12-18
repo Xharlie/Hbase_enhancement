@@ -19,6 +19,7 @@
 package org.apache.hadoop.hbase.client;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -27,25 +28,34 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.ipc.AsyncRpcClient;
 import org.apache.hadoop.hbase.ipc.RpcClientFactory;
+import org.apache.hadoop.hbase.ipc.RpcClientImpl;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Threads;
+import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.rules.TestName;
 
 import com.google.protobuf.Message;
 
@@ -55,6 +65,7 @@ import com.google.protobuf.Message;
  */
 @Category(LargeTests.class)
 public class TestAsyncHTable {
+  @Rule public TestName name = new TestName();
   final Log LOG = LogFactory.getLog(getClass());
   private static final byte[] COLUMN_FAMILY = Bytes.toBytes("cf");
   private final byte[] qualifier = Bytes.toBytes("q");
@@ -68,31 +79,40 @@ public class TestAsyncHTable {
   public static void setUpBeforeClass() throws Exception {
     TEST_UTIL.getConfiguration().setInt(HConstants.HBASE_CLIENT_PAUSE, 100);
     // TEST_UTIL.getConfiguration().setInt("hbase.ipc.server.max.callqueue.length", 12800);
-    TEST_UTIL.getConfiguration().set(RpcClientFactory.CUSTOM_RPC_CLIENT_IMPL_CONF_KEY,
-      AsyncRpcClient.class.getName());
     TEST_UTIL.getConfiguration().setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 10);
+    // TEST_UTIL.getConfiguration().setInt(HConstants.HBASE_CLIENT_OPERATION_TIMEOUT, 5000);
     // comment below line to suppress retry log
     TEST_UTIL.getConfiguration().setInt(AsyncProcess.START_LOG_ERRORS_AFTER_COUNT_KEY, 0);
     TEST_UTIL.startMiniCluster(3);
-    connection = ConnectionFactory.createConnection(TEST_UTIL.getConfiguration());
   }
 
   @AfterClass
   public static void tearDownAfterClass() throws Exception {
-    connection.close();
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  public static void resetConnection() throws Exception {
-    connection.close();
+  @Before
+  public void setUp() throws Exception {
+    if (name.getMethodName().equals("testWithBlockingClient")) {
+      TEST_UTIL.getConfiguration().set(RpcClientFactory.CUSTOM_RPC_CLIENT_IMPL_CONF_KEY,
+        RpcClientImpl.class.getName());
+    } else {
+      TEST_UTIL.getConfiguration().set(RpcClientFactory.CUSTOM_RPC_CLIENT_IMPL_CONF_KEY,
+        AsyncRpcClient.class.getName());
+    }
     connection = ConnectionFactory.createConnection(TEST_UTIL.getConfiguration());
+  }
+
+  @After
+  public void tearDown() throws Exception {
+    connection.close();
   }
 
   @Test(timeout = 60000)
   public void testBatch() throws Exception {
     // Use a customized callback for put, and AsyncFuture for get
     // TODO use multiple thread to check error handling like call queue too big
-    final byte[] table = Bytes.toBytes("testBatchCallBack");
+    final byte[] table = Bytes.toBytes(name.getMethodName());
     final byte[] qualifier = Bytes.toBytes("q");
     HTable htable = TEST_UTIL.createTable(table, COLUMN_FAMILY,
       new byte[][] { Bytes.toBytes("thread2"), Bytes.toBytes("thread4") });
@@ -144,8 +164,6 @@ public class TestAsyncHTable {
 
     }
 
-    AsyncableHTableInterface ht =
-        (AsyncableHTableInterface) connection.getTable(TableName.valueOf(table));
     List<Row> puts = new ArrayList<Row>();
     for (int i = 0; i < batchSize; i++) {
       byte[] row = Bytes.toBytes("thread" + i);
@@ -154,7 +172,7 @@ public class TestAsyncHTable {
       puts.add(put);
     }
     Object[] results = new Object[puts.size()];
-    ht.asyncBatch(puts, results, new CustomAsyncBatchCallback(results));
+    htable.asyncBatch(puts, results, new CustomAsyncBatchCallback(results));
 
     waitUntilEqual(successCount, errorCount, 10, 60 * 1000);
     LOG.debug("Succeed put operation number: " + successCount.get());
@@ -172,7 +190,7 @@ public class TestAsyncHTable {
       gets.add(get);
     }
     results = new Object[gets.size()];
-    AsyncFuture<Object[]> future = ht.asyncBatch(gets, results);
+    AsyncFuture<Object[]> future = htable.asyncBatch(gets, results);
     // get result and make sure the result array got from future is the original one we passed in
     assert results == future.get();
     for (Object result : results) {
@@ -193,12 +211,12 @@ public class TestAsyncHTable {
     LOG.debug("Failed get operation number: " + errorCount.get());
     LOG.debug("Results: " + Arrays.asList(results));
 
-    ht.close();
+    htable.close();
   }
 
-  @Test(timeout = 300000)
+  @Test(timeout = 60000)
   public void testCallBack() throws Exception {
-    final byte[] table = Bytes.toBytes("testCallBack");
+    final byte[] table = Bytes.toBytes(name.getMethodName());
     final byte[] qualifier = Bytes.toBytes("q");
     HTable htable =
         TEST_UTIL.createTable(table, COLUMN_FAMILY,
@@ -386,9 +404,9 @@ public class TestAsyncHTable {
     htable.close();
   }
 
-  @Test(timeout = 300000)
+  @Test(timeout = 60000)
   public void testAsyncFuture() throws Exception {
-    final byte[] table = Bytes.toBytes("testAsyncFuture");
+    final byte[] table = Bytes.toBytes(name.getMethodName());
     HTable htable = TEST_UTIL.createTable(table, COLUMN_FAMILY,
       new byte[][] { Bytes.toBytes("thread2"), Bytes.toBytes("thread4") });
     final AtomicInteger successCount = new AtomicInteger(0);
@@ -417,6 +435,155 @@ public class TestAsyncHTable {
     assertEquals(0, TEST_UTIL.countRows(htable));
 
     htable.close();
+  }
+
+  @Test(timeout = 60000)
+  public void testFutureGetAfterCancel() throws Exception {
+    final byte[] table = Bytes.toBytes(name.getMethodName());
+    HTable htable = null;
+    try {
+      htable = TEST_UTIL.createTable(table, COLUMN_FAMILY,
+        new byte[][] { Bytes.toBytes("thread2"), Bytes.toBytes("thread4") });
+      byte[] fakeRow = Bytes.toBytes("fakerow");
+      // test async get
+      Get get = new Get(fakeRow);
+      Future<?> future = htable.asyncGet(get);
+      getAfterCancel(future);
+      // test async put
+      Put put = new Put(fakeRow);
+      future = htable.asyncPut(put);
+      getAfterCancel(future);
+      // test async delete
+      Delete del = new Delete(fakeRow);
+      future = htable.asyncDelete(del);
+      getAfterCancel(future);
+      // test async batch
+      List<Row> rows = new ArrayList<Row>();
+      rows.add(get);
+      future = htable.asyncBatch(rows);
+      getAfterCancel(future);
+    } finally {
+      if (htable != null) htable.close();
+    }
+  }
+
+  private void getAfterCancel(Future<?> future)
+      throws InterruptedException, ExecutionException, TimeoutException {
+    future.cancel(true);
+    try {
+      future.get(100, TimeUnit.MILLISECONDS);
+      fail("Should have thrown DoNotRetryIOException"
+          + " when invoking get against already canceled future");
+    } catch (ExecutionException e) {
+      if (!(e.getCause() instanceof DoNotRetryIOException)) {
+        fail("Should have thrown DoNotRetryIOException but actually " + e.getCause());
+      }
+      // test pass
+      LOG.debug("Caught expected exception", e);
+    }
+  }
+
+  @Test(timeout = 60000)
+  public void testFutureGetAfterDone() throws Exception {
+    final byte[] table = Bytes.toBytes(name.getMethodName());
+    HTable htable = null;
+    try {
+      htable = TEST_UTIL.createTable(table, COLUMN_FAMILY,
+        new byte[][] { Bytes.toBytes("thread2"), Bytes.toBytes("thread4") });
+      byte[] fakeRow = Bytes.toBytes("fakerow");
+      // test async get
+      Get get = new Get(fakeRow);
+      Future<?> future = htable.asyncGet(get);
+      getAfterDone(future);
+      // test async put
+      Put put = new Put(fakeRow);
+      future = htable.asyncPut(put);
+      getAfterDone(future);
+      // test async delete
+      Delete del = new Delete(fakeRow);
+      future = htable.asyncDelete(del);
+      getAfterDone(future);
+      // test async batch
+      List<Row> rows = new ArrayList<Row>();
+      rows.add(get);
+      future = htable.asyncBatch(rows);
+      getAfterDone(future);
+    } finally {
+      if (htable != null) htable.close();
+    }
+  }
+
+  private void getAfterDone(Future<?> future) {
+    Object result = null;
+    Exception exception = null;
+    try {
+      result = future.get();
+    } catch (Exception e) {
+      exception = e;
+    }
+    Object secondGetResult = null;
+    Exception secondGetException = null;
+    try {
+      secondGetResult = future.get();
+    } catch (Exception e) {
+      secondGetException = e;
+    }
+    assertEquals(result, secondGetResult);
+    assertEquals(exception, secondGetException);
+    // test pass
+    LOG.debug("Result: " + result);
+    LOG.debug("Exception", exception);
+  }
+
+  @Test(timeout = 60000)
+  public void testWithBlockingClient() throws Exception {
+    final byte[] table = Bytes.toBytes(name.getMethodName());
+    TEST_UTIL.getConfiguration().set(RpcClientFactory.CUSTOM_RPC_CLIENT_IMPL_CONF_KEY,
+      RpcClientImpl.class.getName());
+    HTable htable = null;
+    try {
+      htable = TEST_UTIL.createTable(table, COLUMN_FAMILY,
+        new byte[][] { Bytes.toBytes("thread2"), Bytes.toBytes("thread4") });
+      byte[] fakeRow = Bytes.toBytes("fakerow");
+      // test async get
+      Get get = new Get(fakeRow);
+      Future<?> future = htable.asyncGet(get);
+      asyncCallWithBlockingClient(future);
+      // test async put
+      Put put = new Put(fakeRow);
+      future = htable.asyncPut(put);
+      asyncCallWithBlockingClient(future);
+      // test async delete
+      Delete del = new Delete(fakeRow);
+      future = htable.asyncDelete(del);
+      asyncCallWithBlockingClient(future);
+      // test async batch
+      List<Row> rows = new ArrayList<Row>();
+      rows.add(get);
+      future = htable.asyncBatch(rows);
+      asyncCallWithBlockingClient(future);
+      htable.close();
+    } finally {
+      if (htable != null) {
+        htable.close();
+      }
+    }
+  }
+
+  private void asyncCallWithBlockingClient(Future<?> future)
+      throws InterruptedException, ExecutionException, TimeoutException {
+    try {
+      future.get(100, TimeUnit.MILLISECONDS);
+      fail("Should have thrown DoNotRetryIOException"
+          + " when sending async call through blocking client");
+    } catch (ExecutionException e) {
+      if (!(e.getCause() instanceof DoNotRetryIOException)) {
+        LOG.debug("Actual exception", e);
+        fail("Should have thrown DoNotRetryIOException but actually " + e.getCause());
+      }
+      // test pass
+      LOG.debug("Caught expected exception", e);
+    }
   }
 
   /**

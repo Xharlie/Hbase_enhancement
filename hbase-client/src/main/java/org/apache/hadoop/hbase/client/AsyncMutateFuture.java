@@ -45,20 +45,19 @@ public class AsyncMutateFuture extends AsyncFuture<Result> {
   final Mutation mutate;
   final String row;
   final String tableName;
-  Result toReturn;
-  ArrayList<ThrowableWithExtraContext> exceptions = new ArrayList<RetriesExhaustedException.ThrowableWithExtraContext>();
-  IOException toThrow = null;
+  final int operationTimeout;
+  final AsyncMutateCallback callback;
   CountDownLatch latch = new CountDownLatch(1);
-  boolean isDone = false;
 
   public AsyncMutateFuture(final HTable table, final Mutation mutate, int tries,
-      final long retryPause, final int startLogErrorsCnt) throws IOException {
+      final long retryPause, final int startLogErrorsCnt, int operationTimeout) throws IOException {
     this.table = table;
     this.mutate = mutate;
     this.maxAttempts = tries;
     this.row = Bytes.toString(mutate.getRow());
     this.tableName = table.getName().getNameAsString();
-    AsyncMutateCallback callback = new AsyncMutateCallback(this.mutate.getRow()) {
+    this.operationTimeout = operationTimeout;
+    this.callback = new AsyncMutateCallback(this.mutate.getRow()) {
 
       @Override
       public void processResult(Result result) {
@@ -81,10 +80,11 @@ public class AsyncMutateFuture extends AsyncFuture<Result> {
         exceptions.add(exceptionWithDetails);
         // check and retry
         int attempts = numAttempts.get();
-        if (attempts < maxAttempts) {
+        if (attempts < maxAttempts && !isCanceled) {
           if (attempts > startLogErrorsCnt) {
-            LOG.debug("Mutate attempt failed for table " + tableName + " on row " + row + "; tried="
-                + attempts + ", maxAttempts=" + maxAttempts + ". Retry...",
+            LOG.debug(
+              "Mutate attempt failed for table " + tableName + " on row " + row + " at {" + location
+                  + "}; tried=" + attempts + ", maxAttempts=" + maxAttempts + ". Retry...",
               exception);
           }
           long pause = ConnectionUtils.getPauseTime(retryPause, attempts);
@@ -95,7 +95,11 @@ public class AsyncMutateFuture extends AsyncFuture<Result> {
           delayedRetry(null, pause, this);
         } else {
           LOG.debug("Mutate failed after tried " + numAttempts + " times", exception);
-          toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
+          if (isCanceled) {
+            toThrow = new DoNotRetryIOException("Request is already canceled");
+          } else {
+            toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
+          }
           isDone = true;
           latch.countDown();
         }
@@ -106,7 +110,17 @@ public class AsyncMutateFuture extends AsyncFuture<Result> {
 
   @Override
   public Result get() throws InterruptedException, ExecutionException {
-    latch.await();
+    if (checkCancelOrDone()) {
+      return toReturn;
+    }
+
+    latch.await(this.operationTimeout, TimeUnit.MILLISECONDS);
+    if (latch.getCount() > 0) {
+      cancel(true);
+      throw new InterruptedException("Failed to put row: " + this.row + " into table: "
+          + this.tableName + " at {" + this.callback.location + "} within operation timeout: "
+          + this.operationTimeout + TimeUnit.MILLISECONDS);
+    }
     if (toThrow != null) {
       throw new ExecutionException(toThrow);
     }
@@ -125,9 +139,13 @@ public class AsyncMutateFuture extends AsyncFuture<Result> {
           throw new DoNotRetryIOException("Type of given callback is not correct");
         }
       } catch (IOException e) {
+        if (e instanceof DoNotRetryIOException) {
+          callback.onError(e);
+          break;
+        }
         LOG.debug("Failed to issue async mutate request for table " + tableName + " on row " + row
-            + "; numAttempts=" + numAttempts + ", maxAttempts=" + maxAttempts,
-          e);
+            + " at {" + this.callback.location + "}; numAttempts=" + numAttempts + ", maxAttempts="
+            + maxAttempts,e);
         if (numAttempts.get() == maxAttempts) {
           callback.onError(e);
           break; // break to save one compare
@@ -139,6 +157,10 @@ public class AsyncMutateFuture extends AsyncFuture<Result> {
   @Override
   public Result get(long timeout, TimeUnit unit)
       throws InterruptedException, ExecutionException, TimeoutException {
+    if (checkCancelOrDone()) {
+      return toReturn;
+    }
+
     latch.await(timeout, unit);
     if (latch.getCount() > 0) {
       throw new TimeoutException("Failed to put row: " + this.row + " into table: "

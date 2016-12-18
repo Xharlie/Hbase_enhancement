@@ -238,6 +238,16 @@ public interface MetricsRegionServerWrapper {
   long getBlockCacheSize();
 
   /**
+   * Get the percent of block cache size has been allocated for data
+   */
+  double getBlockCacheUsedPercent();
+
+  /**
+   * Get the percent of block cache has been allocated for data excluding padding size.
+   */
+  double getBlockCacheRealUsedPercent();
+
+  /**
    * Get the count of hits to the block cache
    */
   long getBlockCacheHitCount();
@@ -266,6 +276,11 @@ public interface MetricsRegionServerWrapper {
    * Get the percent of all requests on data that hit the block cache.
    */
   double getBlockCacheDataHitPercent();
+
+  /**
+   * Get the percent of all requests that hit the bucket cache.
+   */
+  double getBucketCacheHitPercent();
 
   /**
    * Get the percent of requests with the block cache turned on that hit the block cache.

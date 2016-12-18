@@ -205,6 +205,11 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
     }
 
     @Override
+    public double getMetaHitRatio() {
+      return ((float) lruCacheStats.getMetaHitCount() / (float) lruCacheStats.getMetaRequestCount());
+    }
+
+    @Override
     public long getDataRequestCount() {
       return lruCacheStats.getDataRequestCount()
           + bucketCacheStats.getDataRequestCount();
@@ -215,6 +220,10 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
       return ((float) getDataHitCount() / (float) getDataRequestCount());
     }
 
+    @Override
+    public double getBucketCacheHitRatio() {
+      return bucketCacheStats.getHitRatio();
+    }
     @Override
     public long getMetaHitCachingCount() {
       return lruCacheStats.getMetaHitCachingCount()
@@ -289,5 +298,20 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
   @VisibleForTesting
   public int getRefCount(BlockCacheKey cacheKey) {
     return ((BucketCache) this.l2Cache).getRefCount(cacheKey);
+  }
+
+  @Override
+  public long getUsedSize() {
+    return l2Cache.getUsedSize();
+  }
+
+  @Override
+  public long getRealUsedSize() {
+    return l2Cache.getRealUsedSize();
+  }
+
+  @Override
+  public long getCapacity() {
+    return l2Cache.getCapacity();
   }
 }

@@ -278,8 +278,15 @@ class AsyncProcess {
         HConstants.DEFAULT_HBASE_CLIENT_PAUSE);
     this.specialPause = conf.getLong(HConstants.HBASE_CLIENT_PAUSE_SPECIAL_CASE,
         HConstants.DEFAULT_HBASE_CLIENT_PAUSE_SPECIAL_CASE);
+    // how many times we could try in total, one more than retry number
     this.numTries = conf.getInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER,
-        HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER);
+        HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER) + 1;
+    if (conf.getBoolean(HConstants.HBASE_CLIENT_RETRIES_ATLEASTONCE,
+      HConstants.DEFAULT_HBASE_CLIENT_RETRIES_ATLEASTONCE)) {
+      if (this.numTries <= 1) {
+        this.numTries = 2;
+      }
+    }
     this.timeout = conf.getInt(HConstants.HBASE_RPC_TIMEOUT_KEY,
         HConstants.DEFAULT_HBASE_RPC_TIMEOUT);
     this.primaryCallTimeoutMicroseconds = conf.getInt(PRIMARY_CALL_TIMEOUT_KEY, 10000);
@@ -1142,7 +1149,7 @@ class AsyncProcess {
     private void receiveGlobalFailure(
         MultiAction<Row> rsActions, ServerName server, int numAttempt, Throwable t) {
       errorsByServer.reportServerError(server);
-      Retry canRetry = errorsByServer.canRetryMore(numAttempt)
+      Retry canRetry = errorsByServer.canTryMore(numAttempt)
           ? Retry.YES : Retry.NO_RETRIES_EXHAUSTED;
 
       if (tableName == null) {
@@ -1282,7 +1289,7 @@ class AsyncProcess {
             if (failureCount == 0) {
               errorsByServer.reportServerError(server);
               // We determine canRetry only once for all calls, after reporting server failure.
-              canRetry = errorsByServer.canRetryMore(numAttempt);
+              canRetry = errorsByServer.canTryMore(numAttempt);
             }
             ++failureCount;
             Retry retry = manageError(sentAction.getOriginalIndex(), row,
@@ -1330,7 +1337,7 @@ class AsyncProcess {
 
         if (failureCount == 0) {
           errorsByServer.reportServerError(server);
-          canRetry = errorsByServer.canRetryMore(numAttempt);
+          canRetry = errorsByServer.canTryMore(numAttempt);
         }
         connection.updateCachedLocations(
             tableName, region, actions.get(0).getAction().getRow(), throwable, server);

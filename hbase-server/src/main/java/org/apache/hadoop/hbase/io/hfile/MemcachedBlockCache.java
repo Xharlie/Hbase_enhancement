@@ -290,4 +290,18 @@ public class MemcachedBlockCache implements BlockCache {
     // Not doing reference counting. All blocks here are EXCLUSIVE
   }
 
+  @Override
+  public long getUsedSize() {
+    return getCurrentSize();
+  }
+
+  @Override
+  public long getRealUsedSize() {
+    return getCurrentSize();
+  }
+
+  @Override
+  public long getCapacity() {
+    return getCurrentSize();
+  }
 }

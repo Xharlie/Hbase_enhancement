@@ -38,6 +38,7 @@ import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.CompatibilitySingletonFactory;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.CellComparator.MetaCellComparator;
+import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.crypto.Encryption;
@@ -464,16 +465,13 @@ public class HFileWriterImpl implements HFile.Writer {
 
   /** Gives inline block writers an opportunity to contribute blocks. */
   private void writeInlineBlocks(boolean closing) throws IOException {
-    long startTimeNs;
     for (InlineBlockWriter ibw : inlineBlockWriters) {
       while (ibw.shouldWriteBlock(closing)) {
         long offset = outputStream.getPos();
         boolean cacheThisBlock = ibw.getCacheOnWrite();
         ibw.writeInlineBlock(fsBlockWriter.startWriting(
             ibw.getInlineBlockType()));
-        startTimeNs = System.nanoTime();
         fsBlockWriter.writeHeaderAndData(outputStream);
-        this.hfileMetrics.updateFsWriteTime(System.nanoTime() - startTimeNs);
         ibw.blockWritten(offset, fsBlockWriter.getOnDiskSizeWithHeader(),
             fsBlockWriter.getUncompressedSizeWithoutHeader());
         totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
@@ -551,8 +549,6 @@ public class HFileWriterImpl implements HFile.Writer {
 
     FixedFileTrailer trailer = new FixedFileTrailer(getMajorVersion(), getMinorVersion());
 
-    long startTimeNs;
-
     // Write out the metadata blocks if any.
     if (!metaNames.isEmpty()) {
       for (int i = 0; i < metaNames.size(); ++i) {
@@ -562,9 +558,7 @@ public class HFileWriterImpl implements HFile.Writer {
         DataOutputStream dos = fsBlockWriter.startWriting(BlockType.META);
         metaData.get(i).write(dos);
 
-        startTimeNs = System.nanoTime();
         fsBlockWriter.writeHeaderAndData(outputStream);
-        this.hfileMetrics.updateFsWriteTime(System.nanoTime() - startTimeNs);
         totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
 
         // Add the new meta block to the meta index.
@@ -588,9 +582,7 @@ public class HFileWriterImpl implements HFile.Writer {
     // Meta block index.
     metaBlockIndexWriter.writeSingleLevelIndex(fsBlockWriter.startWriting(
         BlockType.ROOT_INDEX), "meta");
-    startTimeNs = System.nanoTime();
     fsBlockWriter.writeHeaderAndData(outputStream);
-    this.hfileMetrics.updateFsWriteTime(System.nanoTime() - startTimeNs);
     totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
 
     if (this.hFileContext.isIncludesMvcc()) {
@@ -600,9 +592,7 @@ public class HFileWriterImpl implements HFile.Writer {
 
     // File info
     writeFileInfo(trailer, fsBlockWriter.startWriting(BlockType.FILE_INFO));
-    startTimeNs = System.nanoTime();
     fsBlockWriter.writeHeaderAndData(outputStream);
-    this.hfileMetrics.updateFsWriteTime(System.nanoTime() - startTimeNs);
     totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
 
     // Load-on-open data supplied by higher levels, e.g. Bloom filters.
@@ -711,6 +701,20 @@ public class HFileWriterImpl implements HFile.Writer {
     int tagsLength = cell.getTagsLength();
     if (tagsLength > this.maxTagsLength) {
       this.maxTagsLength = tagsLength;
+    }
+  }
+
+  @Override
+  public void beforeShipped() throws IOException {
+    // Add clone methods for every cell
+    if (this.lastCell != null) {
+      this.lastCell = KeyValueUtil.toNewKeyCell(this.lastCell);
+    }
+    if (this.firstCellInBlock != null) {
+      this.firstCellInBlock = KeyValueUtil.toNewKeyCell(this.firstCellInBlock);
+    }
+    if (this.lastCellOfPreviousBlock != null) {
+      this.lastCellOfPreviousBlock = KeyValueUtil.toNewKeyCell(this.lastCellOfPreviousBlock);
     }
   }
 

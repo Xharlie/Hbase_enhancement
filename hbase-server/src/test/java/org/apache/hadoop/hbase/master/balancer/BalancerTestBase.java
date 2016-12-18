@@ -139,8 +139,8 @@ public class BalancerTestBase {
 
     for (ServerAndLoad server : servers) {
       assertTrue(server.getLoad() >= 0);
-      assertTrue(server.getLoad() <= max + tablenum/2 );
-      assertTrue(server.getLoad() >= min - tablenum/2 );
+      assertTrue(server.getLoad() <= max + tablenum/2 + 1);
+      assertTrue(server.getLoad() >= min - tablenum/2 - 1);
     }
   }
 

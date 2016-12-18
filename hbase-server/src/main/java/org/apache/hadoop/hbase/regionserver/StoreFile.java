@@ -724,7 +724,7 @@ public class StoreFile {
    * A StoreFile writer.  Use this to read/write HBase Store Files. It is package
    * local because it is an implementation detail of the HBase regionserver.
    */
-  public static class Writer implements Compactor.CellSink {
+  public static class Writer implements CellSink, ShipperListener {
     private final BloomFilterWriter generalBloomFilterWriter;
     private final BloomFilterWriter deleteFamilyBloomFilterWriter;
     private final BloomType bloomType;
@@ -965,11 +965,31 @@ public class StoreFile {
       }
     }
 
+    @Override
     public void append(final Cell cell) throws IOException {
       appendGeneralBloomfilter(cell);
       appendDeleteFamilyBloomFilter(cell);
       writer.append(cell);
       trackTimestamps(cell);
+    }
+
+    @Override
+    public void beforeShipped() throws IOException {
+      if (this.lastCell != null) {
+        this.lastCell = KeyValueUtil.toNewKeyCell(this.lastCell);
+      }
+      if (this.lastDeleteFamilyCell != null) {
+        this.lastDeleteFamilyCell = KeyValueUtil.toNewKeyCell(this.lastDeleteFamilyCell);
+      }
+      // For now these writer will always be of type ShipperListener true.
+      // TODO : Change all writers to be specifically created for compaction context
+      writer.beforeShipped();
+      if (generalBloomFilterWriter != null) {
+        generalBloomFilterWriter.beforeShipped();
+      }
+      if (deleteFamilyBloomFilterWriter != null) {
+        deleteFamilyBloomFilterWriter.beforeShipped();
+      }
     }
 
     public Path getPath() {

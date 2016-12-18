@@ -102,8 +102,14 @@ module Hbase
     #----------------------------------------------------------------------------------------------
     # Requests a cluster balance
     # Returns true if balancer ran
-    def balancer()
-      @admin.balancer()
+    def balancer(*args)
+      overall = false
+      if args.size == 1
+        overall = args[0]
+      elsif args.size > 1
+        raise(ArgumentError, "shouldn't provide more than 1 argument")
+      end
+      @admin.balancer(java.lang.Boolean::valueOf(overall))
     end
 
     #----------------------------------------------------------------------------------------------

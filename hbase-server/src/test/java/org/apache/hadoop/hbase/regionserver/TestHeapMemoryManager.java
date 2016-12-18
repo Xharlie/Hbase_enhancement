@@ -407,6 +407,21 @@ public class TestHeapMemoryManager {
     @Override
     public void returnBlock(BlockCacheKey cacheKey, Cacheable buf) {
     }
+
+    @Override
+    public long getUsedSize() {
+      return getCurrentSize();
+    }
+
+    @Override
+    public long getRealUsedSize() {
+      return getCurrentSize();
+    }
+
+    @Override
+    public long getCapacity() {
+      return getCurrentSize();
+    }
   }
 
   private static class MemstoreFlusherStub implements FlushRequester {

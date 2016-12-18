@@ -165,7 +165,7 @@ public class Action {
     Admin admin = this.context.getHBaseIntegrationTestingUtility().getHBaseAdmin();
     boolean result = false;
     try {
-      result = admin.balancer();
+      result = admin.balancer(false);
     } catch (Exception e) {
       LOG.warn("Got exception while doing balance ", e);
     }

@@ -33,6 +33,8 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.client.AsyncProcess.AsyncRequestFutureImpl;
 import org.apache.hadoop.hbase.client.RetriesExhaustedException.ThrowableWithExtraContext;
 import org.apache.hadoop.hbase.exceptions.ClientExceptionsUtil;
@@ -40,35 +42,46 @@ import org.apache.hadoop.hbase.util.Bytes;
 
 import com.google.protobuf.Message;
 
+@InterfaceAudience.Private
+@InterfaceStability.Evolving
 public class AsyncBatchFuture extends AsyncFuture<Object[]> {
   private static Log LOG = LogFactory.getLog(AsyncBatchFuture.class);
 
   final String tableName;
   final String firstRow;
-  final Object[] results;
-  ArrayList<ThrowableWithExtraContext> exceptions = new ArrayList<RetriesExhaustedException.ThrowableWithExtraContext>();
-  IOException toThrow = null;
   final CountDownLatch latch;
-  boolean isDone = false;
+  final int startLogErrorsCnt;
+  final int operationTimeout;
 
   public AsyncBatchFuture(final HTable table, final List<Action<Row>> actions,
-      final Object[] results, int tries, final long retryPause) throws IOException {
+      final Object[] results, int tries, final long retryPause, int startLogErrorsCnt,
+      int operationTimeout) throws IOException {
     assert actions.size() == results.length : "Number of actions: " + actions.size()
         + " doesn't equal to length of result array: " + results.length;
     this.table = table;
     this.latch = new CountDownLatch(actions.size());
     this.firstRow = Bytes.toString(actions.get(0).getAction().getRow());
-    this.results = results;
+    this.toReturn = results;
     this.maxAttempts = tries;
     this.tableName = table.getName().getNameAsString();
-    AsyncBatchCallback batchCallback =
-        new AsyncBatchCallbackImpl(results, actions, retryPause);
+    this.startLogErrorsCnt = startLogErrorsCnt;
+    this.operationTimeout = operationTimeout;
+    AsyncBatchCallback batchCallback = new AsyncBatchCallbackImpl(results, actions, retryPause);
     doRequest(actions, batchCallback);
   }
 
   @Override
   public Object[] get() throws InterruptedException, ExecutionException {
-    latch.await();
+    if (checkCancelOrDone()) {
+      return toReturn;
+    }
+
+    latch.await(operationTimeout, TimeUnit.MILLISECONDS);
+    if (latch.getCount() > 0) {
+      cancel(true);
+      throw new InterruptedException("Failed to get batch result from table: " + this.tableName
+          + " within operation timeout: " + operationTimeout + TimeUnit.MILLISECONDS);
+    }
     if (toThrow != null) {
       throw new ExecutionException(toThrow);
     }
@@ -77,7 +90,7 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
           new RetriesExhaustedException(numAttempts.get() - 1, exceptions);
       throw new ExecutionException(cause);
     }
-    return results;
+    return toReturn;
   }
 
   @Override
@@ -85,9 +98,13 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
     // Notice: we use an overall counter for retry attempt rather than per-action-group
     while (numAttempts.getAndIncrement() < maxAttempts) {
       try {
-        this.table.groupAndSendMultiAction(actions, results, (AsyncBatchCallback) callback);
+        this.table.groupAndSendMultiAction(actions, toReturn, (AsyncBatchCallback) callback);
         break;
       } catch (IOException e) {
+        if (e instanceof DoNotRetryIOException) {
+          callback.onError(e);
+          break;
+        }
         LOG.debug("Failed to issue async multi request for table " + this.tableName
             + "; numAttempts=" + numAttempts + ", maxAttempts=" + maxAttempts, e);
         if (numAttempts.get() == maxAttempts) {
@@ -105,8 +122,13 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
   @Override
   public Object[] get(long timeout, TimeUnit unit)
       throws InterruptedException, ExecutionException, TimeoutException {
+    if (checkCancelOrDone()) {
+      return toReturn;
+    }
+
     latch.await(timeout, unit);
     if (latch.getCount() > 0) {
+      cancel(true);
       throw new TimeoutException("Failed to get batch result against table: "
           + this.tableName + " within " + timeout + " " + unit.name().toLowerCase());
     }
@@ -118,7 +140,7 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
           new RetriesExhaustedException(numAttempts.get() - 1, exceptions);
       throw new ExecutionException(cause);
     }
-    return results;
+    return toReturn;
   }
 
   @Override
@@ -245,7 +267,12 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
     @Override
     public void processError(Throwable exception, List<Action<Row>> toRetry) {
       if (exception instanceof DoNotRetryIOException) {
-        exceptions.add(new ThrowableWithExtraContext(exception, System.currentTimeMillis(), null));
+        if (exceptions.isEmpty()) {
+          toThrow = (DoNotRetryIOException) exception;
+        } else {
+          exceptions
+              .add(new ThrowableWithExtraContext(exception, System.currentTimeMillis(), null));
+        }
         for (int i = 0; i < getActions().size(); i++) {
           latch.countDown();
           getActionsInProgress().decrementAndGet();
@@ -258,16 +285,24 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
       exceptions.add(exceptionWithDetails);
       // check and retry
       int attempts = numAttempts.get();
-      if (attempts < maxAttempts) {
-        LOG.debug("Multi attempt failed for table " + tableName + "; tried=" + attempts
-            + ", maxAttempts=" + maxAttempts + ". Retry...", exception);
+      if (attempts < maxAttempts && !isCanceled) {
+        if (attempts > startLogErrorsCnt) {
+          LOG.warn("Multi attempt failed for table " + tableName + "; tried=" + attempts
+              + ", maxAttempts=" + maxAttempts + ". Retry...", exception);
+        }
         long pause = ConnectionUtils.getPauseTime(retryPause, attempts);
         AsyncBatchCallbackImpl callback =
             new AsyncBatchCallbackImpl(results, getActionsInProgress(), toRetry, retryPause);
         delayedRetry(toRetry, pause, callback);
       } else {
+        // FIXME should add logic to set the exception as result of the relative request in result
+        // array, refer to AsyncProcess$AsyncRequestFutureImpl#setError
         isDone = true;
-        toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
+        if (isCanceled) {
+          toThrow = new DoNotRetryIOException("Request is already canceled");
+        } else {
+          toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
+        }
         for (int i = 0; i < toRetry.size(); i++) {
           latch.countDown();
           getActionsInProgress().decrementAndGet();

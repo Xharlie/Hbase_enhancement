@@ -49,6 +49,7 @@ public class RowIndexSeekerV1 extends AbstractEncodedSeeker {
 
   private int rowNumber;
   private ByteBuff rowOffsets = null;
+  private boolean binarySearch = false;
 
   public RowIndexSeekerV1(CellComparator comparator,
       HFileBlockDecodingContext decodingCtx) {
@@ -219,14 +220,17 @@ public class RowIndexSeekerV1 extends AbstractEncodedSeeker {
   @Override
   public int seekToKeyInBlock(Cell seekCell, boolean seekBefore) {
     previous.invalidate();
-    int index = binarySearch(seekCell, seekBefore);
-    if (index < 0) {
-      return HConstants.INDEX_KEY_MAGIC; // using optimized index key
-    } else {
-      int offset = rowOffsets.getIntAfterPosition(index * Bytes.SIZEOF_INT);
-      if (offset != 0) {
-        decodeAtPosition(offset);
+    if (!binarySearch) {
+      int index = binarySearch(seekCell, seekBefore);
+      if (index < 0) {
+        return HConstants.INDEX_KEY_MAGIC; // using optimized index key
+      } else {
+        int offset = rowOffsets.getIntAfterPosition(index * Bytes.SIZEOF_INT);
+        if (offset != 0) {
+          decodeAtPosition(offset);
+        }
       }
+      binarySearch = true;
     }
     do {
       int comp;

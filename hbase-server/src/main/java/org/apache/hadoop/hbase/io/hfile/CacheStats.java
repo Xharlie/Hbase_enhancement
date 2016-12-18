@@ -280,6 +280,10 @@ public class CacheStats {
     return ((float) getDataHitCount() / (float) getDataRequestCount());
   }
 
+  public double getBucketCacheHitRatio() {
+    return getHitRatio();
+  }
+
   public double getHitCachingRatio() {
     return ((float)getHitCachingCount()/(float)getRequestCachingCount());
   }

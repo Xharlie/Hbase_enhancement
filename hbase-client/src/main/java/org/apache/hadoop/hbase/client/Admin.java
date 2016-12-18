@@ -699,7 +699,7 @@ public interface Admin extends Abortable, Closeable {
    *
    * @return True if balancer ran, false otherwise.
    */
-  boolean balancer() throws IOException;
+  boolean balancer(boolean overall) throws IOException;
 
   /**
    * Query the current state of the balancer

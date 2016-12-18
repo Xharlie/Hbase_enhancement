@@ -222,7 +222,7 @@ public class DirectHealthCheck {
       tasks.add(task);
     }
     List<ProbeResult> failedRegions = reportProbResult(tasks, map);
-    double failedRatio = ((double) failedRegions.size()) / selectedRegions.size();
+    double failedRatio = (selectedRegions.size() == 0) ? 0 : ((double) failedRegions.size()) / selectedRegions.size();
     boolean succeed = (failedRatio < failedThreshold);
     this.rs.setDirectHealthCheckFailedRegionCount(failedRegions.size());
     this.rs.setDirectHealthCheckSelectedRegionCount(selectedRegions.size());

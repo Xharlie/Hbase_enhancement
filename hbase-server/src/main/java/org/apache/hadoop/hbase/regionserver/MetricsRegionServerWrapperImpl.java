@@ -719,4 +719,22 @@ class MetricsRegionServerWrapperImpl
   public long getBlockedRequestsCount() {
     return blockedRequestsCount;
   }
+
+  @Override
+  public double getBlockCacheUsedPercent() {
+    return (((float)blockCache.getUsedSize() / (float)blockCache.getCapacity()) * 100);
+  }
+
+  @Override
+  public double getBlockCacheRealUsedPercent() {
+    return (((float)blockCache.getRealUsedSize() / (float)blockCache.getCapacity()) * 100);
+  }
+
+  @Override
+  public double getBucketCacheHitPercent() {
+    if (this.cacheStats == null) {
+      return 0;
+    }
+    return (int) (this.cacheStats.getBucketCacheHitRatio() * 100);
+  }
 }

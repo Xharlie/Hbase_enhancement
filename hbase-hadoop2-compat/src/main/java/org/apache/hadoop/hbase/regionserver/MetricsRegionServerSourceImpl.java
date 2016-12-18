@@ -279,6 +279,10 @@ public class MetricsRegionServerSourceImpl
               rsWrap.getBlockCacheCount())
           .addGauge(Interns.info(BLOCK_CACHE_SIZE, BLOCK_CACHE_SIZE_DESC),
               rsWrap.getBlockCacheSize())
+          .addGauge(Interns.info(BLOCK_CACHE_USED_PERCENT, BLOCK_CACHE_USED_PERCENT_DESC),
+              rsWrap.getBlockCacheUsedPercent())
+          .addGauge(Interns.info(BLOCK_CACHE_REAL_USED_PERCENT, BLOCK_CACHE_REAL_USED_PERCENT_DESC),
+              rsWrap.getBlockCacheRealUsedPercent())
           .addCounter(Interns.info(BLOCK_CACHE_HIT_COUNT, BLOCK_CACHE_HIT_COUNT_DESC),
               rsWrap.getBlockCacheHitCount())
           .addCounter(Interns.info(BLOCK_CACHE_MISS_COUNT, BLOCK_COUNT_MISS_COUNT_DESC),
@@ -291,6 +295,8 @@ public class MetricsRegionServerSourceImpl
               rsWrap.getBlockCacheMetaHitPercent())
           .addGauge(Interns.info(BLOCK_CACHE_DATA_HIT_PERCENT, BLOCK_CACHE_DATA_HIT_PERCENT_DESC),
               rsWrap.getBlockCacheDataHitPercent())
+          .addGauge(Interns.info(BUCKET_CACHE_HIT_PERCENT, BUCKET_CACHE_HIT_PERCENT_DESC),
+              rsWrap.getBucketCacheHitPercent())
           .addGauge(Interns.info(BLOCK_CACHE_EXPRESS_HIT_PERCENT,
               BLOCK_CACHE_EXPRESS_HIT_PERCENT_DESC), rsWrap.getBlockCacheHitCachingPercent())
           .addGauge(Interns.info(BLOCK_CACHE_EXPRESS_META_HIT_PERCENT,

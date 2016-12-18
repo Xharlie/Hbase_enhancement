@@ -122,6 +122,24 @@ public interface BlockCache extends Iterable<CachedBlock> {
   long getBlockCount();
 
   /**
+   * return the used size of block cache.
+   * @return size of cache occupied, in bytes
+   */
+  long getUsedSize();
+
+  /**
+   * Returns the real occupied (by data) size of block cache, in bytes
+   * @return size of real occupied cache, in bytes
+   */
+  long getRealUsedSize();
+
+  /**
+   * Returns the capacity of block cache, in bytes
+   * @return size of cache capacity, in bytes
+   */
+  long getCapacity();
+
+  /**
    * @return Iterator over the blocks in the cache.
    */
   Iterator<CachedBlock> iterator();

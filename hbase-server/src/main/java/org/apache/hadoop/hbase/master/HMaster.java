@@ -1275,7 +1275,13 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
     return balancerCutoffTime;
   }
 
+
+
   public boolean balance() throws IOException {
+    return balance(false);
+  }
+
+  public boolean balance(boolean forceOverall) throws IOException {
     // if master not initialized, don't run balancer.
     if (!this.initialized) {
       LOG.debug("Master has not been initialized, don't run balancer.");
@@ -1312,10 +1318,24 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
           return false;
         }
       }
-
-      boolean simpleLoadBalancerOverall = (this.getConfiguration().get(HConstants.HBASE_MASTER_LOADBALANCER_CLASS)
-              .equals("org.apache.hadoop.hbase.master.balancer.SimpleLoadBalancer") &&
-              this.getConfiguration().getBoolean("hbase.master.loadbalance.bytableOverall", true));
+      boolean isSimpleLoadBalancer = this.balancer instanceof SimpleLoadBalancer;
+      if (forceOverall) {
+        if(isSimpleLoadBalancer) {
+          ((SimpleLoadBalancer)this.balancer).setForced();
+          LOG.info("admin command to force SimpleLoadBalancer overall," +
+                  " set SimpleLoadBalancer as forced for this time");
+        } else {
+          LOG.info("admin command to force SimpleLoadBalancer overall," +
+                  " but find out the balancer is not SimpleLoadBalancer ");
+          return false;
+        }
+      } else {
+        if(isSimpleLoadBalancer) {
+          ((SimpleLoadBalancer)this.balancer).setNotForced();
+        }
+      }
+      boolean simpleLoadBalancerOverall = (isSimpleLoadBalancer &&
+              this.getConfiguration().getBoolean("hbase.master.loadbalance.bytableOverall", false)) || forceOverall;
 
       Map<TableName, Map<ServerName, List<HRegionInfo>>> assignmentsByTable =
         this.assignmentManager.getRegionStates().getAssignmentsByTable(simpleLoadBalancerOverall,false);
@@ -1324,13 +1344,16 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
       //Give the balancer the current cluster state.
       this.balancer.setClusterStatus(getClusterStatus());
       if (simpleLoadBalancerOverall){
-        LOG.debug("Preparing simpleLoadBalancerOverall");
+        LOG.info("Preparing simpleLoadBalancerOverall");
         ((SimpleLoadBalancer)this.balancer).setClusterLoad(
                 this.assignmentManager.getRegionStates().getAssignmentsByTable(simpleLoadBalancerOverall,true));
         ((SimpleLoadBalancer)this.balancer).setBalanceOverall(true);
-      }else ((SimpleLoadBalancer)this.balancer).setBalanceOverall(false);
-      for (Map<ServerName, List<HRegionInfo>> assignments : assignmentsByTable.values()) {
-        List<RegionPlan> partialPlans = this.balancer.balanceCluster(assignments);
+      } else if (isSimpleLoadBalancer){
+        ((SimpleLoadBalancer)this.balancer).setBalanceOverall(false);
+      }
+      for (Map.Entry<TableName, Map<ServerName, List<HRegionInfo>>> assignmentsEntry : assignmentsByTable.entrySet()) {
+        LOG.info("Start Generate Balance plan for table: " + assignmentsEntry.getKey().getNameAsString());
+        List<RegionPlan> partialPlans = this.balancer.balanceCluster(assignmentsEntry.getValue());
         if (partialPlans != null) plans.addAll(partialPlans);
       }
       long cutoffTime = System.currentTimeMillis() + maximumBalanceTime;

@@ -2198,11 +2198,11 @@ public class HBaseAdmin implements Admin {
    * @return True if balancer ran, false otherwise.
    */
   @Override
-  public boolean balancer() throws IOException {
+  public boolean balancer(final boolean overall) throws IOException {
     return executeCallable(new MasterCallable<Boolean>(getConnection()) {
       @Override
       public Boolean call(int callTimeout) throws ServiceException {
-        return master.balance(null, RequestConverter.buildBalanceRequest()).getBalancerRan();
+        return master.balance(null, RequestConverter.buildBalanceRequest(overall)).getBalancerRan();
       }
     });
   }

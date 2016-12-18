@@ -357,4 +357,19 @@ public class MetricsRegionServerWrapperStub implements MetricsRegionServerWrappe
   public int getDirectHealthCheckNumUnhealthy() {
     return 0;
   }
+
+  @Override
+  public double getBlockCacheUsedPercent() {
+    return 0;
+  }
+
+  @Override
+  public double getBlockCacheRealUsedPercent() {
+    return 0;
+  }
+
+  @Override
+  public double getBucketCacheHitPercent() {
+    return 0;
+  }
 }

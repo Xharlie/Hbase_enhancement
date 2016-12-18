@@ -25,6 +25,7 @@ import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.util.StringUtils;
 
 import java.io.IOException;
+import java.util.Date;
 
 /**
  * The Class HealthCheckChore for running health checker regularly.
@@ -34,7 +35,10 @@ public class HealthCheckChore extends ScheduledChore {
   private HealthChecker healthChecker;
   private Configuration config;
   private int threshold;
+  // counter to record unhealthy count in a window
   private int numTimesUnhealthy = 0;
+  // counter to record accumulative unhealthy count of the RS
+  private int directHealthCheckNumUnhealthy = 0;
   private long failureWindow;
   private long startWindow;
   private HRegionServer rs;
@@ -81,8 +85,9 @@ public class HealthCheckChore extends ScheduledChore {
     boolean isHealthy = (report.getStatus() == HealthCheckerExitStatus.SUCCESS);
     if (!isHealthy) {
       boolean needToStop = decideToStop();
+      directHealthCheckNumUnhealthy++;
       if(rs != null){
-        this.rs.setDirectHealthCheckNumUnhealthy(numTimesUnhealthy);
+        this.rs.setDirectHealthCheckNumUnhealthy(directHealthCheckNumUnhealthy);
       }
       if (needToStop) {
         LOG.info("The  node reported unhealthy " + threshold + " number of times consecutively.");
@@ -91,7 +96,7 @@ public class HealthCheckChore extends ScheduledChore {
       }
     }
     // Always log health report.
-    LOG.info("Health status at " + StringUtils.formatTime(System.currentTimeMillis()) + " : "
+    LOG.info("Health status at " +  (new Date()) + " : "
             + report.getHealthReport());
   }
 
@@ -127,7 +132,6 @@ public class HealthCheckChore extends ScheduledChore {
       this.rs.setDirectHealthCheckFailedRegionCount(0);
       this.rs.setDirectHealthCheckSelectedRegionCount(0);
       this.rs.setDirectHealthCheckFailedRatio(0);
-      this.rs.setDirectHealthCheckNumUnhealthy(0);
     }
     super.cancel(mayInterruptIfRunning);
   }

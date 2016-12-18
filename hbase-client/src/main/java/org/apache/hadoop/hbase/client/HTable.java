@@ -18,6 +18,8 @@
  */
 package org.apache.hadoop.hbase.client;
 
+import static org.apache.hadoop.hbase.ipc.RpcClientFactory.CUSTOM_RPC_CLIENT_IMPL_CONF_KEY;
+
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
@@ -41,6 +43,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellScannable;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
@@ -67,6 +70,7 @@ import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.RequestConverter;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos;
+import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ClientService;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetResponse;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiRequest;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse;
@@ -925,6 +929,11 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
 
   @Override
   public void asyncGet(final Get get, AsyncRpcCallback<GetResponse> callback) throws IOException {
+    if (!connection.supportsNonBlockingInterface()) {
+      throw new DoNotRetryIOException(
+          "Current connection doesn't support non-blocking call, please check the "
+              + CUSTOM_RPC_CLIENT_IMPL_CONF_KEY + " setting in configuration");
+    }
     get(get, get.isCheckExistenceOnly(), callback);
   }
 
@@ -944,6 +953,7 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
       final Get getReq = get;
       RegionServerCallable<Result> callable = new RegionServerCallable<Result>(this.connection,
           getName(), get.getRow()) {
+
         @Override
         public Result call(int callTimeout) throws IOException {
           ClientProtos.GetRequest request =
@@ -961,7 +971,10 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
               // for async call, we will always reload location from cache
               // set into callback for checking and clearing cache on failure
               callback.setLocation(getLocation());
-              getAsyncStub().get(controller, request, new RpcCallback<ClientProtos.GetResponse>() {
+              ClientService.Interface asyncStub = getAsyncStub();
+              assert asyncStub != null : "Get NULL stub for async call, please check "
+                  + CUSTOM_RPC_CLIENT_IMPL_CONF_KEY + " setting in the configuration";
+              asyncStub.get(controller, request, new RpcCallback<ClientProtos.GetResponse>() {
 
                 @Override
                 public void run(GetResponse result) {
@@ -2065,6 +2078,11 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
 
   public void asyncMutate(final Mutation mutate, final AsyncRpcCallback<MutateResponse> callback)
       throws IOException {
+    if (!connection.supportsNonBlockingInterface()) {
+      throw new DoNotRetryIOException(
+          "Current connection doesn't support non-blocking call, please check the "
+              + CUSTOM_RPC_CLIENT_IMPL_CONF_KEY + " setting in configuration");
+    }
     RegionServerCallable<Boolean> callable =
         new RegionServerCallable<Boolean>(connection, tableName, mutate.getRow()) {
           @Override
@@ -2083,7 +2101,10 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
                 // set into callback for checking and clearing cache on failure
                 callback.setLocation(getLocation());
                 controller.notifyOnFail(new FailureCallback(callback));
-                getAsyncStub().mutate(controller, request, callback);
+                ClientService.Interface asyncStub = getAsyncStub();
+                assert asyncStub != null : "Get NULL stub for async call, please check "
+                    + CUSTOM_RPC_CLIENT_IMPL_CONF_KEY + " setting in the configuration";
+                asyncStub.mutate(controller, request, callback);
               }
               return true;
             } catch (ServiceException se) {
@@ -2121,17 +2142,20 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
 
   @Override
   public Future<Result> asyncGet(Get get) throws IOException {
-    return new AsyncGetFuture(this, get, maxAttempts, retryPause, startLogErrorsCnt);
+    return new AsyncGetFuture(this, get, maxAttempts, retryPause, startLogErrorsCnt,
+        operationTimeout);
   }
 
   @Override
   public Future<Result> asyncPut(Put put) throws IOException {
-    return new AsyncMutateFuture(this, put, maxAttempts, retryPause, startLogErrorsCnt);
+    return new AsyncMutateFuture(this, put, maxAttempts, retryPause, startLogErrorsCnt,
+        operationTimeout);
   }
 
   @Override
   public Future<Result> asyncDelete(Delete delete) throws IOException {
-    return new AsyncMutateFuture(this, delete, maxAttempts, retryPause, startLogErrorsCnt);
+    return new AsyncMutateFuture(this, delete, maxAttempts, retryPause, startLogErrorsCnt,
+        operationTimeout);
   }
 
   @Override
@@ -2152,6 +2176,9 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
     asyncBatch(deletes, results, batchCallback);
   }
 
+  /**
+   * TODO add timeout support
+   */
   @Override
   public void asyncBatch(List<? extends Row> rows, Object[] results,
       AsyncBatchCallback batchCallback) throws IOException {
@@ -2175,7 +2202,8 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
       throws IOException {
     NonceGenerator ng = this.connection.getNonceGenerator();
     List<Action<Row>> actions = generateActions(rows, ng);
-    AsyncBatchFuture future = new AsyncBatchFuture(this, actions, results, maxAttempts, retryPause);
+    AsyncBatchFuture future = new AsyncBatchFuture(this, actions, results, maxAttempts, retryPause,
+        startLogErrorsCnt, operationTimeout);
     return future;
   }
 
@@ -2222,6 +2250,11 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
    */
   public void groupAndSendMultiAction(List<Action<Row>> currentActions, Object[] results,
       AsyncBatchCallback batchCallback) throws IOException {
+    if (!connection.supportsNonBlockingInterface()) {
+      throw new DoNotRetryIOException(
+          "Current connection doesn't support non-blocking call, please check the "
+              + CUSTOM_RPC_CLIENT_IMPL_CONF_KEY + " setting in configuration");
+    }
     Map<ServerName, MultiAction<Row>> actionsByServer = new HashMap<ServerName, MultiAction<Row>>();
     long nonceGroup = this.connection.getNonceGenerator().getNonceGroup();
 

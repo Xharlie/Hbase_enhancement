@@ -1172,4 +1172,19 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
   public void returnBlock(BlockCacheKey cacheKey, Cacheable block) {
     // There is no SHARED type here. Just return
   }
+
+  @Override
+  public long getUsedSize() {
+    return getCurrentSize();
+  }
+
+  @Override
+  public long getRealUsedSize() {
+    return getCurrentSize();
+  }
+
+  @Override
+  public long getCapacity() {
+    return getMaxSize();
+  }
 }

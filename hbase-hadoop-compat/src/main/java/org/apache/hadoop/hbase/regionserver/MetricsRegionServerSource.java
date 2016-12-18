@@ -257,9 +257,18 @@ public interface MetricsRegionServerSource extends BaseSource, JvmPauseMonitorSo
   String BLOCK_CACHE_META_HIT_PERCENT = "blockCacheMetaHitPercent";
   String BLOCK_CACHE_META_HIT_PERCENT_DESC =
       "Percent of block cache requests on meta that are hits";
+  String BLOCK_CACHE_USED_PERCENT = "blockCacheUsedPercent";
+  String BLOCK_CACHE_USED_PERCENT_DESC =
+      "Percent of block cache has been allocated for data";
+  String BLOCK_CACHE_REAL_USED_PERCENT = "blockCacheRealUsedPercent";
+  String BLOCK_CACHE_REAL_USED_PERCENT_DESC =
+      "Percent of block cache has been allocated for data, excluding space padding";
   String BLOCK_CACHE_DATA_HIT_PERCENT = "blockCacheDataHitPercent";
   String BLOCK_CACHE_DATA_HIT_PERCENT_DESC =
-      "Percent of block cache requests on data that are hits";
+      "Percent of requests on data that are hits";
+  String BUCKET_CACHE_HIT_PERCENT = "bucketCacheHitPercent";
+  String BUCKET_CACHE_HIT_PERCENT_DESC =
+      "Percent of requests on bucket cache that are hits";
   String BLOCK_CACHE_EXPRESS_HIT_PERCENT = "blockCacheExpressHitPercent";
   String BLOCK_CACHE_EXPRESS_HIT_PERCENT_DESC =
       "The percent of the time that requests with the cache turned on hit the cache.";

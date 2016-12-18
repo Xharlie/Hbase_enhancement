@@ -116,3 +116,11 @@ t-search-adp-hbase-server-1_0_9_4-aquila:
     jdk_version: jdk1.7
     mvn_version: maven3
     NO_TAG: 1
+t-search-adp-hbase-server-1_1_0-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_1_1-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3

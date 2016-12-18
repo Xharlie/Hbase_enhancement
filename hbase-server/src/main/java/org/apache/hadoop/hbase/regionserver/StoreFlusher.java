@@ -111,7 +111,7 @@ abstract class StoreFlusher {
    * @param smallestReadPoint Smallest read point used for the flush.
    * @param throughputController A controller to avoid flush too fast
    */
-  protected void performFlush(InternalScanner scanner, Compactor.CellSink sink,
+  protected void performFlush(InternalScanner scanner, CellSink sink,
       long smallestReadPoint, ThroughputController throughputController) throws IOException {
     int compactionKVMax =
       conf.getInt(HConstants.COMPACTION_KV_MAX, HConstants.COMPACTION_KV_MAX_DEFAULT);

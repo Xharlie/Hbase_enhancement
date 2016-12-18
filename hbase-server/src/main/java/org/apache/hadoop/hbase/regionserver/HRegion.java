@@ -2215,6 +2215,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     long trxId = 0;
     try {
       try {
+        mvcc.waitForPreviousTransactionsComplete();
         writeEntry = mvcc.beginMemstoreInsert();
         if (wal != null) {
           Long earliestUnflushedSequenceIdForTheRegion =
@@ -2463,7 +2464,8 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         + totalFlushableSizeOfFlushableStores + ", currentsize="
         + StringUtils.byteDesc(memstoresize) + "/" + memstoresize
         + " for region " + this + " in " + time + "ms, sequenceid="
-        + flushOpSeqId +  ", compaction requested=" + compactionRequested
+        + flushOpSeqId + ", maxFlushedSeqId=" + maxFlushedSeqId
+        + ", compaction requested=" + compactionRequested
         + ((wal == null) ? "; wal=null" : "");
     LOG.info(msg);
     status.setStatus(msg);

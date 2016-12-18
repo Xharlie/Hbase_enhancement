@@ -182,7 +182,7 @@ public class TestFSErrorsExposed {
 
     try {
       // Make it fail faster.
-      util.getConfiguration().setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 1);
+      util.getConfiguration().setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 0);
 
       util.startMiniCluster(1);
       TableName tableName = TableName.valueOf("table");

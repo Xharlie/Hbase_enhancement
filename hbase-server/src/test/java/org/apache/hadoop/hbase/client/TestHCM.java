@@ -129,6 +129,7 @@ public class TestHCM {
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
+    TEST_UTIL.getConfiguration().setBoolean(HConstants.HBASE_CLIENT_RETRIES_ATLEASTONCE, false);
     TEST_UTIL.getConfiguration().setBoolean(HConstants.STATUS_PUBLISHED, true);
     TEST_UTIL.startMiniCluster(2);
   }
@@ -473,7 +474,8 @@ public class TestHCM {
     Configuration c2 = new Configuration(TEST_UTIL.getConfiguration());
     // We want to work on a separate connection.
     c2.set(HConstants.HBASE_CLIENT_INSTANCE_ID, String.valueOf(-1));
-    c2.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 1);
+    // try only once w/o any retry
+    c2.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 0);
     c2.setInt(HConstants.HBASE_RPC_TIMEOUT_KEY, 30 * 1000);
 
     HTable table = new HTable(c2, tableName);
@@ -580,7 +582,8 @@ public class TestHCM {
   public void testRegionCaching() throws Exception{
     TEST_UTIL.createMultiRegionTable(TABLE_NAME, FAM_NAM).close();
     Configuration conf =  new Configuration(TEST_UTIL.getConfiguration());
-    conf.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 1);
+    // test with no retry, or client cache will get updated after the first failure
+    conf.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 0);
     HTable table = new HTable(conf, TABLE_NAME);
 
     TEST_UTIL.waitUntilAllRegionsAssigned(table.getName());
@@ -1155,11 +1158,11 @@ public class TestHCM {
       // We also should not go over the boundary; last retry would be on it.
       long timeLeft = (long)(ANY_PAUSE * 0.5);
       timeMachine.setValue(timeBase + largeAmountOfTime - timeLeft);
-      assertTrue(tracker.canRetryMore(1));
+      assertTrue(tracker.canTryMore(1));
       tracker.reportServerError(location);
       assertEquals(timeLeft, tracker.calculateBackoffTime(location, ANY_PAUSE));
       timeMachine.setValue(timeBase + largeAmountOfTime);
-      assertFalse(tracker.canRetryMore(1));
+      assertFalse(tracker.canTryMore(1));
     } finally {
       EnvironmentEdgeManager.reset();
     }

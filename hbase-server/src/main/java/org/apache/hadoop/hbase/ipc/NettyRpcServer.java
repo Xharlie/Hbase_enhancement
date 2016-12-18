@@ -22,6 +22,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.lang.Thread.UncaughtExceptionHandler;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -33,6 +34,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslException;
@@ -58,6 +60,8 @@ import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory;
 import org.jboss.netty.channel.socket.nio.NioWorkerPool;
 import org.jboss.netty.handler.codec.frame.FrameDecoder;
 import org.jboss.netty.handler.codec.oneone.OneToOneEncoder;
+import org.jboss.netty.logging.InternalLoggerFactory;
+import org.jboss.netty.logging.Log4JLoggerFactory;
 import org.apache.hadoop.hbase.io.ByteBufferOutputStream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CellScanner;
@@ -95,12 +99,38 @@ import org.apache.htrace.TraceInfo;
 
 public class NettyRpcServer extends RpcServer {
 
+  static {
+    InternalLoggerFactory.setDefaultFactory(new Log4JLoggerFactory());
+  }
+
   protected final InetSocketAddress bindAddress;
 
   private final Channel serverChannel;
   private final ChannelGroup allChannels = new DefaultChannelGroup("hbase-rpc-netty-server");
   private final ChannelFactory channelFactory;
   private final CountDownLatch closed = new CountDownLatch(1);
+  private AtomicBoolean releaseNettyResources = new AtomicBoolean(true);
+
+  class ExceptionHandler implements UncaughtExceptionHandler {
+
+    AtomicBoolean releaseNettyResources;
+    Server server;
+
+    ExceptionHandler(AtomicBoolean releaseNettyResources, Server server) {
+      this.releaseNettyResources = releaseNettyResources;
+      this.server = server;
+    }
+
+    @Override
+    public void uncaughtException(Thread t, Throwable e) {
+      releaseNettyResources.set(false);
+      LOG.error(t.toString() + " throw uncaught exception", e);
+      LOG.info("Trigger server abort since we cannot serve requests anymore");
+      server.abort(t.toString() + " throw uncaught exception", e);
+      // Runtime.getRuntime().halt(1);
+    }
+
+  }
 
   public NettyRpcServer(final Server server, final String name,
       final List<BlockingServiceAndInterface> services, final InetSocketAddress bindAddress,
@@ -108,6 +138,7 @@ public class NettyRpcServer extends RpcServer {
     super(server, name, services, bindAddress, conf, scheduler);
     this.bindAddress = bindAddress;
 
+    Thread.setDefaultUncaughtExceptionHandler(new ExceptionHandler(releaseNettyResources, server));
     int workerCount = conf.getInt("hbase.rpc.server.netty.work.size", 12);
     LOG.info("hbase.rpc.server.netty.work.size: " + workerCount);
     this.channelFactory =
@@ -155,9 +186,11 @@ public class NettyRpcServer extends RpcServer {
       authTokenSecretMgr.stop();
       authTokenSecretMgr = null;
     }
-    ChannelGroupFuture future = allChannels.close();
-    future.awaitUninterruptibly();
-    channelFactory.releaseExternalResources();
+    if (releaseNettyResources.get()) {
+      ChannelGroupFuture future = allChannels.close();
+      future.awaitUninterruptibly();
+      channelFactory.releaseExternalResources();
+    }
     scheduler.stop();
     closed.countDown();
   }

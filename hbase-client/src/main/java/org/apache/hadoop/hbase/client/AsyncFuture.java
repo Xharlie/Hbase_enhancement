@@ -18,6 +18,10 @@
  */
 package org.apache.hadoop.hbase.client;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -26,8 +30,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
+import org.apache.hadoop.hbase.client.RetriesExhaustedException.ThrowableWithExtraContext;
 
 import com.google.protobuf.Message;
 
@@ -38,14 +45,26 @@ import com.google.protobuf.Message;
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public abstract class AsyncFuture<V> implements Future<V>{
-  HTable table;
-  int maxAttempts = 1;// at least try once
-  AtomicInteger numAttempts = new AtomicInteger(0);
-  // by means limit parallel retry threads to 100 to avoid too much pressure to server
-  static final ScheduledThreadPoolExecutor retryExecutor = new ScheduledThreadPoolExecutor(100);
+  protected HTable table;
+  protected int maxAttempts = 1;// at least try once
+  protected AtomicInteger numAttempts = new AtomicInteger(0);
+  protected IOException toThrow; // exception to throw
+  protected V toReturn; // result to return
+  // tracking exceptions during retry
+  protected ArrayList<ThrowableWithExtraContext> exceptions =
+      new ArrayList<RetriesExhaustedException.ThrowableWithExtraContext>();
+  protected volatile boolean isCanceled = false;
+  protected volatile boolean isDone = false;
+
+  // set core pool size to 10 to avoid too many idle threads
+  private static final ScheduledThreadPoolExecutor retryExecutor =
+      new ScheduledThreadPoolExecutor(10);
+  private Collection<Future<?>> retryFutures =
+      Collections.synchronizedCollection(new ArrayList<Future<?>>());
 
   /**
-   * Waits if necessary for the request to complete, and then retrieves its result.
+   * Waits if necessary for the request to complete, and then retrieves its result. The maximum time
+   * to wait follows the {@link HConstants#HBASE_CLIENT_OPERATION_TIMEOUT} setting, in milliseconds.
    * @return the requested result
    * @throws InterruptedException if the current thread was interrupted while waiting
    * @throws ExecutionException if any error occurs during the process
@@ -74,13 +93,20 @@ public abstract class AsyncFuture<V> implements Future<V>{
    */
   protected void delayedRetry(final List<Action<Row>> actions, long pause,
       final AsyncRpcCallback<? extends Message> callback) {
-    retryExecutor.schedule(new Runnable() {
+    if (isCanceled) {
+      return;
+    }
+
+    Future<?> retryFuture = retryExecutor.schedule(new Runnable() {
 
       @Override
       public void run() {
         doRequest(actions, callback);
       }
     }, pause, TimeUnit.MILLISECONDS);
+    synchronized (retryFutures) {
+      retryFutures.add(retryFuture);
+    }
   }
 
   /**
@@ -91,16 +117,46 @@ public abstract class AsyncFuture<V> implements Future<V>{
   abstract void doRequest(List<Action<Row>> actions, AsyncRpcCallback<? extends Message> callback);
 
   /**
-   * Dummy implementation, we don't support to cancel the non-blocking request for now
+   * Currently we set the isCanceled flag and quit further retry to avoid retry thread pool is
+   * occupied by stale futures
    */
   public boolean cancel(boolean mayInterruptIfRunning) {
-    return false;
+    isCanceled = true;
+    boolean couldCancel = true;
+    synchronized (retryFutures) {
+      if (!retryFutures.isEmpty()) {
+        for (Future<?> retryFuture : retryFutures) {
+          couldCancel = (retryFuture.cancel(mayInterruptIfRunning) && couldCancel);
+        }
+        retryFutures.clear();
+      }
+    }
+    return couldCancel;
   }
 
   /**
-   * Dummy implementation, we don't support to cancel the non-blocking request for now
+   * {@inheritDoc}
    */
   public boolean isCancelled() {
+    return isCanceled;
+  }
+
+  /**
+   * Check whether this future is already canceled or done
+   * @return true if the future is already done with a result, false if the future is neither
+   *         canceled or done
+   * @throws ExecutionException if the future is already canceled
+   */
+  public boolean checkCancelOrDone() throws ExecutionException {
+    if (isCanceled) {
+      throw new ExecutionException(new DoNotRetryIOException("This future is already canceled"));
+    }
+    if (isDone) {
+      if (toThrow != null) {
+        throw new ExecutionException(toThrow);
+      }
+      return true;
+    }
     return false;
   }
 }

@@ -31,6 +31,7 @@ import java.util.Comparator;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
@@ -55,18 +56,19 @@ import org.apache.hadoop.hbase.util.Pair;
  * <p>On cluster startup, bulk assignment can be used to determine
  * locations for all Regions in a cluster.
  *
- * <p>This classes produces plans for the 
+ * <p>This classes produces plans for the
  * {@link org.apache.hadoop.hbase.master.AssignmentManager} to execute.
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.CONFIG)
 public class SimpleLoadBalancer extends BaseLoadBalancer {
   private static final Log LOG = LogFactory.getLog(SimpleLoadBalancer.class);
   private static final Random RANDOM = new Random(System.currentTimeMillis());
-  private float avgLoadOverall;
+  private double avgLoadOverall;
   private RegionInfoComparator riComparator = new RegionInfoComparator();
   private RegionPlan.RegionPlanComparator rpComparator = new RegionPlan.RegionPlanComparator();
   private List<ServerAndLoad> ServerLoadList;
   private boolean needsBalanceOverall;
+  private boolean forced;
 
   /**
    * Stores additional per-server information about the regions added/removed
@@ -88,6 +90,13 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
       this.numRegionsAdded = numRegionsAdded;
       this.initialnumRegions = initialnumRegions;
       this.hriList = hriList;
+    }
+
+    public BalanceInfo(int nextRegionForUnload, int numRegionsAdded) {
+      this.nextRegionForUnload = nextRegionForUnload;
+      this.numRegionsAdded = numRegionsAdded;
+      this.initialnumRegions = 0;
+      this.hriList = null;
     }
 
     int getNextRegionForUnload() {
@@ -132,6 +141,25 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
     this.needsBalanceOverall = isBalanceOverall;
   }
 
+  public void setForced(){
+    this.forced = true;
+    slop = 0;
+  }
+
+  public void setNotForced(){
+    this.forced = false;
+    super.setSlop(getConf());
+  }
+
+  @Override
+  public void onConfigurationChange(Configuration conf) {
+    float originSlop = slop;
+    super.setConf(conf);
+    LOG.info("Update configuration of SimpleLoadBalancer, previous slop is "
+            + originSlop + ", current slop is " + slop );
+  }
+
+
   private void setLoad(List<ServerAndLoad> slList, int i, int loadChange){
     ServerAndLoad newsl = new ServerAndLoad(slList.get(i).getServerName(),slList.get(i).getLoad() + loadChange);
     slList.remove(i);
@@ -144,13 +172,17 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
    * @return true if this table should be balanced.
    */
   private boolean overAllneedsBalance() {
-    int floor = (int) Math.floor(avgLoadOverall);
-    int ceiling = (int) Math.ceil(avgLoadOverall);
+    int floor = (int) Math.floor(avgLoadOverall * (1 - slop));
+    int ceiling = (int) Math.ceil(avgLoadOverall * (1 + slop));
     int max = 0, min = 0;
+    double sdv = 0;
     for(ServerAndLoad server : ServerLoadList){
       max = Math.max(server.getLoad(), max);
       min = Math.min(server.getLoad(), min);
+      sdv = Math.pow(server.getLoad() - avgLoadOverall, 2.0);
     }
+    sdv = Math.sqrt(sdv / ServerLoadList.size());
+    if (sdv < avgLoadOverall/10 && !this.forced) return false;
     if (!(max > ceiling || min < floor)) {
       if (LOG.isTraceEnabled()) {
         // If nothing to balance, then don't say anything unless trace-level logging.
@@ -299,6 +331,7 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
       int load = sal.getLoad();
       if (load <= max) {
         serverBalanceInfo.put(sal.getServerName(), new BalanceInfo(0, 0, load, server.getValue()));
+        if(!this.needsBalanceOverall) break; // FIXME
         continue;
       }
       serversOverloaded++;
@@ -336,14 +369,10 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
             serversByLoad.entrySet()) {
       if (maxToTake == 0) break; // no more to take
       int load = server.getKey().getLoad();
-      if (load >= min && load > 0) {
+      if (load >= min ) {
         continue; // look for other servers which haven't reached min
       }
       int regionsToPut = min - load;
-      if (regionsToPut == 0)
-      {
-        regionsToPut = 1;
-      }
       maxToTake -= regionsToPut;
       underloadedServers.put(server.getKey().getServerName(), regionsToPut);
     }
@@ -367,6 +396,10 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
         underloadedServers.put(si, numToTake-1);
         cnt++;
         BalanceInfo bi = serverBalanceInfo.get(si);
+        if (bi == null && !this.needsBalanceOverall) {
+          bi = new BalanceInfo(0, 0);
+          serverBalanceInfo.put(si, bi);
+        }
         bi.setNumRegionsAdded(bi.getNumRegionsAdded()+1);
       }
       if (cnt == 0) break;
@@ -401,8 +434,10 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
         HRegionInfo region = server.getValue().get(idx);
         if (region.isMetaRegion()) continue; // Don't move meta regions.
         regionsToMove.add(new RegionPlan(region, server.getKey().getServerName(), null));
-        balanceInfo.setNumRegionsAdded(balanceInfo.getNumRegionsAdded() - 1);
-        balanceInfo.setNextRegionForUnload(balanceInfo.getNextRegionForUnload() + 1);
+        if (this.needsBalanceOverall) { // FIXME
+          balanceInfo.setNumRegionsAdded(balanceInfo.getNumRegionsAdded() - 1);
+          balanceInfo.setNextRegionForUnload(balanceInfo.getNextRegionForUnload() + 1);
+        }
         totalNumMoved++;
         if (--neededRegions == 0) {
           // No more regions needed, done shedding
@@ -433,7 +468,9 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
                 server.getKey().getServerName(), regionsToReturn);
         numTaken++;
       }
-      balanceInfo.setNumRegionsAdded(balanceInfo.getNumRegionsAdded()+numTaken);
+      if (this.needsBalanceOverall) { // FIXME
+        balanceInfo.setNumRegionsAdded(balanceInfo.getNumRegionsAdded() + numTaken);
+      }
     }
 
     // If we still have regions to dish out, assign underloaded to max
@@ -448,11 +485,13 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
           regionCount += balanceInfo.getNumRegionsAdded();
         }
         if(regionCount >= max) {
-          continue;
+          break;
         }
         addRegionPlan(regionsToMove, fetchFromTail,
                 server.getKey().getServerName(), regionsToReturn);
-        balanceInfo.setNumRegionsAdded(balanceInfo.getNumRegionsAdded() + 1);
+        if (this.needsBalanceOverall) {  // FIXME
+          balanceInfo.setNumRegionsAdded(balanceInfo.getNumRegionsAdded() + 1);
+        }
         if (regionsToMove.isEmpty()) {
           break;
         }
@@ -483,7 +522,7 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
     LOG.info("Done. Calculated a load balance in " + (endTime-startTime) + "ms. " +
             "Moving " + totalNumMoved + " regions off of " +
             serversOverloaded + " overloaded servers onto " +
-            serversUnderloaded + " less loaded servers");
+            serversUnderloaded + " less loaded servers " + strBalanceParam);
 
     return regionsToReturn;
   }
@@ -520,6 +559,8 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
         HRegionInfo hriToPlan;
         if (balanceInfo.getHriList().size() == 0) {
           hriToPlan = new HRegionInfo();
+          LOG.warn("During balanceOverall, we found " + serverload.getServerName()
+                  + " has no HRegionInfo, shouldn't happen");
         } else if (balanceInfo.getNextRegionForUnload() >= balanceInfo.getHriList().size()) {
           continue;
         } else {
@@ -530,7 +571,7 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
         setLoad(ServerLoadList, i, -1);
       }else if(balanceInfo.getinitialnumRegions() + balanceInfo.getNumRegionsAdded() > max
               || balanceInfo.getinitialnumRegions() + balanceInfo.getNumRegionsAdded() < min){
-        LOG.debug("Encounter incorrect region numbers after calculating move plan during balanceOverall, " +
+        LOG.warn("Encounter incorrect region numbers after calculating move plan during balanceOverall, " +
                 "stop balance for this round"); // should not happen
         return;
       }

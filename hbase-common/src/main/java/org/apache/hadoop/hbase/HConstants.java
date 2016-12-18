@@ -718,6 +718,10 @@ public final class HConstants {
    */
   public static final int DEFAULT_HBASE_CLIENT_RETRIES_NUMBER = 31;
 
+  public static final String HBASE_CLIENT_RETRIES_ATLEASTONCE = "hbase.client.retries.atleastonce";
+
+  public static final boolean DEFAULT_HBASE_CLIENT_RETRIES_ATLEASTONCE = true;
+
   /**
    * Parameter name for client prefetch limit, used as the maximum number of regions
    * info that will be prefetched.

@@ -48,7 +48,7 @@ import org.apache.hadoop.hbase.regionserver.ScanQueryMatcher.MatchCode;
  * This class is NOT thread-safe as queries are never multi-threaded
  */
 @InterfaceAudience.Private
-public interface ColumnTracker {
+public interface ColumnTracker extends ShipperListener {
 
   /**
    * Checks if the column is present in the list of requested columns by returning the match code

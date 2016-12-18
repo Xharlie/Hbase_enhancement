@@ -40,7 +40,7 @@ public class TableConfiguration {
   private final long scannerMaxResultSize;
   private final int primaryCallTimeoutMicroSecond;
   private final int replicaCallTimeoutMicroSecondScan;
-  private final int retries;
+  private int retries;
   private final int maxKeyValueSize;
 
   /**
@@ -72,6 +72,12 @@ public class TableConfiguration {
 
     this.retries = conf.getInt(
        HConstants.HBASE_CLIENT_RETRIES_NUMBER, HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER);
+    if (conf.getBoolean(HConstants.HBASE_CLIENT_RETRIES_ATLEASTONCE,
+      HConstants.DEFAULT_HBASE_CLIENT_RETRIES_ATLEASTONCE)) {
+      if (this.retries <= 0) {
+        this.retries = 1;
+      }
+    }
 
     this.maxKeyValueSize = conf.getInt(MAX_KEYVALUE_SIZE_KEY, MAX_KEYVALUE_SIZE_DEFAULT);
   }

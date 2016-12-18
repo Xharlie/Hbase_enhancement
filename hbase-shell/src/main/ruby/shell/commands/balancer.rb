@@ -25,13 +25,21 @@ module Shell
 Trigger the cluster balancer. Returns true if balancer ran and was able to
 tell the region servers to unassign all the regions to balance  (the re-assignment itself is async). 
 Otherwise false (Will not run if regions in transition).
+Optional Boolean parameter if true, will trigger SimpleBalancer's Overall level balance when using SimpleBalancer
+Examples:
+  // balance at overall level
+  hbase> balancer true
+  // use default setting to balance
+  hbase> balancer
+  // or
+  hbase> balancer false
 EOF
       end
 
-      def command()
+      def command(*args)
         format_simple_command do
           formatter.row([
-            admin.balancer()? "true": "false"
+            admin.balancer(*args)? "true": "false"
           ])
         end
       end
