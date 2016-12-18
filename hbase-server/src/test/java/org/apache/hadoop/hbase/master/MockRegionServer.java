@@ -440,6 +440,11 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
+  public ClientProtos.MultiResponse multi(RpcController controller, MultiRequest request, Object responseTK) throws ServiceException {
+    return null;
+  }
+
+  @Override
   public GetRegionInfoResponse getRegionInfo(RpcController controller,
       GetRegionInfoRequest request) throws ServiceException {
     GetRegionInfoResponse.Builder builder = GetRegionInfoResponse.newBuilder();

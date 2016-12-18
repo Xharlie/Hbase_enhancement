@@ -99,6 +99,7 @@ import com.google.protobuf.Descriptors.MethodDescriptor;
 import com.google.protobuf.Message;
 import com.google.protobuf.ServiceException;
 import com.google.protobuf.TextFormat;
+import org.apache.hadoop.hbase.regionserver.ResponseToolKit;
 
 @InterfaceAudience.LimitedPrivate({HBaseInterfaceAudience.COPROC, HBaseInterfaceAudience.PHOENIX})
 @InterfaceStability.Evolving
@@ -825,9 +826,9 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
    * exception name and the stack trace are returned in the protobuf response.
    */
   @Override
-  public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
-      Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
-  throws IOException {
+  public Pair<Message, PayloadCarryingRpcController> call(BlockingService service, MethodDescriptor md,
+            Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status, Call call)
+          throws IOException, ServiceException {
     try {
       status.setRPC(md.getName(), new Object[]{param}, receiveTime);
       // TODO: Review after we add in encoded data blocks.
@@ -836,7 +837,36 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
       //get an instance of the method arg type
       long startTime = System.currentTimeMillis();
       PayloadCarryingRpcController controller = new PayloadCarryingRpcController(cellScanner);
-      Message result = service.callBlockingMethod(md, controller, param);
+      ResponseToolKit responseTK = new ResponseToolKit(call, controller, receiveTime, startTime, this, status, md , param);
+      Message result;
+      if(service instanceof ClientProtos.ExtendedBlockingService) {
+        result = ((ClientProtos.ExtendedBlockingService) service).callBlockingMethod(md, controller, param, (Object) responseTK);
+//        result = service.callBlockingMethod(md, controller, param);
+      }else{
+        result = service.callBlockingMethod(md, controller, param);
+      }
+      if(!controller.getResponseDelegated()) {
+        updateCallMetrics(startTime, receiveTime, result, call, status, md, param);
+      }
+      return new Pair<Message, PayloadCarryingRpcController>(result, controller);
+    } catch (Throwable e) {
+      // The above callBlockingMethod will always return a SE.  Strip the SE wrapper before
+      // putting it on the wire.  Its needed to adhere to the pb Service Interface but we don't
+      // need to pass it over the wire.
+      if (e instanceof ServiceException) e = e.getCause();
+
+      // increment the number of requests that were exceptions.
+      metrics.exception(e);
+
+      if (e instanceof LinkageError) throw new DoNotRetryIOException(e);
+      if (e instanceof IOException) throw (IOException)e;
+      LOG.error("Unexpected throwable object ", e);
+      throw new IOException(e.getMessage(), e);
+    }
+  }
+
+  public void updateCallMetrics(long startTime, long receiveTime, Message result
+          , Call call, MonitoredRPCHandler status, MethodDescriptor md, Message param) throws IOException {
       long endTime = System.currentTimeMillis();
       int processingTime = (int) (endTime - startTime);
       int qTime = (int) (startTime - receiveTime);
@@ -878,21 +908,6 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
             status.getClient(), startTime, processingTime, qTime,
             responseSize);
       }
-      return new Pair<Message, CellScanner>(result, controller.cellScanner());
-    } catch (Throwable e) {
-      // The above callBlockingMethod will always return a SE.  Strip the SE wrapper before
-      // putting it on the wire.  Its needed to adhere to the pb Service Interface but we don't
-      // need to pass it over the wire.
-      if (e instanceof ServiceException) e = e.getCause();
-
-      // increment the number of requests that were exceptions.
-      metrics.exception(e);
-
-      if (e instanceof LinkageError) throw new DoNotRetryIOException(e);
-      if (e instanceof IOException) throw (IOException)e;
-      LOG.error("Unexpected throwable object ", e);
-      throw new IOException(e.getMessage(), e);
-    }
   }
 
   private void collectTotalCalls(int totalTime) {

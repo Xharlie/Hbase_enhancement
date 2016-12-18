@@ -297,7 +297,7 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
       } else {
         // FIXME should add logic to set the exception as result of the relative request in result
         // array, refer to AsyncProcess$AsyncRequestFutureImpl#setError
-        isDone = true;
+        markDone();
         if (isCanceled) {
           toThrow = new DoNotRetryIOException("Request is already canceled");
         } else {
@@ -312,10 +312,16 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
 
     @Override
     public void processBatchResult(Object[] results) {
-      isDone = true;
+      markDone();
       if (LOG.isTraceEnabled()) LOG.trace("Batch completed");
     }
 
+  }
+
+  @Override
+  protected void markDone(){
+    executionTime = System.currentTimeMillis() - startTime;
+    isDone = true;
   }
 
   @Override

@@ -62,16 +62,14 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
       @Override
       public void processResult(Result result) {
         toReturn = result;
-        isDone = true;
-        latch.countDown();
+        markDone();
       }
 
       @Override
       public void processError(Throwable exception) {
         if (exception instanceof DoNotRetryIOException) {
           toThrow = (DoNotRetryIOException) exception;
-          isDone = true;
-          latch.countDown();
+          markDone();
           return;
         }
         // add exception to the exception list
@@ -105,6 +103,13 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
       }
     };
     doRequest(null, callback);
+  }
+
+  @Override
+  protected void markDone(){
+    executionTime = System.currentTimeMillis() - startTime;
+    isDone = true;
+    latch.countDown();
   }
 
   @Override

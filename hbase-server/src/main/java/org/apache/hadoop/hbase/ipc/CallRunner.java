@@ -87,7 +87,7 @@ public class CallRunner {
       }
       Throwable errorThrowable = null;
       String error = null;
-      Pair<Message, CellScanner> resultPair = null;
+      Pair<Message, PayloadCarryingRpcController> resultPair = null;
       RpcServer.CurCall.set(call);
       TraceScope traceScope = null;
       try {
@@ -101,7 +101,7 @@ public class CallRunner {
         // make the call
         resultPair =
             this.rpcServer.call(call.getService(), call.getMethodDescriptor(), call.getParam(),
-              call.getCellScanner(), call.getTimestamp(), this.status);
+              call.getCellScanner(), call.getTimestamp(), this.status, call);
       } catch (Throwable e) {
         RpcServer.LOG.debug(Thread.currentThread().getName() + ": " + call.toShortString(), e);
         errorThrowable = e;
@@ -117,12 +117,14 @@ public class CallRunner {
       }
       // Set the response for undelayed calls and delayed calls with
       // undelayed responses.
-      if (!call.isDelayed() || !call.isReturnValueDelayed()) {
-        Message param = resultPair != null ? resultPair.getFirst() : null;
-        CellScanner cells = resultPair != null ? resultPair.getSecond() : null;
-        call.setResponse(param, cells, errorThrowable, error);
+      if(resultPair != null && !resultPair.getSecond().getResponseDelegated()) {
+        if (!call.isDelayed() || !call.isReturnValueDelayed()) {
+          Message param = resultPair != null ? resultPair.getFirst() : null;
+          CellScanner cells = resultPair != null ? resultPair.getSecond().cellScanner() : null;
+          call.setResponse(param, cells, errorThrowable, error);
+        }
+        call.sendResponseIfReady();
       }
-      call.sendResponseIfReady();
       this.status.markComplete("Sent response");
       this.status.pause("Waiting for a call");
     } catch (OutOfMemoryError e) {

@@ -55,12 +55,25 @@ public abstract class AsyncFuture<V> implements Future<V>{
       new ArrayList<RetriesExhaustedException.ThrowableWithExtraContext>();
   protected volatile boolean isCanceled = false;
   protected volatile boolean isDone = false;
+  protected final long startTime = System.currentTimeMillis();
+  protected volatile long executionTime = -1;
 
   // set core pool size to 10 to avoid too many idle threads
   private static final ScheduledThreadPoolExecutor retryExecutor =
       new ScheduledThreadPoolExecutor(10);
   private Collection<Future<?>> retryFutures =
       Collections.synchronizedCollection(new ArrayList<Future<?>>());
+
+  public long getExecutionTime() throws IOException {
+    if (executionTime < 0)
+      throw new IOException("future is not done, executionTime is invalid.");
+    return executionTime;
+  }
+
+  /**
+   * Mark the future's status as done.
+   */
+  protected abstract void markDone();
 
   /**
    * Waits if necessary for the request to complete, and then retrieves its result. The maximum time

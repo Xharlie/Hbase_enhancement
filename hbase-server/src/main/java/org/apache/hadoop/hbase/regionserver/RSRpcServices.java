@@ -784,6 +784,128 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   }
 
   /**
+   * Run through the regionMutation <code>rm</code> and per Mutation, do the work, and then when
+   * done, add an instance of a {@link ResultOrException} that corresponds to each Mutation.
+   * @param region
+   * @param actions
+   * @param cellScanner
+   * @param builder
+   * @param cellsToReturn  Could be null. May be allocated in this method.  This is what this
+   * method returns as a 'result'.
+   * @return Return the <code>cellScanner</code> passed
+   */
+  private Pair<List<CellScannable>,Boolean> doNonAtomicRegionMutation(
+      final OperationQuota quota, final RegionAction actions, final CellScanner cellScanner,
+      long nonceGroup, final RegionScannersCloseCallBack closeCallBack, RpcCallContext context,
+      Boolean mutateOnly, ResponseToolKit responseTK) {
+    // Gather up CONTIGUOUS Puts and Deletes in this mutations List.  Idea is that rather than do
+    // one at a time, we instead pass them in batch.  Be aware that the corresponding
+    // ResultOrException instance that matches each Put or Delete is then added down in the
+    // doBatchOp call.  We should be staying aligned though the Put and Delete are deferred/batched
+    List<ClientProtos.Action> mutations = null;
+    for (ClientProtos.Action action: actions.getActionList()) {
+      ClientProtos.ResultOrException.Builder resultOrExceptionBuilder = null;
+      try {
+        Result r = null;
+        if (action.hasGet()) {
+          mutateOnly = false;
+          long before = EnvironmentEdgeManager.currentTime();
+          try {
+            Get get = ProtobufUtil.toGet(action.getGet());
+            r = get(get, ((HRegion) responseTK.getRegion()), closeCallBack, context);
+          } finally {
+            if (regionServer.metricsRegionServer != null) {
+              regionServer.metricsRegionServer.updateGet(
+                EnvironmentEdgeManager.currentTime() - before);
+            }
+            multiGetRequestCount.increment();
+          }
+        } else if (action.hasServiceCall()) {
+          mutateOnly = false;
+          resultOrExceptionBuilder = ResultOrException.newBuilder();
+          try {
+            Message result = execServiceOnRegion(responseTK.getRegion(), action.getServiceCall());
+            ClientProtos.CoprocessorServiceResult.Builder serviceResultBuilder =
+                ClientProtos.CoprocessorServiceResult.newBuilder();
+            resultOrExceptionBuilder.setServiceResult(
+                serviceResultBuilder.setValue(
+                  serviceResultBuilder.getValueBuilder()
+                    .setName(result.getClass().getName())
+                    .setValue(result.toByteString())));
+          } catch (IOException ioe) {
+            rpcServer.getMetrics().exception(ioe);
+            resultOrExceptionBuilder.setException(ResponseConverter.buildException(ioe));
+          }
+        } else if (action.hasMutation()) {
+          MutationType type = action.getMutation().getMutateType();
+          if (type != MutationType.PUT && type != MutationType.DELETE && mutations != null &&
+              !mutations.isEmpty()) {
+            // Flush out any Puts or Deletes already collected.
+            doBatchOp(responseTK.getRegionActionResultBuilder(), responseTK.getRegion(), quota, mutations, cellScanner);
+            mutations.clear();
+          }
+          switch (type) {
+          case APPEND:
+            r = append(responseTK.getRegion(), quota, action.getMutation(), cellScanner, nonceGroup);
+            mutateOnly = false;
+            break;
+          case INCREMENT:
+            r = increment(responseTK.getRegion(), quota, action.getMutation(), cellScanner,  nonceGroup);
+            mutateOnly = false;
+            break;
+          case PUT:
+            putRequestCount.increment();
+          case DELETE:
+            // Collect the individual mutations and apply in a batch
+            if (mutations == null) {
+              mutations = new ArrayList<ClientProtos.Action>(actions.getActionCount());
+            }
+            mutations.add(action);
+            break;
+          default:
+            throw new DoNotRetryIOException("Unsupported mutate type: " + type.name());
+          }
+        } else {
+          throw new HBaseIOException("Unexpected Action type");
+        }
+        if (r != null) {
+          ClientProtos.Result pbResult = null;
+          if (isClientCellBlockSupport(context)) {
+            pbResult = ProtobufUtil.toResultNoData(r);
+            //  Hard to guess the size here.  Just make a rough guess.
+            if (responseTK.getCellsToReturn() == null) responseTK.setCellsToReturn(new ArrayList<CellScannable>());
+            responseTK.getCellsToReturn().add(r);
+          } else {
+            pbResult = ProtobufUtil.toResult(r);
+          }
+          resultOrExceptionBuilder =
+            ClientProtos.ResultOrException.newBuilder().setResult(pbResult);
+        }
+        // Could get to here and there was no result and no exception.  Presumes we added
+        // a Put or Delete to the collecting Mutations List for adding later.  In this
+        // case the corresponding ResultOrException instance for the Put or Delete will be added
+        // down in the doBatchOp method call rather than up here.
+      } catch (IOException ie) {
+        rpcServer.getMetrics().exception(ie);
+        resultOrExceptionBuilder = ResultOrException.newBuilder().
+          setException(ResponseConverter.buildException(ie));
+      }
+      if (resultOrExceptionBuilder != null) {
+        // Propagate index.
+        resultOrExceptionBuilder.setIndex(action.getIndex());
+        responseTK.getRegionActionResultBuilder().addResultOrException(resultOrExceptionBuilder.build());
+      }
+    }
+    Boolean responseDelegated = false;
+    // Finish up any outstanding mutations
+    if (mutations != null && !mutations.isEmpty()) {
+      responseTK.setMutations(mutations);
+      responseDelegated = doBatchOp(quota, cellScanner, mutateOnly, responseTK);
+    }
+    return new Pair<List<CellScannable>,Boolean>(responseTK.getCellsToReturn(), responseDelegated);
+  }
+
+  /**
    * Execute a list of Put/Delete mutations.
    *
    * @param builder
@@ -858,6 +980,62 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
         regionServer.metricsRegionServer.updateDelete(after - before);
       }
     }
+  }
+
+  /**  used by SEDA
+   +   * Execute a list of Put/Delete mutations.
+   +   * delegate the task of sending response to another thread
+   +   */
+  private boolean doBatchOp(final OperationQuota quota, final CellScanner cells,
+                            Boolean mutateOnly, ResponseToolKit responseTK) {
+    if (!mutateOnly) {
+      doBatchOp(responseTK.getRegionActionResultBuilder(), responseTK.getRegion(), quota, responseTK.getMutations(), cells);
+      return false;
+    }
+    Mutation[] mArray = new Mutation[responseTK.getMutations().size()];
+    long before = EnvironmentEdgeManager.currentTime();
+    boolean batchContainsPuts = false, batchContainsDelete = false;
+    try {
+      int i = 0;
+      for (ClientProtos.Action action : responseTK.getMutations()) {
+        MutationProto m = action.getMutation();
+        Mutation mutation;
+        if (m.getMutateType() == MutationType.PUT) {
+          mutation = ProtobufUtil.toPut(m, cells);
+          batchContainsPuts = true;
+        } else {
+          mutation = ProtobufUtil.toDelete(m, cells);
+          batchContainsDelete = true;
+        }
+        mArray[i++] = mutation;
+        quota.addMutation(mutation);
+      }
+
+      if (!responseTK.getRegion().getRegionInfo().isMetaTable()) {
+        regionServer.cacheFlusher.reclaimMemStoreMemory();
+      }
+      responseTK.setRegionServer(regionServer);
+      responseTK.batchContainsPuts = batchContainsPuts;
+      responseTK.batchContainsDelete = batchContainsDelete;
+      responseTK.before = before;
+      OperationStatus codes[] = ((HRegion) responseTK.getRegion()).batchMutate(mArray, HConstants.NO_NONCE,
+              HConstants.NO_NONCE, responseTK);
+      return true;
+    } catch (IOException ie) {
+      for (int i = 0; i < responseTK.getMutations().size(); i++) {
+        responseTK.getRegionActionResultBuilder().addResultOrException(getResultOrException(ie, responseTK.getMutations().get(i).getIndex()));
+      }
+    }
+    if (regionServer.metricsRegionServer != null) {
+      long after = EnvironmentEdgeManager.currentTime();
+      if (batchContainsPuts) {
+        regionServer.metricsRegionServer.updatePut(after - before);
+      }
+      if (batchContainsDelete) {
+        regionServer.metricsRegionServer.updateDelete(after - before);
+      }
+    }
+    return false;
   }
 
   /**
@@ -2264,6 +2442,120 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       controller.setCellScanner(CellUtil.createCellScanner(cellsToReturn));
     }
     if (processed != null) responseBuilder.setProcessed(processed);
+    return responseBuilder.build();
+  }
+
+  /**
+   * Execute multiple actions on a table: get, mutate, and/or execCoprocessor
+   *
+   * @param rpcc the RPC controller
+   * @param request the multi request
+   * @throws ServiceException
+   */
+  @Override
+  public MultiResponse multi(final RpcController rpcc, final MultiRequest request, Object objresponseTK)
+          throws ServiceException {
+    try {
+      checkOpen();
+    } catch (IOException ie) {
+      throw new ServiceException(ie);
+    }
+
+    // rpc controller is how we bring in data via the back door;  it is unprotobuf'ed data.
+    // It is also the conduit via which we pass back data.
+    PayloadCarryingRpcController controller = (PayloadCarryingRpcController)rpcc;
+    ResponseToolKit responseTK = (ResponseToolKit)objresponseTK;
+    CellScanner cellScanner = controller != null ? controller.cellScanner(): null;
+    if (controller != null) controller.setCellScanner(null);
+
+    long nonceGroup = request.hasNonceGroup() ? request.getNonceGroup() : HConstants.NO_NONCE;
+
+    // this will contain all the cells that we need to return. It's created later, if needed.
+    List<CellScannable> cellsToReturn = null;
+    MultiResponse.Builder responseBuilder = MultiResponse.newBuilder();
+    RegionActionResult.Builder regionActionResultBuilder = RegionActionResult.newBuilder();
+    Boolean processed = null;
+    RegionScannersCloseCallBack closeCallBack = null;
+    RpcCallContext context = null;
+    Boolean mutateOnly = request.getRegionActionList().size() == 1; // SEDA should be able to support multi action TODO.
+    Boolean responseDelegated = false;
+    this.rpcMultiRequestCount.increment();
+    for (RegionAction regionAction : request.getRegionActionList()) {
+      this.requestCount.add(regionAction.getActionCount());
+      OperationQuota quota;
+      Region region;
+      regionActionResultBuilder.clear();
+      try {
+        region = getRegion(regionAction.getRegion());
+        quota = getQuotaManager().checkQuota(region, regionAction.getActionList());
+      } catch (IOException e) {
+        rpcServer.getMetrics().exception(e);
+        regionActionResultBuilder.setException(ResponseConverter.buildException(e));
+        responseBuilder.addRegionActionResult(regionActionResultBuilder.build());
+        // All Mutations in this RegionAction not executed as we can not see the Region online here
+        // in this RS. Will be retried from Client. Skipping all the Cells in CellScanner
+        // corresponding to these Mutations.
+        skipCellsForMutations(regionAction.getActionList(), cellScanner);
+        continue;  // For this region it's a failure.
+      }
+
+      if (regionAction.hasAtomic() && regionAction.getAtomic()) {
+        // How does this call happen?  It may need some work to play well w/ the surroundings.
+        // Need to return an item per Action along w/ Action index.  TODO.
+        mutateOnly = false;
+        try {
+          if (request.hasCondition()) {
+            Condition condition = request.getCondition();
+            byte[] row = condition.getRow().toByteArray();
+            byte[] family = condition.getFamily().toByteArray();
+            byte[] qualifier = condition.getQualifier().toByteArray();
+            CompareOp compareOp = CompareOp.valueOf(condition.getCompareType().name());
+            ByteArrayComparable comparator =
+                    ProtobufUtil.toComparator(condition.getComparator());
+            processed = checkAndRowMutate(region, regionAction.getActionList(),
+                    cellScanner, row, family, qualifier, compareOp, comparator);
+          } else {
+            ClientProtos.RegionLoadStats stats = mutateRows(region, regionAction.getActionList(),
+                    cellScanner);
+            // add the stats to the request
+            if(stats != null) {
+              responseBuilder.addRegionActionResult(RegionActionResult.newBuilder()
+                      .addResultOrException(ResultOrException.newBuilder().setLoadStats(stats)));
+            }
+            processed = Boolean.TRUE;
+          }
+        } catch (IOException e) {
+          rpcServer.getMetrics().exception(e);
+          // As it's atomic, we may expect it's a global failure.
+          regionActionResultBuilder.setException(ResponseConverter.buildException(e));
+        }
+      } else {
+        if (closeCallBack == null) {
+          // An RpcCallBack that creates a list of scanners that needs to perform callBack
+          // operation on completion of multiGets.
+          // Set this only once
+          closeCallBack = new RegionScannersCloseCallBack();
+          context = RpcServer.getCurrentCall();
+          context.setCallBack(closeCallBack);
+        }
+        // doNonAtomicRegionMutation manages the exception internally
+        responseTK.setResponseToolKit(region, responseBuilder, regionActionResultBuilder, cellsToReturn);
+        Pair<List<CellScannable>, Boolean> doNonAtomicResult = doNonAtomicRegionMutation(
+                quota, regionAction, cellScanner, nonceGroup, closeCallBack, context, mutateOnly, responseTK);
+        cellsToReturn = doNonAtomicResult.getFirst();
+        responseDelegated = doNonAtomicResult.getSecond();
+      }
+      if (!responseDelegated) {
+        responseBuilder.addRegionActionResult(regionActionResultBuilder.build());
+      }
+      quota.close();
+    }
+    // Load the controller with the Cells to return.
+    if (cellsToReturn != null && !cellsToReturn.isEmpty() && controller != null) {
+      controller.setCellScanner(CellUtil.createCellScanner(cellsToReturn));
+    }
+    if (processed != null) responseBuilder.setProcessed(processed);
+    controller.setResponseDelegated(responseDelegated);
     return responseBuilder.build();
   }
 

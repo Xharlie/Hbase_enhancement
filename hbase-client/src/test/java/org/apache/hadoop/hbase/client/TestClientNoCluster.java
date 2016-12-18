@@ -513,6 +513,12 @@ public class TestClientNoCluster extends Configured implements Tool {
     }
 
     @Override
+    public MultiResponse multi(RpcController controller, MultiRequest request, Object responseTK)
+            throws ServiceException {
+      return null;
+    }
+
+    @Override
     public MultiResponse multi(RpcController controller, MultiRequest request)
     throws ServiceException {
       int concurrentInvocations = this.multiInvocationsCount.incrementAndGet();

@@ -2,9 +2,14 @@
 // source: Client.proto
 
 package org.apache.hadoop.hbase.protobuf.generated;
-
+import com.google.protobuf.*;
 public final class ClientProtos {
   private ClientProtos() {}
+
+    public abstract static class ExtendedBlockingService implements com.google.protobuf.BlockingService {
+        abstract public Message callBlockingMethod(Descriptors.MethodDescriptor var1, RpcController var2, Message var3, Object responseTK) throws ServiceException;
+    }
+
   public static void registerAllExtensions(
       com.google.protobuf.ExtensionRegistry registry) {
   }
@@ -32180,7 +32185,7 @@ public final class ClientProtos {
 
     public static com.google.protobuf.BlockingService
         newReflectiveBlockingService(final BlockingInterface impl) {
-      return new com.google.protobuf.BlockingService() {
+      return new ExtendedBlockingService() {
         public final com.google.protobuf.Descriptors.ServiceDescriptor
             getDescriptorForType() {
           return getDescriptor();
@@ -32214,6 +32219,36 @@ public final class ClientProtos {
             default:
               throw new java.lang.AssertionError("Can't get here.");
           }
+        }
+
+        public final com.google.protobuf.Message callBlockingMethod(
+                com.google.protobuf.Descriptors.MethodDescriptor method,
+                com.google.protobuf.RpcController controller,
+                com.google.protobuf.Message request, Object responseTK)
+                throws com.google.protobuf.ServiceException {
+              if (method.getService() != getDescriptor()) {
+                 throw new java.lang.IllegalArgumentException(
+                          "Service.callBlockingMethod() given method descriptor for " +
+                                  "wrong service type.");
+              }
+              switch(method.getIndex()) {
+                  case 0:
+                      return impl.get(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetRequest)request);
+                  case 1:
+                      return impl.mutate(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateRequest)request);
+                  case 2:
+                      return impl.scan(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ScanRequest)request);
+                  case 3:
+                      return impl.bulkLoadHFile(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.BulkLoadHFileRequest)request);
+                  case 4:
+                      return impl.execService(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.CoprocessorServiceRequest)request);
+                  case 5:
+                      return impl.execRegionServerService(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.CoprocessorServiceRequest)request);
+                  case 6:
+                      return impl.multi(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiRequest)request, responseTK);
+                  default:
+                      throw new java.lang.AssertionError("Can't get here.");
+              }
         }
 
         public final com.google.protobuf.Message
@@ -32611,6 +32646,11 @@ public final class ClientProtos {
           com.google.protobuf.RpcController controller,
           org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiRequest request)
           throws com.google.protobuf.ServiceException;
+
+      public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse multi(
+        com.google.protobuf.RpcController controller,
+        org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiRequest request, Object responseTK)
+        throws com.google.protobuf.ServiceException;
     }
 
     private static final class BlockingStub implements BlockingInterface {
@@ -32702,6 +32742,17 @@ public final class ClientProtos {
           request,
           org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse.getDefaultInstance());
       }
+
+        public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse multi(
+                    com.google.protobuf.RpcController controller,
+                    org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiRequest request, Object responseTK)
+            throws com.google.protobuf.ServiceException {
+            return (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse) channel.callBlockingMethod(
+                            getDescriptor().getMethods().get(6),
+                            controller,
+                            request,
+                            org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse.getDefaultInstance());
+        }
 
     }
 

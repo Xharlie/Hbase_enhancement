@@ -30,6 +30,7 @@ import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.regionserver.RSRpcServices;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.security.authorize.PolicyProvider;
+import org.apache.hadoop.hbase.ipc.RpcServer.Call;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.BlockingService;
@@ -49,9 +50,9 @@ public interface RpcServerInterface {
   void setSocketSendBufSize(int size);
   InetSocketAddress getListenerAddress();
 
-  Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
-    Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
-  throws IOException, ServiceException;
+  Pair<Message, PayloadCarryingRpcController> call(BlockingService service, MethodDescriptor md,
+   Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status, Call call)
+          throws IOException, ServiceException;
 
   void setErrorHandler(HBaseRPCErrorHandler handler);
   HBaseRPCErrorHandler getErrorHandler();

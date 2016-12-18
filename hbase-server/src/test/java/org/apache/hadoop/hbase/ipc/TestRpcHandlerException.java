@@ -217,10 +217,10 @@ public class TestRpcHandlerException {
     }
 
     @Override
-    public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
-        Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
+    public Pair<Message, PayloadCarryingRpcController> call(BlockingService service, MethodDescriptor md,
+        Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status, RpcServer.Call call)
         throws IOException, ServiceException {
-      return rpcServer.call(service, md, param, cellScanner, receiveTime, status);
+      return rpcServer.call(service, md, param, cellScanner, receiveTime, status, call);
     }
 
     @Override
