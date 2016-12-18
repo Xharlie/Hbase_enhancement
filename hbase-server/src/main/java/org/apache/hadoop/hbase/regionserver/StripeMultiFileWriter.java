@@ -36,7 +36,7 @@ import org.apache.hadoop.hbase.util.Bytes;
  * Base class for cell sink that separates the provided cells into multiple files.
  */
 @InterfaceAudience.Private
-public abstract class StripeMultiFileWriter implements CellSink, ShipperListener {
+public abstract class StripeMultiFileWriter implements Compactor.CellSink {
   private static final Log LOG = LogFactory.getLog(StripeMultiFileWriter.class);
 
   /** Factory that is used to produce single StoreFile.Writer-s */
@@ -107,15 +107,6 @@ public abstract class StripeMultiFileWriter implements CellSink, ShipperListener
     }
     this.existingWriters = null;
     return paths;
-  }
-
-  @Override
-  public void beforeShipped() throws IOException {
-    if (this.existingWriters != null) {
-      for (StoreFile.Writer writer : this.existingWriters) {
-        writer.beforeShipped();
-      }
-    }
   }
 
   /**

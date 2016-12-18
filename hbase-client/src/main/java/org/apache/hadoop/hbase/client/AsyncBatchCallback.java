@@ -28,8 +28,6 @@ import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.ServerName;
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.protobuf.ResponseConverter;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos;
 
@@ -44,8 +42,6 @@ import org.apache.hadoop.hbase.protobuf.generated.ClientProtos;
  * the 1st case is handled in {@link #onError(Throwable)} or {@link #processError(Throwable, List)} and
  * the 2nd should be handled in {@link #processSingleResult(MultiAction, MultiResponse, ServerName)}
  */
-@InterfaceAudience.Private
-@InterfaceStability.Evolving
 public abstract class AsyncBatchCallback implements AsyncRpcCallback<ClientProtos.MultiResponse> {
   private static final Log LOG = LogFactory.getLog(AsyncBatchCallback.class);
 

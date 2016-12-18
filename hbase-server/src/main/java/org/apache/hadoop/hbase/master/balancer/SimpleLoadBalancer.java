@@ -520,8 +520,6 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
         HRegionInfo hriToPlan;
         if (balanceInfo.getHriList().size() == 0) {
           hriToPlan = new HRegionInfo();
-          LOG.warn("During balanceOverall, we found " + serverload.getServerName()
-                  + " has no HRegionInfo, shouldn't happen");
         } else if (balanceInfo.getNextRegionForUnload() >= balanceInfo.getHriList().size()) {
           continue;
         } else {
@@ -532,7 +530,7 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
         setLoad(ServerLoadList, i, -1);
       }else if(balanceInfo.getinitialnumRegions() + balanceInfo.getNumRegionsAdded() > max
               || balanceInfo.getinitialnumRegions() + balanceInfo.getNumRegionsAdded() < min){
-        LOG.warn("Encounter incorrect region numbers after calculating move plan during balanceOverall, " +
+        LOG.debug("Encounter incorrect region numbers after calculating move plan during balanceOverall, " +
                 "stop balance for this round"); // should not happen
         return;
       }

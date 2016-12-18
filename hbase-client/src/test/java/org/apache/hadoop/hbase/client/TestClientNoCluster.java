@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.hadoop.hbase.CellComparator;
-import org.apache.hadoop.hbase.DoNotRetryIOException;
+
 import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.commons.lang.NotImplementedException;
 import org.apache.commons.logging.Log;
@@ -253,31 +253,6 @@ public class TestClientNoCluster extends Configured implements Tool {
       }
     } finally {
       scanner.close();
-      table.close();
-    }
-  }
-
-  @Test
-  public void testConnectionClosedOnRegionLocate() throws IOException {
-    Configuration testConf = new Configuration(this.conf);
-    testConf.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 2);
-    // Go against meta else we will try to find first region for the table on construction which
-    // means we'll have to do a bunch more mocking. Tests that go against meta only should be
-    // good for a bit of testing.
-    HTable table = new HTable(testConf, TableName.META_TABLE_NAME);
-    table.getConnection().close();
-    try {
-      Get get = new Get(Bytes.toBytes("dummyRow"));
-      table.get(get);
-      fail("Should have thrown DoNotRetryException but no exception thrown");
-    } catch (Exception e) {
-      if (!(e instanceof DoNotRetryIOException)) {
-        String errMsg =
-            "Should have thrown DoNotRetryException but actually " + e.getClass().getSimpleName();
-        LOG.error(errMsg, e);
-        fail(errMsg);
-      }
-    } finally {
       table.close();
     }
   }

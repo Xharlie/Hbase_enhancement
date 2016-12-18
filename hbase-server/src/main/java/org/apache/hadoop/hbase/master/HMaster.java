@@ -1313,9 +1313,9 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
         }
       }
 
-      boolean isSimpleLoadBalancer = this.balancer instanceof SimpleLoadBalancer;
-      boolean simpleLoadBalancerOverall = (isSimpleLoadBalancer &&
-              this.getConfiguration().getBoolean("hbase.master.loadbalance.bytableOverall", false));
+      boolean simpleLoadBalancerOverall = (this.getConfiguration().get(HConstants.HBASE_MASTER_LOADBALANCER_CLASS)
+              .equals("org.apache.hadoop.hbase.master.balancer.SimpleLoadBalancer") &&
+              this.getConfiguration().getBoolean("hbase.master.loadbalance.bytableOverall", true));
 
       Map<TableName, Map<ServerName, List<HRegionInfo>>> assignmentsByTable =
         this.assignmentManager.getRegionStates().getAssignmentsByTable(simpleLoadBalancerOverall,false);
@@ -1328,9 +1328,7 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
         ((SimpleLoadBalancer)this.balancer).setClusterLoad(
                 this.assignmentManager.getRegionStates().getAssignmentsByTable(simpleLoadBalancerOverall,true));
         ((SimpleLoadBalancer)this.balancer).setBalanceOverall(true);
-      } else if (isSimpleLoadBalancer){
-        ((SimpleLoadBalancer)this.balancer).setBalanceOverall(false);
-      }
+      }else ((SimpleLoadBalancer)this.balancer).setBalanceOverall(false);
       for (Map<ServerName, List<HRegionInfo>> assignments : assignmentsByTable.values()) {
         List<RegionPlan> partialPlans = this.balancer.balanceCluster(assignments);
         if (partialPlans != null) plans.addAll(partialPlans);

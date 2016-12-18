@@ -33,8 +33,6 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ServerName;
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.client.AsyncProcess.AsyncRequestFutureImpl;
 import org.apache.hadoop.hbase.client.RetriesExhaustedException.ThrowableWithExtraContext;
 import org.apache.hadoop.hbase.exceptions.ClientExceptionsUtil;
@@ -42,8 +40,6 @@ import org.apache.hadoop.hbase.util.Bytes;
 
 import com.google.protobuf.Message;
 
-@InterfaceAudience.Private
-@InterfaceStability.Evolving
 public class AsyncBatchFuture extends AsyncFuture<Object[]> {
   private static Log LOG = LogFactory.getLog(AsyncBatchFuture.class);
 
@@ -111,7 +107,6 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
       throws InterruptedException, ExecutionException, TimeoutException {
     latch.await(timeout, unit);
     if (latch.getCount() > 0) {
-      cancel(true);
       throw new TimeoutException("Failed to get batch result against table: "
           + this.tableName + " within " + timeout + " " + unit.name().toLowerCase());
     }
@@ -263,7 +258,7 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
       exceptions.add(exceptionWithDetails);
       // check and retry
       int attempts = numAttempts.get();
-      if (attempts < maxAttempts && !isCanceled) {
+      if (attempts < maxAttempts) {
         LOG.debug("Multi attempt failed for table " + tableName + "; tried=" + attempts
             + ", maxAttempts=" + maxAttempts + ". Retry...", exception);
         long pause = ConnectionUtils.getPauseTime(retryPause, attempts);
@@ -272,11 +267,7 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
         delayedRetry(toRetry, pause, callback);
       } else {
         isDone = true;
-        if (isCanceled) {
-          toThrow = new DoNotRetryIOException("Request is already canceled");
-        } else {
-          toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
-        }
+        toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
         for (int i = 0; i < toRetry.size(); i++) {
           latch.countDown();
           getActionsInProgress().decrementAndGet();

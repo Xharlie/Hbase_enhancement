@@ -20,7 +20,6 @@
 package org.apache.hadoop.hbase.util;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.regionserver.ShipperListener;
 import org.apache.hadoop.io.Writable;
 
 /**
@@ -28,7 +27,7 @@ import org.apache.hadoop.io.Writable;
  * resulting Bloom filter as a sequence of bytes.
  */
 @InterfaceAudience.Private
-public interface BloomFilterWriter extends BloomFilterBase, ShipperListener {
+public interface BloomFilterWriter extends BloomFilterBase {
 
   /** Compact the Bloom filter before writing metadata & data to disk. */
   void compactBloom();

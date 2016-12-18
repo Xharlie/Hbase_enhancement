@@ -944,7 +944,6 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
       final Get getReq = get;
       RegionServerCallable<Result> callable = new RegionServerCallable<Result>(this.connection,
           getName(), get.getRow()) {
-
         @Override
         public Result call(int callTimeout) throws IOException {
           ClientProtos.GetRequest request =
@@ -2122,20 +2121,17 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
 
   @Override
   public Future<Result> asyncGet(Get get) throws IOException {
-    return new AsyncGetFuture(this, get, maxAttempts, retryPause, startLogErrorsCnt,
-        operationTimeout);
+    return new AsyncGetFuture(this, get, maxAttempts, retryPause, startLogErrorsCnt);
   }
 
   @Override
   public Future<Result> asyncPut(Put put) throws IOException {
-    return new AsyncMutateFuture(this, put, maxAttempts, retryPause, startLogErrorsCnt,
-        operationTimeout);
+    return new AsyncMutateFuture(this, put, maxAttempts, retryPause, startLogErrorsCnt);
   }
 
   @Override
   public Future<Result> asyncDelete(Delete delete) throws IOException {
-    return new AsyncMutateFuture(this, delete, maxAttempts, retryPause, startLogErrorsCnt,
-        operationTimeout);
+    return new AsyncMutateFuture(this, delete, maxAttempts, retryPause, startLogErrorsCnt);
   }
 
   @Override
@@ -2156,9 +2152,6 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
     asyncBatch(deletes, results, batchCallback);
   }
 
-  /**
-   * TODO add timeout support
-   */
   @Override
   public void asyncBatch(List<? extends Row> rows, Object[] results,
       AsyncBatchCallback batchCallback) throws IOException {

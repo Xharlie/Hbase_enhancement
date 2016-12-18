@@ -71,7 +71,6 @@ public class TestAsyncHTable {
     TEST_UTIL.getConfiguration().set(RpcClientFactory.CUSTOM_RPC_CLIENT_IMPL_CONF_KEY,
       AsyncRpcClient.class.getName());
     TEST_UTIL.getConfiguration().setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 10);
-    // TEST_UTIL.getConfiguration().setInt(HConstants.HBASE_CLIENT_OPERATION_TIMEOUT, 5000);
     // comment below line to suppress retry log
     TEST_UTIL.getConfiguration().setInt(AsyncProcess.START_LOG_ERRORS_AFTER_COUNT_KEY, 0);
     TEST_UTIL.startMiniCluster(3);

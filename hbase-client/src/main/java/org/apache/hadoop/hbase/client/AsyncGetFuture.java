@@ -45,8 +45,6 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
   final Get get;
   final String row;
   final String tableName;
-  final int operationTimeout;
-  final AsyncGetCallback callback;
   Result toReturn;
   ArrayList<ThrowableWithExtraContext> exceptions = new ArrayList<RetriesExhaustedException.ThrowableWithExtraContext>();
   IOException toThrow = null;
@@ -54,14 +52,13 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
   boolean isDone = false;
 
   public AsyncGetFuture(final HTable table, final Get get, int tries, final long retryPause,
-      final int startLogErrorsCnt, int operationTimeout) throws IOException {
+      final int startLogErrorsCnt) throws IOException {
     this.table = table;
     this.get = get;
     this.maxAttempts = tries;
     this.row = Bytes.toString(get.getRow());
     this.tableName = table.getName().getNameAsString();
-    this.operationTimeout = operationTimeout;
-    this.callback = new AsyncGetCallback(this.get.getRow()) {
+    AsyncGetCallback callback = new AsyncGetCallback(this.get.getRow()) {
 
       @Override
       public void processResult(Result result) {
@@ -84,11 +81,10 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
         exceptions.add(exceptionWithDetails);
         // check and retry
         int attempts = numAttempts.get();
-        if (attempts < maxAttempts && !isCanceled) {
+        if (attempts < maxAttempts) {
           if (attempts > startLogErrorsCnt) {
-            LOG.debug(
-              "Get attempt failed for table " + tableName + " on row " + row + " at {" + location
-                  + "}; tried=" + attempts + ", maxAttempts=" + maxAttempts + ". Retry...",
+            LOG.debug("Get attempt failed for table " + tableName + " on row " + row + "; tried="
+                + attempts + ", maxAttempts=" + maxAttempts + ". Retry...",
               exception);
           }
           long pause = ConnectionUtils.getPauseTime(retryPause, attempts);
@@ -98,11 +94,7 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
             location.getServerName());
           delayedRetry(null, pause, this);
         } else {
-          if (isCanceled) {
-            toThrow = new DoNotRetryIOException("Request is already canceled");
-          } else {
-            toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
-          }
+          toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
           isDone = true;
           latch.countDown();
         }
@@ -113,13 +105,7 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
 
   @Override
   public Result get() throws InterruptedException, ExecutionException {
-    latch.await(operationTimeout, TimeUnit.MILLISECONDS);
-    if (latch.getCount() > 0) {
-      cancel(true);
-      throw new InterruptedException("Failed to get row: " + this.row + " from table: "
-          + this.tableName + " at {" + callback.location + "} within operation timeout: "
-          + operationTimeout + TimeUnit.MILLISECONDS);
-    }
+    latch.await();
     if (toThrow != null) {
       throw new ExecutionException(toThrow);
     }
@@ -139,8 +125,7 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
         }
       } catch (IOException e) {
         LOG.debug("Failed to issue async get request for table " + this.tableName + " on row "
-            + this.row + " at {" + this.callback.location + "}; numAttempts=" + numAttempts
-            + ", maxAttempts=" + maxAttempts,
+            + this.row + "; numAttempts=" + numAttempts + ", maxAttempts=" + maxAttempts,
           e);
         if (numAttempts.get() == maxAttempts) {
           callback.onError(e);
@@ -155,9 +140,8 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
       throws InterruptedException, ExecutionException, TimeoutException {
     latch.await(timeout, unit);
     if (latch.getCount() > 0) {
-      cancel(true);
-      throw new TimeoutException("Failed to get row: " + this.row + " from table: " + this.tableName
-          + " at {" + callback.location + "} within " + timeout + " " + unit.name().toLowerCase());
+      throw new TimeoutException("Failed to get row: " + this.row + " from table: "
+          + this.tableName + " within " + timeout + " " + unit.name().toLowerCase());
     }
     if (toThrow != null) {
       throw new ExecutionException(toThrow);

@@ -45,7 +45,7 @@ import com.google.common.base.Preconditions;
  * A query matcher that is specifically designed for the scan case.
  */
 @InterfaceAudience.Private
-public class ScanQueryMatcher implements ShipperListener {
+public class ScanQueryMatcher {
   // Optimization so we can skip lots of compares when we decide to skip
   // to the next row.
   private boolean stickyNextRow;
@@ -595,16 +595,6 @@ public class ScanQueryMatcher implements ShipperListener {
       return columnTracker.checkVersions(kv, ttl, type, ignoreCount);
     }
     return matchCode;
-  }
-
-  @Override
-  public void beforeShipped() throws IOException {
-    if (this.curCell != null) {
-      this.curCell = CellUtil.createFirstOnRow(CellUtil.copyRow(this.curCell));
-    }
-    if (columns != null) {
-      columns.beforeShipped();
-    }
   }
 
   /**

@@ -21,8 +21,6 @@ package org.apache.hadoop.hbase.client;
 import java.util.List;
 
 import org.apache.hadoop.hbase.ServerName;
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.classification.InterfaceStability;
 
 /**
  * Wrapper class for the real callback, used for recording the MultiAction per server.
@@ -34,8 +32,6 @@ import org.apache.hadoop.hbase.classification.InterfaceStability;
  * Notice that we will also save such mappings in SingleServerRequestRunnable inside
  * {@link AsyncProcess}, so it's not a new problem if considering callback map size
  */
-@InterfaceAudience.Private
-@InterfaceStability.Evolving
 public class AsyncBatchCallbackWrapper extends AsyncBatchCallback {
   AsyncBatchCallback delegate;
 

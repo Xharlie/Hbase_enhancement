@@ -282,9 +282,4 @@ public class CompoundBloomFilterWriter extends CompoundBloomFilterBase
   public boolean getCacheOnWrite() {
     return cacheOnWrite;
   }
-
-  @Override
-  public void beforeShipped() throws IOException {
-    // do nothing
-  }
 }

@@ -26,7 +26,6 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
@@ -129,22 +128,6 @@ public final class CellUtil {
           rowLen);
     }
     return destinationOffset + rowLen;
-  }
-
-  /**
-   * Copies the row to a new byte[]
-   * @param cell the cell from which row has to copied
-   * @return the byte[] containing the row
-   */
-  public static byte[] copyRow(Cell cell) {
-    if (cell instanceof ByteBufferedCell) {
-      return ByteBufferUtils.copyOfRange(((ByteBufferedCell) cell).getRowByteBuffer(),
-        ((ByteBufferedCell) cell).getRowPosition(),
-        ((ByteBufferedCell) cell).getRowPosition() + cell.getRowLength());
-    } else {
-      return Arrays.copyOfRange(cell.getRowArray(), cell.getRowOffset(),
-        cell.getRowOffset() + cell.getRowLength());
-    }
   }
 
   public static int copyFamilyTo(Cell cell, byte[] destination, int destinationOffset) {
@@ -1499,14 +1482,6 @@ public final class CellUtil {
           ((ByteBufferedCell) cell).getValuePosition(), cell.getValueLength());
     }
     return Bytes.toBigDecimal(cell.getValueArray(), cell.getValueOffset(), cell.getValueLength());
-  }
-
-  public static Cell createFirstOnRow(final byte[] row) {
-    return createFirstOnRow(row, 0, (short)row.length);
-  }
-
-  public static Cell createFirstOnRow(final byte [] row, int roffset, short rlength) {
-    return new FirstOnRowCell(row, roffset, rlength);
   }
 
   /**

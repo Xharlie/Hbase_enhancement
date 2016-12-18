@@ -59,8 +59,6 @@ import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.protobuf.generated.HBaseProtos.BytesBytesPair;
 import org.apache.hadoop.hbase.protobuf.generated.HFileProtos;
-import org.apache.hadoop.hbase.regionserver.CellSink;
-import org.apache.hadoop.hbase.regionserver.ShipperListener;
 import org.apache.hadoop.hbase.util.BloomFilterWriter;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ChecksumType;
@@ -234,12 +232,14 @@ public class HFile {
   }
 
   /** API required to write an {@link HFile} */
-  public interface Writer extends Closeable, CellSink, ShipperListener {
+  public interface Writer extends Closeable {
     /** Max memstore (mvcc) timestamp in FileInfo */
     public static final byte [] MAX_MEMSTORE_TS_KEY = Bytes.toBytes("MAX_MEMSTORE_TS_KEY");
 
     /** Add an element to the file info map. */
     void appendFileInfo(byte[] key, byte[] value) throws IOException;
+
+    void append(Cell cell) throws IOException;
 
     /** @return the path to this {@link HFile} */
     Path getPath();

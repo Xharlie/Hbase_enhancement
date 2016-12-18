@@ -37,13 +37,11 @@ import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.io.hfile.HFile.FileInfo;
-import org.apache.hadoop.hbase.regionserver.CellSink;
 import org.apache.hadoop.hbase.regionserver.HStore;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
 import org.apache.hadoop.hbase.regionserver.KeyValueScanner;
 import org.apache.hadoop.hbase.regionserver.ScanType;
 import org.apache.hadoop.hbase.regionserver.ScannerContext;
-import org.apache.hadoop.hbase.regionserver.ShipperListener;
 import org.apache.hadoop.hbase.regionserver.Store;
 import org.apache.hadoop.hbase.regionserver.StoreFile;
 import org.apache.hadoop.hbase.regionserver.StoreFileScanner;
@@ -81,6 +79,10 @@ public abstract class Compactor {
         Compression.Algorithm.NONE : this.store.getFamily().getCompactionCompression();
     this.keepSeqIdPeriod = Math.max(this.conf.getInt(HConstants.KEEP_SEQID_PERIOD, 
       HConstants.MIN_KEEP_SEQID_PERIOD), HConstants.MIN_KEEP_SEQID_PERIOD);
+  }
+
+  public interface CellSink {
+    void append(Cell cell) throws IOException;
   }
 
   public CompactionProgress getProgress() {
@@ -258,7 +260,6 @@ public abstract class Compactor {
   protected boolean performCompaction(InternalScanner scanner, CellSink writer,
       long smallestReadPoint, boolean cleanSeqId,
       ThroughputController throughputController) throws IOException {
-    assert writer instanceof ShipperListener;
     long bytesWrittenProgressForCloseCheck = 0;
     long bytesWrittenProgressForLog = 0;
     long bytesWrittenProgressForShippedCall = 0;
@@ -314,9 +315,6 @@ public abstract class Compactor {
             }
           }
           if (kvs != null && bytesWrittenProgressForShippedCall > shippedCallSizeLimit) {
-            // Clone the cells that are in the writer so that they are freed of references,
-            // if they are holding any.
-            ((ShipperListener) writer).beforeShipped();
             // The SHARED block references, being read for compaction, will be kept in prevBlocks
             // list(See HFileScannerImpl#prevBlocks). In case of scan flow, after each set of cells
             // being returned to client, we will call shipped() which can clear this list. Here by

@@ -18,9 +18,6 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -46,9 +43,6 @@ public abstract class AsyncFuture<V> implements Future<V>{
   AtomicInteger numAttempts = new AtomicInteger(0);
   // by means limit parallel retry threads to 100 to avoid too much pressure to server
   static final ScheduledThreadPoolExecutor retryExecutor = new ScheduledThreadPoolExecutor(100);
-  volatile boolean isCanceled = false;
-  protected Collection<Future<?>> retryFutures =
-      Collections.synchronizedCollection(new ArrayList<Future<?>>());
 
   /**
    * Waits if necessary for the request to complete, and then retrieves its result.
@@ -80,20 +74,13 @@ public abstract class AsyncFuture<V> implements Future<V>{
    */
   protected void delayedRetry(final List<Action<Row>> actions, long pause,
       final AsyncRpcCallback<? extends Message> callback) {
-    if (isCanceled) {
-      return;
-    }
-
-    Future<?> retryFuture = retryExecutor.schedule(new Runnable() {
+    retryExecutor.schedule(new Runnable() {
 
       @Override
       public void run() {
         doRequest(actions, callback);
       }
     }, pause, TimeUnit.MILLISECONDS);
-    synchronized (retryFutures) {
-      retryFutures.add(retryFuture);
-    }
   }
 
   /**
@@ -104,27 +91,16 @@ public abstract class AsyncFuture<V> implements Future<V>{
   abstract void doRequest(List<Action<Row>> actions, AsyncRpcCallback<? extends Message> callback);
 
   /**
-   * Currently we set the isCanceled flag and quit further retry to avoid retry thread pool is
-   * occupied by stale futures
+   * Dummy implementation, we don't support to cancel the non-blocking request for now
    */
   public boolean cancel(boolean mayInterruptIfRunning) {
-    isCanceled = true;
-    boolean couldCancel = true;
-    synchronized (retryFutures) {
-      if (!retryFutures.isEmpty()) {
-        for (Future<?> retryFuture : retryFutures) {
-          couldCancel = (retryFuture.cancel(mayInterruptIfRunning) && couldCancel);
-        }
-        retryFutures.clear();
-      }
-    }
-    return couldCancel;
+    return false;
   }
 
   /**
-   * {@inheritDoc}
+   * Dummy implementation, we don't support to cancel the non-blocking request for now
    */
   public boolean isCancelled() {
-    return isCanceled;
+    return false;
   }
 }
