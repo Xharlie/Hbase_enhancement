@@ -322,7 +322,16 @@ public class MetricsRegionServerSourceImpl
           .tag(Interns.info(ZOOKEEPER_QUORUM_NAME, ZOOKEEPER_QUORUM_DESC),
               rsWrap.getZookeeperQuorum())
           .tag(Interns.info(SERVER_NAME_NAME, SERVER_NAME_DESC), rsWrap.getServerName())
-          .tag(Interns.info(CLUSTER_ID_NAME, CLUSTER_ID_DESC), rsWrap.getClusterId());
+          .tag(Interns.info(CLUSTER_ID_NAME, CLUSTER_ID_DESC), rsWrap.getClusterId())
+
+          .addCounter(Interns.info(DIRECT_HEALTH_CHECK_SELECTED_REGION_COUNT, DIRECT_HEALTH_CHECK_SELECTED_REGION_COUNT_DESC),
+              rsWrap.getDirectHealthCheckSelectedRegionCount())
+          .addCounter(Interns.info(DIRECT_HEALTH_CHECK_FAILED_REGION_COUNT, DIRECT_HEALTH_CHECK_FAILED_REGION_COUNT_DESC),
+              rsWrap.getDirectHealthCheckFailedRegionCount())
+          .addGauge(Interns.info(DIRECT_HEALTH_CHECK_FAILED_RATIO, DIRECT_HEALTH_CHECK_FAILED_RARIO_DESC),
+              rsWrap.getDirectHealthCheckFailedRatio())
+          .addCounter(Interns.info(DIRECT_HEALTH_CHECK_NUM_UNHEALTHY, DIRECT_HEALTH_CHECK_NUM_UNHEALTHY_DESC),
+                      rsWrap.getDirectHealthCheckNumUnhealthy());
     }
 
     metricsRegistry.snapshot(mrb, all);

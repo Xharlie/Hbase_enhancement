@@ -333,4 +333,19 @@ public interface MetricsRegionServerSource extends BaseSource, JvmPauseMonitorSo
   String SPLIT_SUCCESS_KEY = "splitSuccessCount";
   String SPLIT_SUCCESS_DESC = "Number of successfully executed splits";
   String FLUSH_KEY = "flushTime";
+
+  String DIRECT_HEALTH_CHECK_SELECTED_REGION_COUNT = "directHealthCheckSelectedRegionCount";
+  String DIRECT_HEALTH_CHECK_SELECTED_REGION_COUNT_DESC = "The number of regions selected for latest direct health check,";
+
+  String DIRECT_HEALTH_CHECK_FAILED_REGION_COUNT = "directHealthCheckFailedRegionCount";
+  String DIRECT_HEALTH_CHECK_FAILED_REGION_COUNT_DESC = "The number of failed probes for latest direct health check,"
+          + " each probe would target a different online region randomly selected from all online regions";
+
+  String DIRECT_HEALTH_CHECK_FAILED_RATIO = "directHealthCheckFailedRatio";
+  String DIRECT_HEALTH_CHECK_FAILED_RARIO_DESC = "The failed ratio of direct health check, calculated " +
+          "by dividing directHealthCheckFailedRegionCount by directHealthCheckSelectedRegionCount, ranged from 0 to 1 inclusive";
+
+  String DIRECT_HEALTH_CHECK_NUM_UNHEALTHY = "directHealthCheckNumUnhealthy";
+  String DIRECT_HEALTH_CHECK_NUM_UNHEALTHY_DESC = "the accumulative number of Times Unhealthy within the window, " +
+          "which is the indicator of whether the RS should be stopped";
 }

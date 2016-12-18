@@ -906,6 +906,8 @@ public class NettyRpcServer extends RpcServer {
         for (int i = 0; i < data.length; i++) {
           data[i] = ChannelBuffers.wrappedBuffer(buffers[i]);
         }
+        // TODO Netty has no parameter like SimpleRpcServer#NIO_BUFFER_LIMIT to control maximum size
+        // of a single packet, revisit here if any problem occurs
         return ChannelBuffers.wrappedBuffer(true, data);
       } else {
         LOG.error("encode unknow request object");

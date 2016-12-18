@@ -346,4 +346,25 @@ public interface MetricsRegionServerWrapper {
    * @return Count of scan requests counting caching to this region server
    */
   long getScanCachingRequestCount();
+
+  /**
+   * @return Count of latest failed direct check probe, targeting random selected online regions of this region server
+   */
+  long getDirectHealthCheckFailedRegionCount();
+
+  /**
+   * @return Count of online regions, targeted by latest direct health check of this region server
+   */
+  long getDirectHealthCheckSelectedRegionCount();
+
+  /**
+   * @return Ratio of latest failed direct health check of this region server
+   */
+  double getDirectHealthCheckFailedRatio();
+
+  /**
+   * @return the accumulative number of Times Unhealthy within the window, which is the indicator of whether the RS should be stopped
+   */
+  int getDirectHealthCheckNumUnhealthy();
+
 }

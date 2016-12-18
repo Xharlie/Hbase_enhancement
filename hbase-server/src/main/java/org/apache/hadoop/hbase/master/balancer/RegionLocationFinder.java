@@ -49,6 +49,7 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.Lists;
+import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
@@ -167,8 +168,8 @@ class RegionLocationFinder {
     return includesUserTables;
   }
 
-  protected List<ServerName> getTopBlockLocations(HRegionInfo region) {
-    HDFSBlocksDistribution blocksDistribution = getBlockDistribution(region);
+  protected List<ServerName> getTopBlockLocations(
+      HDFSBlocksDistribution blocksDistribution) {
     List<String> topHosts = blocksDistribution.getTopHosts();
     return mapHostNameToServerName(topHosts);
   }
@@ -299,4 +300,11 @@ class RegionLocationFinder {
     }
   }
 
+  public ListenableFuture<HDFSBlocksDistribution> asyncGetBlockDistribution(HRegionInfo hri) {
+    try {
+      return loader.reload(hri, EMPTY_BLOCK_DISTRIBUTION);
+    } catch (Exception e) {
+      return Futures.immediateFuture(EMPTY_BLOCK_DISTRIBUTION);
+    }
+  }
 }

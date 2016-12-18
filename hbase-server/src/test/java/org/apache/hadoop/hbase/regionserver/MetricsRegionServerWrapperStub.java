@@ -339,4 +339,22 @@ public class MetricsRegionServerWrapperStub implements MetricsRegionServerWrappe
   public long getScanCachingRequestCount() {
     return 966;
   }
+
+  @Override
+  public long getDirectHealthCheckFailedRegionCount() { return 0; }
+
+  @Override
+  public long getDirectHealthCheckSelectedRegionCount() {
+    return 10;
+  }
+
+  @Override
+  public double getDirectHealthCheckFailedRatio() {
+    return 0;
+  }
+
+  @Override
+  public int getDirectHealthCheckNumUnhealthy() {
+    return 0;
+  }
 }

@@ -83,6 +83,10 @@ class MetricsRegionServerWrapperImpl
   private volatile long compactedCellsSize = 0;
   private volatile long majorCompactedCellsSize = 0;
   private volatile long blockedRequestsCount = 0L;
+  private volatile long directHealthCheckFailedRegionCount = 0L;
+  private volatile long directHealthCheckSelectedRegionCount = 0L;
+  private volatile double directHealthCheckFailedRatio = 0L;
+  private volatile int directHealthCheckNumUnhealthy = 0;
 
   private CacheStats cacheStats;
   private ScheduledExecutorService executor;
@@ -512,6 +516,24 @@ class MetricsRegionServerWrapperImpl
     return majorCompactedCellsSize;
   }
 
+  @Override
+  public long getDirectHealthCheckFailedRegionCount() {
+    return directHealthCheckFailedRegionCount;
+  }
+
+  @Override
+  public long getDirectHealthCheckSelectedRegionCount() {
+    return directHealthCheckSelectedRegionCount;
+  }
+
+  @Override
+  public double getDirectHealthCheckFailedRatio() { return directHealthCheckFailedRatio; }
+
+  @Override
+  public int getDirectHealthCheckNumUnhealthy() {
+    return directHealthCheckNumUnhealthy;
+  }
+
   /**
    * This is the runnable that will be executed on the executor every PERIOD number of seconds
    * It will take metrics/numbers from all of the regions and use them to compute point in
@@ -682,6 +704,11 @@ class MetricsRegionServerWrapperImpl
         compactedCellsSize = tempCompactedCellsSize;
         majorCompactedCellsSize = tempMajorCompactedCellsSize;
         blockedRequestsCount = tempBlockedRequestsCount;
+        // direct health check
+        directHealthCheckFailedRegionCount = regionServer.getDirectHealthCheckFailedRegionCount();
+        directHealthCheckSelectedRegionCount = regionServer.getDirectHealthCheckSelectedRegionCount();
+        directHealthCheckFailedRatio = regionServer.getDirectHealthCheckFailedRatio();
+        directHealthCheckNumUnhealthy = regionServer.getDirectHealthCheckNumUnhealthy();
       } catch (Throwable e) {
         LOG.warn("Caught exception! Will suppress and retry.", e);
       }

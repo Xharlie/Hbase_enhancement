@@ -469,6 +469,44 @@ public class HRegionServer extends HasThread implements
 
   private final boolean useZKForAssignment;
 
+  private volatile long shutdownR;
+
+  // Direct Health Check Metrics: Count of latest failed direct check probe, targeting random selected online regions of this region server
+  private volatile long directHealthCheckFailedRegionCount;
+
+  // Direct Health Check Metrics: Count of online regions, targeted by latest direct health check of this region server
+  private volatile long directHealthCheckSelectedRegionCount;
+
+  // Direct Health Check Metrics: Ratio of latest failed direct health check of this region server
+  private volatile double directHealthCheckFailedRatio;
+
+  // Direct Health Check Metrics: the accumulative number of Times Unhealthy within the window, which is the indicator of whether the RS should be stopped
+  private volatile int directHealthCheckNumUnhealthy;
+
+  public long getDirectHealthCheckFailedRegionCount(){ return directHealthCheckFailedRegionCount; }
+
+  public void setDirectHealthCheckFailedRegionCount(long directHealthCheckFailedRegionCount){
+    this.directHealthCheckFailedRegionCount = directHealthCheckFailedRegionCount;
+  }
+
+  public long getDirectHealthCheckSelectedRegionCount(){ return directHealthCheckSelectedRegionCount; }
+
+  public void setDirectHealthCheckSelectedRegionCount(long directHealthCheckSelectedRegionCount){
+    this.directHealthCheckSelectedRegionCount = directHealthCheckSelectedRegionCount;
+  }
+
+  public double getDirectHealthCheckFailedRatio(){ return directHealthCheckFailedRatio; }
+
+  public void setDirectHealthCheckFailedRatio(double directHealthCheckFailedRatio){
+    this.directHealthCheckFailedRatio = directHealthCheckFailedRatio;
+  }
+
+  public int getDirectHealthCheckNumUnhealthy(){ return directHealthCheckNumUnhealthy; }
+
+  public void setDirectHealthCheckNumUnhealthy(int directHealthCheckNumUnhealthy){
+    this.directHealthCheckNumUnhealthy = directHealthCheckNumUnhealthy;
+  }
+
   /**
    * Configuration manager is used to register/deregister and notify the configuration observers
    * when the regionserver is notified that there was a change in the on disk configs.
@@ -3135,7 +3173,14 @@ public class HRegionServer extends HasThread implements
 
   private boolean isHealthCheckerConfigured() {
     String healthScriptLocation = this.conf.get(HConstants.HEALTH_SCRIPT_LOC);
-    return org.apache.commons.lang.StringUtils.isNotBlank(healthScriptLocation);
+    boolean directCheck = this.conf.getBoolean(HConstants.HEALTH_DIRECT_CHECK, false);
+    return directCheck || org.apache.commons.lang.StringUtils.isNotBlank(healthScriptLocation);
+  }
+
+  private boolean isHealthCheckerConfigured(Configuration newConf) {
+    String healthScriptLocation = newConf.get(HConstants.HEALTH_SCRIPT_LOC);
+    boolean directCheck = newConf.getBoolean(HConstants.HEALTH_DIRECT_CHECK, false);
+    return directCheck || org.apache.commons.lang.StringUtils.isNotBlank(healthScriptLocation);
   }
 
   /**
@@ -3360,16 +3405,20 @@ public class HRegionServer extends HasThread implements
     this.flushThroughputController = FlushThroughputControllerFactory.create(this, newConf);
 
     // reconfig Health checker thread.
-    if (isHealthCheckerConfigured()) {
+    if (isHealthCheckerConfigured(newConf)) {
       HealthCheckChore oldHealthCheckChore = this.healthCheckChore;
       if (oldHealthCheckChore != null) {
         oldHealthCheckChore.cancel(true);
       }
-
-      int sleepTime = this.conf.getInt(HConstants.HEALTH_CHORE_WAKE_FREQ,
+      int sleepTime = newConf.getInt(HConstants.HEALTH_CHORE_WAKE_FREQ,
         HConstants.DEFAULT_THREAD_WAKE_FREQUENCY);
       healthCheckChore = new HealthCheckChore(sleepTime, this, newConf);
       if (this.healthCheckChore != null) choreService.scheduleChore(healthCheckChore);
+    }else {
+      if (this.healthCheckChore != null) {
+        this.healthCheckChore.cancel(true);
+        this.healthCheckChore = null;
+      }
     }
   }
 

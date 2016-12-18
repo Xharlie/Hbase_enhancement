@@ -24,6 +24,8 @@ import org.apache.hadoop.hbase.HealthChecker.HealthCheckerExitStatus;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.util.StringUtils;
 
+import java.io.IOException;
+
 /**
  * The Class HealthCheckChore for running health checker regularly.
  */
@@ -35,14 +37,13 @@ public class HealthCheckChore extends ScheduledChore {
   private int numTimesUnhealthy = 0;
   private long failureWindow;
   private long startWindow;
+  private HRegionServer rs;
 
   public HealthCheckChore(int sleepTime, Stoppable stopper, Configuration conf) {
     super("HealthChecker", stopper, sleepTime);
     LOG.info("Health Check Chore runs every " + StringUtils.formatTime(sleepTime));
     this.config = conf;
-    String healthCheckScript = this.config.get(HConstants.HEALTH_SCRIPT_LOC);
-    long scriptTimeout = this.config.getLong(HConstants.HEALTH_SCRIPT_TIMEOUT,
-      HConstants.DEFAULT_HEALTH_SCRIPT_TIMEOUT);
+    this.rs = (HRegionServer)stopper;
     int threadPoolSize = this.config.getInt(HConstants.HEALTH_THREAD_POOL_SIZE, HConstants.DEFAULT_HEALTH_THREAD_POOL_SIZE);
     float failedThreshold = this.config.getFloat(HConstants.HEALTH_FAILED_THRESHOLD, HConstants.DEFAULT_HEALTH_FAILED_THRESHOLD);
     int sampledRegionCount = this.config.getInt(HConstants.HEALTH_SAMPLED_REGION_COUNT, HConstants.DEFAULT_HEALTH_SAMPLED_REGION_COUNT);
@@ -51,16 +52,27 @@ public class HealthCheckChore extends ScheduledChore {
     if (stopper instanceof HRegionServer) {
       currentServerName = ((HRegionServer)stopper).getServerName().getServerName();
     }
-    healthChecker = new HealthChecker();
-    healthChecker.init(healthCheckScript, scriptTimeout,
-        new Integer(threadPoolSize),
-        new Float(failedThreshold),
-        new Integer(sampledRegionCount),
-        new Long(scanTimeout),
-        currentServerName);
     this.threshold = config.getInt(HConstants.HEALTH_FAILURE_THRESHOLD,
       HConstants.DEFAULT_HEALTH_FAILURE_THRESHOLD);
     this.failureWindow = (long)this.threshold * (long)sleepTime;
+    if(conf.getBoolean(HConstants.HEALTH_DIRECT_CHECK, false)){
+      long directTimeout = this.config.getLong(HConstants.HEALTH_DIRECTCHECK_TIMEOUT,
+              HConstants.DEFAULT_HEALTH_DIRECTCHECK_TIMEOUT);
+      healthChecker = new DirectHealthChecker();
+      ((DirectHealthChecker)healthChecker).init(directTimeout, threadPoolSize, failedThreshold,
+              sampledRegionCount, scanTimeout, currentServerName, (HRegionServer)stopper, this.config);
+    }else{
+      String healthCheckScript = this.config.get(HConstants.HEALTH_SCRIPT_LOC);
+      long scriptTimeout = this.config.getLong(HConstants.HEALTH_SCRIPT_TIMEOUT,
+              HConstants.DEFAULT_HEALTH_SCRIPT_TIMEOUT);
+      healthChecker = new HealthChecker();
+      healthChecker.init(healthCheckScript, scriptTimeout,
+              new Integer(threadPoolSize),
+              new Float(failedThreshold),
+              new Integer(sampledRegionCount),
+              new Long(scanTimeout),
+              currentServerName);
+    }
   }
 
   @Override
@@ -69,13 +81,16 @@ public class HealthCheckChore extends ScheduledChore {
     boolean isHealthy = (report.getStatus() == HealthCheckerExitStatus.SUCCESS);
     if (!isHealthy) {
       boolean needToStop = decideToStop();
+      this.rs.setDirectHealthCheckNumUnhealthy(numTimesUnhealthy);
       if (needToStop) {
-        getStopper().stop(
-          "The  node reported unhealthy " + threshold + " number of times consecutively.");
+        LOG.info("The  node reported unhealthy " + threshold + " number of times consecutively.");
+//        getStopper().stop(
+//          "The  node reported unhealthy " + threshold + " number of times consecutively.");
       }
       // Always log health report.
       LOG.info("Health status at " + StringUtils.formatTime(System.currentTimeMillis()) + " : "
           + report.getHealthReport());
+
     }
   }
 
@@ -101,7 +116,17 @@ public class HealthCheckChore extends ScheduledChore {
         stop = false;
       }
     }
+
     return stop;
+  }
+
+  @Override
+  public void cancel(boolean mayInterruptIfRunning) {
+    this.rs.setDirectHealthCheckFailedRegionCount(0);
+    this.rs.setDirectHealthCheckSelectedRegionCount(0);
+    this.rs.setDirectHealthCheckFailedRatio(0);
+    this.rs.setDirectHealthCheckNumUnhealthy(0);
+    super.cancel(mayInterruptIfRunning);
   }
 
 }

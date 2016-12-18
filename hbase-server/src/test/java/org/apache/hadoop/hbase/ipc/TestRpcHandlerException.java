@@ -42,6 +42,7 @@ import org.apache.hadoop.hbase.ipc.protobuf.generated.TestProtos.EmptyRequestPro
 import org.apache.hadoop.hbase.ipc.protobuf.generated.TestProtos.EmptyResponseProto;
 import org.apache.hadoop.hbase.ipc.protobuf.generated.TestRpcServiceProtos;
 import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
+import org.apache.hadoop.hbase.regionserver.RSRpcServices;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Pair;
@@ -220,6 +221,11 @@ public class TestRpcHandlerException {
         Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
         throws IOException, ServiceException {
       return rpcServer.call(service, md, param, cellScanner, receiveTime, status);
+    }
+
+    @Override
+    public void setRsRpcServices(RSRpcServices rsRpcServices) {
+      // do nothing here in this test class
     }
 
   }

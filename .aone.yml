@@ -84,3 +84,7 @@ t-search-adp-hbase-server-1_0_8_1-aquila:
   pkgpara:
     jdk_version: jdk1.7
     mvn_version: maven3
+t-search-adp-hbase-server-1_0_8_2-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3

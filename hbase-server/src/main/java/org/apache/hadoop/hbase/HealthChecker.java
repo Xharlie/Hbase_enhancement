@@ -38,7 +38,7 @@ class HealthChecker {
   private String exceptionStackTrace;
 
   /** Pattern used for searching in the output of the node health script */
-  static private final String ERROR_PATTERN = "ERROR";
+  static protected final String ERROR_PATTERN = "ERROR";
 
   private String healthCheckScript;
   private long scriptTimeout;

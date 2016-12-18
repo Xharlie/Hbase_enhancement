@@ -275,7 +275,6 @@ public class TestNodeHealthCheckChore {
       String[] args = {"3","0.8","3","10000",serverName};
       hc1.initialize(args);
       assertTrue(hc1.probeLocalHost());
-
       //killed all rs and probe it
       mini.abortRegionServer(0);
       mini.waitForRegionServerToStop(mini.getRegionServer(0).getServerName(), 10000);

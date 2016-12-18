@@ -248,7 +248,7 @@ public final class HConstants {
   public static final String THREAD_WAKE_FREQUENCY = "hbase.server.thread.wakefrequency";
 
   /** Default value for thread wake frequency */
-  public static final int DEFAULT_THREAD_WAKE_FREQUENCY = 10 * 1000;
+  public static final int DEFAULT_THREAD_WAKE_FREQUENCY = 60 * 1000;
 
   /** Parameter name for how often we should try to write a version file, before failing */
   public static final String VERSION_FILE_WRITE_ATTEMPTS = "hbase.server.versionfile.writeattempts";
@@ -1046,20 +1046,23 @@ public final class HConstants {
       HBASE_NON_TABLE_DIRS.toArray())));
 
   /** Health script related settings. */
+  public static final String HEALTH_DIRECT_CHECK = "hbase.node.health.direct.check";
   public static final String HEALTH_SCRIPT_LOC = "hbase.node.health.script.location";
   public static final String HEALTH_SCRIPT_TIMEOUT = "hbase.node.health.script.timeout";
+  public static final String HEALTH_DIRECTCHECK_TIMEOUT = "hbase.node.health.dirct.check.timeout";
   public static final String HEALTH_CHORE_WAKE_FREQ =
       "hbase.node.health.script.frequency";
-  public static final long DEFAULT_HEALTH_SCRIPT_TIMEOUT = 60000;
+  public static final long DEFAULT_HEALTH_SCRIPT_TIMEOUT = 180000;
+  public static final long DEFAULT_HEALTH_DIRECTCHECK_TIMEOUT = 180000;
   /** Health Check agent related settings. */
   public static final String HEALTH_THREAD_POOL_SIZE = "hbase.regionserver.healthcheck.thread.pool.size";
   public static final String HEALTH_FAILED_THRESHOLD = "hbase.regionserver.healthcheck.failed.threshold";
   public static final String HEALTH_SAMPLED_REGION_COUNT = "hbase.regionserver.healthcheck.sampled.region.count";
   public static final String HEALTH_SCAN_TIMEOUT = "hbase.regionserver.healthcheck.scan.timeout";
-  public static final int DEFAULT_HEALTH_THREAD_POOL_SIZE = 60000;
+  public static final int DEFAULT_HEALTH_THREAD_POOL_SIZE = 10;
   public static final float DEFAULT_HEALTH_FAILED_THRESHOLD = 0.8f;
-  public static final int DEFAULT_HEALTH_SAMPLED_REGION_COUNT = 20;
-  public static final long DEFAULT_HEALTH_SCAN_TIMEOUT = 20000;
+  public static final int DEFAULT_HEALTH_SAMPLED_REGION_COUNT = 10;
+  public static final long DEFAULT_HEALTH_SCAN_TIMEOUT = 90000;
   /**
    * The maximum number of health check failures a server can encounter consecutively.
    */

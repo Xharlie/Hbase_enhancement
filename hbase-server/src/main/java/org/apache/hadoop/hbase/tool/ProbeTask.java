@@ -26,14 +26,14 @@ import java.util.concurrent.Callable;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.DirectHealthChecker;
 import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.client.Connection;
-import org.apache.hadoop.hbase.client.Result;
-import org.apache.hadoop.hbase.client.ResultScanner;
-import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.client.Table;
+import org.apache.hadoop.hbase.client.*;
+import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.util.Bytes;
+
 
 /**
  * Probe result returned to
@@ -47,6 +47,7 @@ class ProbeResult {
     this.regionName = rn;
     this.result = result;
     this.reason = reason;
+
   }
 
   public byte[] getRegionName() {
@@ -86,6 +87,13 @@ abstract class ProbeTask implements Callable<ProbeResult> {
     scan.setCacheBlocks(false);
     scan.setRaw(false);
     return scan;
+  }
+
+  protected Get initializeGetTask(byte[] row) throws IOException {
+    Get get = new Get(row);
+    get.setMaxVersions(1);
+    get.setCacheBlocks(false);
+    return get;
   }
 }
 
@@ -173,6 +181,80 @@ class ScanTask extends ProbeTask {
 
     long scanTime = endTs - startTs;
     return new ProbeResult(regionName, true, "region[" + Bytes.toString(regionName) + "] scanTime:" + scanTime);
+  }
+}
+
+/**
+ * do scan operation to a region and return if the scan is succeed, Used by direct health check
+ */
+class DirectGetTask extends ProbeTask {
+  private Configuration conf;
+  private HRegion region;
+  private Connection connection;
+  private ServerName serverName;
+
+  public DirectGetTask(Configuration conf, HRegion region, Connection con, ServerName serverName) {
+    this.conf = conf;
+    this.region = region;
+    this.connection = con;
+    this.serverName = serverName;
+
+  }
+
+  @Override
+  public ProbeResult call() throws Exception {
+    ProbeResult getResult = doGetOperation(conf, region);
+    boolean succeed = getResult.getResult();
+    if (!succeed) {
+      return getResult;
+    } else {
+      return null;
+    }
+  }
+
+  private ProbeResult doGetOperation(Configuration conf, HRegion region) {
+    HRegionInfo regionInfo = region.getRegionInfo();
+    TableName tableName = region.getTableDesc().getTableName();
+    String rowKey = null;
+    byte[] row = region.getStartKey();
+    rowKey = Bytes.toString(row);
+    if (null == tableName || null == rowKey) {
+      return new ProbeResult(regionInfo.getRegionName(), false, "tableName or rowKey is null");
+    }
+    // get table instance
+    HTable table = null;
+    try {
+      table = (HTable)(connection.getTable(tableName));
+    } catch (IOException e) {
+      return new ProbeResult(regionInfo.getRegionName(), false, "cant get htable");
+    }
+    // initialize get
+    Get get = null;
+    try{
+      get = initializeGetTask(row);
+    }catch (IOException e){
+
+    }
+    // calculate latency
+    long startTs = System.currentTimeMillis();
+    long endTs = -1;
+    try {
+      table.get(get, regionInfo, serverName);
+      endTs = System.currentTimeMillis();
+    } catch (Throwable e) {
+      return new ProbeResult(regionInfo.getRegionName(), false, "hbase latency get exception: [" + Bytes.toString(regionInfo.getRegionName()) + "]  error : " + e.getMessage() + e.getStackTrace());
+    } finally {
+      if (null != table) {
+        try {
+          table.close();
+        } catch (IOException e) {
+          // TODO Auto-generated catch block
+          e.printStackTrace();
+        }
+      }
+    }
+    long getTime = endTs - startTs;
+    return new ProbeResult(regionInfo.getRegionName(), true, "region[" + Bytes.toString(regionInfo.getRegionName()) + "] getTime:" + getTime);
   }
 }
 

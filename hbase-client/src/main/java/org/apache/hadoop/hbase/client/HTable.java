@@ -941,6 +941,38 @@ public class HTable implements HTableInterface, RegionLocator {
       tableConfiguration.getPrimaryCallTimeoutMicroSecond());
     return callable.call();
   }
+  /**
+   * API for Direct Health Check to pass HRegionInfo to get
+   */
+  public Result get(final Get get, HRegionInfo hrgninfo, ServerName serverName) throws IOException {
+    // Good old call.
+    final Get getReq = get;
+    final HRegionInfo regionInfo = hrgninfo;
+    final ServerName sN = serverName;
+    RegionServerCallable<Result> callable = new RegionServerCallable<Result>(this.connection,
+            getName(), get.getRow()) {
+      @Override
+      public Result call(int callTimeout) throws IOException {
+        ClientProtos.GetRequest request =
+                RequestConverter.buildGetRequest(regionInfo.getRegionName(), getReq);
+        PayloadCarryingRpcController controller = rpcControllerFactory.newController();
+        controller.setPriority(tableName);
+        controller.setCallTimeout(callTimeout);
+        try {
+          ClientProtos.GetResponse response = getStub().get(controller, request);
+          if (response == null) return null;
+          return ProtobufUtil.toResult(response.getResult());
+        } catch (ServiceException se) {
+          throw ProtobufUtil.getRemoteException(se);
+        }
+      }
+      @Override
+      public void prepare(final boolean reload) throws IOException {
+        setStub(getConnection().getClient(sN));
+      }
+    };
+    return rpcCallerFactory.<Result>newCaller().callWithRetries(callable, this.operationTimeout);
+  }
 
 
   /**
