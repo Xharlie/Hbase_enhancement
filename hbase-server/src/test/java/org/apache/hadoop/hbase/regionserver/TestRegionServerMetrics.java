@@ -185,7 +185,8 @@ public class TestRegionServerMetrics {
     metricsRegionServer.getRegionServerWrapper().forceRecompute();
     metricsHelper.assertCounter("totalRequestCount", requests + 80, serverSource);
     metricsHelper.assertCounter("readRequestCount", readRequests + 20, serverSource);
-    metricsHelper.assertCounter("writeRequestCount", writeRequests + 60, serverSource);
+    // all puts are in the same batch and total write requests will increase by 1
+    metricsHelper.assertCounter("writeRequestCount", writeRequests + 31, serverSource);
 
     table.close();
   }

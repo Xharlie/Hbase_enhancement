@@ -1772,7 +1772,7 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
     return (new WALFactory(confForWAL,
         Collections.<WALActionsListener>singletonList(new MetricsWAL()),
         "hregion-" + RandomStringUtils.randomNumeric(8))).
-        getWAL(hri.getEncodedNameAsBytes());
+        getWAL(hri.getEncodedNameAsBytes(), hri.getTable().getNamespace());
   }
 
   /**

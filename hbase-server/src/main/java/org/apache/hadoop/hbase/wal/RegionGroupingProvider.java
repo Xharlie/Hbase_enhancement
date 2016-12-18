@@ -18,20 +18,27 @@
  */
 package org.apache.hadoop.hbase.wal;
 
+import static org.apache.hadoop.hbase.wal.DefaultWALProvider.META_WAL_PROVIDER_ID;
+import static org.apache.hadoop.hbase.wal.DefaultWALProvider.WAL_FILE_NAME_DELIMITER;
+
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
-
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.regionserver.wal.FSHLog;
+import org.apache.hadoop.hbase.regionserver.wal.MetricsWAL;
 // imports for classes still in regionserver.wal
 import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.FSUtils;
 
 /**
  * A WAL Provider that returns a WAL per group of regions.
@@ -57,21 +64,23 @@ class RegionGroupingProvider implements WALProvider {
    * Map identifiers to a group number.
    */
   public static interface RegionGroupingStrategy {
+    String GROUP_NAME_DELIMITER = ".";
+
     /**
-     * Given an identifier, pick a group.
-     * the byte[] returned for a given group must always use the same instance, since we
-     * will be using it as a hash key.
+     * Given an identifier and a namespace, pick a group.
      */
-    byte[] group(final byte[] identifier);
-    void init(Configuration config);
+    String group(final byte[] identifier, byte[] namespace);
+    void init(Configuration config, String providerId);
   }
 
   /**
    * Maps between configuration names for strategies and implementation classes.
    */
   static enum Strategies {
-    defaultStrategy(IdentityGroupingStrategy.class),
-    identity(IdentityGroupingStrategy.class);
+    defaultStrategy(BoundedGroupingStrategy.class),
+    identity(IdentityGroupingStrategy.class),
+    bounded(BoundedGroupingStrategy.class),
+    namespace(NamespaceGroupingStrategy.class);
 
     final Class<? extends RegionGroupingStrategy> clazz;
     Strategies(Class<? extends RegionGroupingStrategy> clazz) {
@@ -87,6 +96,7 @@ class RegionGroupingProvider implements WALProvider {
       final String defaultValue) throws IOException {
     Class<? extends RegionGroupingStrategy> clazz;
     try {
+      String s = conf.get(key, defaultValue);
       clazz = Strategies.valueOf(conf.get(key, defaultValue)).clazz;
     } catch (IllegalArgumentException exception) {
       // Fall back to them specifying a class name
@@ -97,7 +107,7 @@ class RegionGroupingProvider implements WALProvider {
     LOG.info("Instantiating RegionGroupingStrategy of type " + clazz);
     try {
       final RegionGroupingStrategy result = clazz.newInstance();
-      result.init(conf);
+      result.init(conf, providerId);
       return result;
     } catch (InstantiationException exception) {
       LOG.error("couldn't set up region grouping strategy, check config key " +
@@ -112,20 +122,25 @@ class RegionGroupingProvider implements WALProvider {
     }
   }
 
-  private static final String REGION_GROUPING_STRATEGY = "hbase.wal.regiongrouping.strategy";
-  private static final String DEFAULT_REGION_GROUPING_STRATEGY = Strategies.defaultStrategy.name();
+  public static final String REGION_GROUPING_STRATEGY = "hbase.wal.regiongrouping.strategy";
+  public static final String DEFAULT_REGION_GROUPING_STRATEGY = Strategies.defaultStrategy.name();
 
   static final String DELEGATE_PROVIDER = "hbase.wal.regiongrouping.delegate";
   static final String DEFAULT_DELEGATE_PROVIDER = WALFactory.Providers.defaultProvider.name();
 
-  protected final ConcurrentMap<byte[], WALProvider> cached =
-      new ConcurrentHashMap<byte[], WALProvider>();
+  private static final String META_WAL_GROUP_NAME = "meta";
+
+  protected final ConcurrentMap<String, FSHLog> cached = new ConcurrentHashMap<String, FSHLog>();
+  /**
+   * we synchronized on walCacheLock to prevent wal recreation in different threads
+   */
+  final Object walCacheLock = new Object();
 
 
   protected RegionGroupingStrategy strategy = null;
-  private WALFactory factory = null;
   private List<WALActionsListener> listeners = null;
   private String providerId = null;
+  private Configuration conf = null;
 
   @Override
   public void init(final WALFactory factory, final Configuration conf,
@@ -133,47 +148,80 @@ class RegionGroupingProvider implements WALProvider {
     if (null != strategy) {
       throw new IllegalStateException("WALProvider.init should only be called once.");
     }
-    this.factory = factory;
     this.listeners = null == listeners ? null : Collections.unmodifiableList(listeners);
-    this.providerId = providerId;
+    StringBuilder sb = new StringBuilder().append(factory.factoryId);
+    if (providerId != null) {
+      if (providerId.startsWith(WAL_FILE_NAME_DELIMITER)) {
+        sb.append(providerId);
+      } else {
+        sb.append(WAL_FILE_NAME_DELIMITER).append(providerId);
+      }
+    }
+    this.providerId = sb.toString();
     this.strategy = getStrategy(conf, REGION_GROUPING_STRATEGY, DEFAULT_REGION_GROUPING_STRATEGY);
+    this.conf = conf;
   }
 
   /**
    * Populate the cache for this group.
    */
-  WALProvider populateCache(final byte[] group) throws IOException {
-    final WALProvider temp = factory.getProvider(DELEGATE_PROVIDER, DEFAULT_DELEGATE_PROVIDER,
-        listeners, providerId + "-" + UUID.randomUUID());
-    final WALProvider extant = cached.putIfAbsent(group, temp);
+  FSHLog populateCache(String groupName) throws IOException {
+    boolean isMeta = META_WAL_PROVIDER_ID.equals(providerId);
+    String hlogPrefix;
+    List<WALActionsListener> listeners;
+    if (isMeta) {
+      hlogPrefix = this.providerId;
+      // don't watch log roll for meta
+      listeners = Collections.<WALActionsListener> singletonList(new MetricsWAL());
+    } else {
+      hlogPrefix = groupName;
+      listeners = this.listeners;
+    }
+    FSHLog log =
+        new FSHLog(FileSystem.get(conf), FSUtils.getRootDir(conf),
+            DefaultWALProvider.getWALDirectoryName(providerId), HConstants.HREGION_OLDLOGDIR_NAME,
+            conf, listeners, true, hlogPrefix, isMeta ? META_WAL_PROVIDER_ID : null);
+    final FSHLog extant = cached.putIfAbsent(groupName, log);
     if (null != extant) {
-      // someone else beat us to initializing, just take what they set.
-      temp.close();
+      log.close();
       return extant;
     }
-    return temp;
+    return log;
+  }
+
+  private WAL getWAL(final String group) throws IOException {
+    WAL log;
+    // must lock since getWAL will create hlog on fs which is time consuming
+    synchronized (this.walCacheLock) {
+      log = cached.get(group);
+      if (null == log) {
+        log = populateCache(group);
+      }
+    }
+    return log;
   }
 
   @Override
-  public WAL getWAL(final byte[] identifier) throws IOException {
-    final byte[] group = strategy.group(identifier);
-    WALProvider provider = cached.get(group);
-    if (null == provider) {
-      provider = populateCache(group);
+  public WAL getWAL(final byte[] identifier, byte[] namespace) throws IOException {
+    final String group;
+    if (META_WAL_PROVIDER_ID.equals(this.providerId)) {
+      group = META_WAL_GROUP_NAME;
+    } else {
+      group = strategy.group(identifier, namespace);
     }
-    return provider.getWAL(identifier);
+    return getWAL(group);
   }
 
   @Override
   public void shutdown() throws IOException {
     // save the last exception and rethrow
     IOException failure = null;
-    for (WALProvider provider : cached.values()) {
+    for (FSHLog wal : cached.values()) {
       try {
-        provider.shutdown();
+        wal.shutdown();
       } catch (IOException exception) {
-        LOG.error("Problem shutting down provider '" + provider + "': " + exception.getMessage());
-        LOG.debug("Details of problem shutting down provider '" + provider + "'", exception);
+        LOG.error("Problem shutting down provider '" + wal + "': " + exception.getMessage());
+        LOG.debug("Details of problem shutting down provider '" + wal + "'", exception);
         failure = exception;
       }
     }
@@ -186,12 +234,12 @@ class RegionGroupingProvider implements WALProvider {
   public void close() throws IOException {
     // save the last exception and rethrow
     IOException failure = null;
-    for (WALProvider provider : cached.values()) {
+    for (FSHLog wal : cached.values()) {
       try {
-        provider.close();
+        wal.close();
       } catch (IOException exception) {
-        LOG.error("Problem closing provider '" + provider + "': " + exception.getMessage());
-        LOG.debug("Details of problem shutting down provider '" + provider + "'", exception);
+        LOG.error("Problem closing provider '" + wal + "': " + exception.getMessage());
+        LOG.debug("Details of problem shutting down provider '" + wal + "'", exception);
         failure = exception;
       }
     }
@@ -202,11 +250,29 @@ class RegionGroupingProvider implements WALProvider {
 
   static class IdentityGroupingStrategy implements RegionGroupingStrategy {
     @Override
-    public void init(Configuration config) {}
+    public void init(Configuration config, String providerId) {}
     @Override
-    public byte[] group(final byte[] identifier) {
-      return identifier;
+    public String group(final byte[] identifier, final byte[] namespace) {
+      return Bytes.toString(identifier);
     }
+  }
+
+  @Override
+  public long getNumLogFiles() {
+    long numLogFiles = 0;
+    for (FSHLog wal : this.cached.values()) {
+      numLogFiles += wal.getNumLogFiles();
+    }
+    return numLogFiles;
+  }
+
+  @Override
+  public long getLogFileSize() {
+    long logFileSize = 0;
+    for (FSHLog wal : this.cached.values()) {
+      logFileSize += wal.getLogFileSize();
+    }
+    return logFileSize;
   }
 
 }

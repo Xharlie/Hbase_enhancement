@@ -61,6 +61,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.lang.RandomStringUtils;
@@ -315,6 +316,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   // Max busy wait duration. There is no point to wait longer than the RPC
   // purge timeout, when a RPC call will be terminated by the RPC engine.
   final long maxBusyWaitDuration;
+
+  // bulkload acquires the write lock, and waiting a long time for write lock can block other
+  // read/update operations, so we need another param to tune the wait duration of bulkload, and it
+  // can be configured by table
+  final long bulkloadWaitDuration;
 
   // negative number indicates infinite timeout
   static final long DEFAULT_ROW_PROCESSOR_TIMEOUT = 60 * 1000L;
@@ -593,6 +599,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   private final Durability durability;
   private final boolean regionStatsEnabled;
 
+  // check if region belongs to hqueue
+  private boolean isHQueueRegion = false;
+  // final preBatchMutate lock for hqueue
+  private final ReentrantLock hqueueLock = new ReentrantLock();
+
   /**
    * HRegion constructor. This constructor should only be used for testing and
    * extensions.  Instances of HRegion should be instantiated with the
@@ -676,6 +687,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
     this.busyWaitDuration = conf.getLong(
       "hbase.busy.wait.duration", DEFAULT_BUSY_WAIT_DURATION);
+    this.bulkloadWaitDuration = conf.getLong("hbase.bulkload.wait.duration", -1);
     this.maxBusyWaitMultiplier = conf.getInt("hbase.busy.wait.multiplier.max", 2);
     if (busyWaitDuration * maxBusyWaitMultiplier <= 0L) {
       throw new IllegalArgumentException("Invalid hbase.busy.wait.duration ("
@@ -739,6 +751,14 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           false :
           conf.getBoolean(HConstants.ENABLE_CLIENT_BACKPRESSURE,
               HConstants.DEFAULT_ENABLE_CLIENT_BACKPRESSURE);
+
+    // set isHQueueRegion
+    List<String> coprocessors = htd.getCoprocessors();
+    for (String coprocessor : coprocessors) {
+      if ("com.etao.hadoop.hbase.queue.coprocessor.HQueueCoprocessor".equals(coprocessor)) {
+        isHQueueRegion = true;
+      }
+    }
   }
 
   void setHTableSpecificConf() {
@@ -2792,7 +2812,8 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         checkResources();
 
         if (!initialized) {
-          this.writeRequestsCount.add(batchOp.operations.length);
+          // this.writeRequestsCount.add(batchOp.operations.length);
+          this.writeRequestsCount.increment();
           if (!batchOp.isInReplay()) {
             doPreMutationHook(batchOp);
           }
@@ -2936,22 +2957,26 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           continue;
         }
 
-        // If we haven't got any rows in our batch, we should block to
-        // get the next one.
-        boolean shouldBlock = numReadyToWrite == 0;
-        RowLock rowLock = null;
-        try {
-          rowLock = getRowLockInternal(mutation.getRow(), shouldBlock);
-        } catch (IOException ioe) {
-          LOG.warn("Failed getting lock in batch put, row="
-            + Bytes.toStringBinary(mutation.getRow()), ioe);
-        }
-        if (rowLock == null) {
-          // We failed to grab another lock
-          assert !shouldBlock : "Should never fail to get lock when blocking";
-          break; // stop acquiring more rows for this batch
-        } else {
-          acquiredRowLocks.add(rowLock);
+        // ignore row lock for hqueue
+        if (!isHQueueRegion) {
+          // If we haven't got any rows in our batch, we should block to
+          // get the next one.
+          boolean shouldBlock = numReadyToWrite == 0;
+          RowLock rowLock = null;
+          try {
+            rowLock = getRowLockInternal(mutation.getRow(), shouldBlock);
+          } catch (IOException ioe) {
+            LOG.warn(
+              "Failed getting lock in batch put, row=" + Bytes.toStringBinary(mutation.getRow()),
+              ioe);
+          }
+          if (rowLock == null) {
+            // We failed to grab another lock
+            assert !shouldBlock : "Should never fail to get lock when blocking";
+            break; // stop acquiring more rows for this batch
+          } else {
+            acquiredRowLocks.add(rowLock);
+          }
         }
 
         lastIndexExclusive++;
@@ -3013,6 +3038,12 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       } else {
         mvccNum = MultiVersionConsistencyControl.getPreAssignedWriteNumber(this.sequenceId);
       }
+
+      // lock the mvcc begin and preBatchMutate process for hqueue
+      if (isHQueueRegion) {
+        hqueueLock.lock();
+      }
+
       //
       // ------------------------------------
       // Acquire the latest mvcc number
@@ -3025,6 +3056,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           new MiniBatchOperationInProgress<Mutation>(batchOp.getMutationsForCoprocs(),
           batchOp.retCodeDetails, batchOp.walEditsFromCoprocessors, firstIndex, lastIndexExclusive);
         if (coprocessorHost.preBatchMutate(miniBatchOp)) return 0L;
+      }
+
+      // unlock for hqueue
+      if (isHQueueRegion) {
+        hqueueLock.unlock();
       }
 
       // ------------------------------------
@@ -3243,6 +3279,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       }
 
       batchOp.nextIndexToProcess = lastIndexExclusive;
+
+      // unlock for hqueue
+      if (isHQueueRegion && hqueueLock.isHeldByCurrentThread()) {
+        hqueueLock.unlock();
+      }
     }
   }
 
@@ -5114,8 +5155,16 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     long seqId = -1;
     Map<byte[], List<Path>> storeFiles = new TreeMap<byte[], List<Path>>(Bytes.BYTES_COMPARATOR);
     Preconditions.checkNotNull(familyPaths);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("bulkload: waiting for write lock");
+    }
+    long startTime = EnvironmentEdgeManager.currentTime();
     // we need writeLock for multi-family bulk load
-    startBulkRegionOperation(hasMultipleColumnFamilies(familyPaths));
+    startBulkRegionOperation(hasMultipleColumnFamilies(familyPaths), true);
+    long lockTime = EnvironmentEdgeManager.currentTime();
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("bulkload: get write lock after " + (lockTime - startTime) + " ms");
+    }
     try {
       this.writeRequestsCount.increment();
 
@@ -5146,6 +5195,10 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         }
       }
 
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("bulkload: assert hfile ok");
+      }
+
       // validation failed because of some sort of IO problem.
       if (ioes.size() != 0) {
         IOException e = MultipleIOException.createIOException(ioes);
@@ -5166,12 +5219,17 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         return false;
       }
 
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("bulkload: before doing anything permanent");
+      }
+
       // We need to assign a sequential ID that's in between two memstores in order to preserve
       // the guarantee that all the edits lower than the highest sequential ID from all the
       // HFiles are flushed on disk. See HBASE-10958.  The sequence id returned when we flush is
       // guaranteed to be one beyond the file made when we flushed (or if nothing to flush, it is
       // a sequence id that we can be sure is beyond the last hfile written).
       if (assignSeqId) {
+        long beforeFlush = EnvironmentEdgeManager.currentTime();
         FlushResult fs = flushcache(true, false);
         if (fs.isFlushSucceeded()) {
           seqId = ((FlushResultImpl)fs).flushSequenceId;
@@ -5181,8 +5239,17 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           throw new IOException("Could not bulk load with an assigned sequential ID because the "+
             "flush didn't run. Reason for not flushing: " + ((FlushResultImpl)fs).failureReason);
         }
+
+        long afterFlush = EnvironmentEdgeManager.currentTime();
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("bulkload: spent " + (afterFlush - beforeFlush) + " ms to flush");
+        }
       }
 
+      long prepareTime = 0;
+      long loadTime = 0;
+      long doneTime = 0;
+      long beforeTime = 0;
       for (Pair<byte[], String> p : familyPaths) {
         byte[] familyName = p.getFirst();
         String path = p.getSecond();
@@ -5190,9 +5257,13 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         try {
           String finalPath = path;
           if (bulkLoadListener != null) {
+            beforeTime = EnvironmentEdgeManager.currentTime();
             finalPath = bulkLoadListener.prepareBulkLoad(familyName, path);
+            prepareTime += EnvironmentEdgeManager.currentTime() - beforeTime;
           }
+          beforeTime = EnvironmentEdgeManager.currentTime();
           Path commitedStoreFile = store.bulkLoadHFile(finalPath, seqId);
+          loadTime += EnvironmentEdgeManager.currentTime() - beforeTime;
 
           if(storeFiles.containsKey(familyName)) {
             storeFiles.get(familyName).add(commitedStoreFile);
@@ -5201,8 +5272,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
             storeFileNames.add(commitedStoreFile);
             storeFiles.put(familyName, storeFileNames);
           }
+
           if (bulkLoadListener != null) {
+            beforeTime = EnvironmentEdgeManager.currentTime();
             bulkLoadListener.doneBulkLoad(familyName, path);
+            doneTime += EnvironmentEdgeManager.currentTime() - beforeTime;
           }
         } catch (IOException ioe) {
           // A failure here can cause an atomicity violation that we currently
@@ -5223,6 +5297,10 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         }
       }
 
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("bulkload: prepare time (" + prepareTime + "ms), load time (" + loadTime
+            + "ms), done time (" + doneTime + "ms)");
+      }
       return true;
     } finally {
       if (wal != null && !storeFiles.isEmpty()) {
@@ -5242,6 +5320,10 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         }
       }
 
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("bulkload: release write lock after "
+            + (EnvironmentEdgeManager.currentTime() - lockTime) + " ms");
+      }
       closeBulkRegionOperation();
     }
   }
@@ -6004,7 +6086,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       effectiveWAL = (new WALFactory(confForWAL,
           Collections.<WALActionsListener>singletonList(new MetricsWAL()),
           "hregion-" + RandomStringUtils.randomNumeric(8))).
-            getWAL(info.getEncodedNameAsBytes());
+            getWAL(info.getEncodedNameAsBytes(), info.getTable().getNamespace());
     }
     HRegion region = HRegion.newHRegion(tableDir,
         effectiveWAL, fs, conf, info, hTableDescriptor, null);
@@ -7329,9 +7411,9 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   public static final long FIXED_OVERHEAD = ClassSize.align(
       ClassSize.OBJECT +
       ClassSize.ARRAY +
-      45 * ClassSize.REFERENCE + 2 * Bytes.SIZEOF_INT +
-      (14 * Bytes.SIZEOF_LONG) +
-      5 * Bytes.SIZEOF_BOOLEAN);
+      46 * ClassSize.REFERENCE + 2 * Bytes.SIZEOF_INT +
+      (15 * Bytes.SIZEOF_LONG) +
+      6 * Bytes.SIZEOF_BOOLEAN);
 
   // woefully out of date - currently missing:
   // 1 x HashMap - coprocessorServiceHandlers
@@ -7677,6 +7759,23 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       throw new NotServingRegionException(getRegionInfo().getRegionNameAsString() + " is closed");
     }
   }
+  
+  /**
+   * Bulkload use this api to tune the wait duration
+   */
+  private void startBulkRegionOperation(boolean writeLockNeeded, boolean isBulkload)
+      throws NotServingRegionException, RegionTooBusyException, InterruptedIOException {
+    if (this.closing.get()) {
+      throw new NotServingRegionException(getRegionInfo().getRegionNameAsString() + " is closing");
+    }
+    if (writeLockNeeded) lock(lock.writeLock(), isBulkload);
+    else lock(lock.readLock());
+    if (this.closed.get()) {
+      if (writeLockNeeded) lock.writeLock().unlock();
+      else lock.readLock().unlock();
+      throw new NotServingRegionException(getRegionInfo().getRegionNameAsString() + " is closed");
+    }
+  }
 
   /**
    * Closes the lock. This needs to be called in the finally block corresponding
@@ -7727,6 +7826,36 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     try {
       final long waitTime = Math.min(maxBusyWaitDuration,
           busyWaitDuration * Math.min(multiplier, maxBusyWaitMultiplier));
+      if (!lock.tryLock(waitTime, TimeUnit.MILLISECONDS)) {
+        throw new RegionTooBusyException(
+            "failed to get a lock in " + waitTime + " ms. " +
+                "regionName=" + (this.getRegionInfo() == null ? "unknown" :
+                this.getRegionInfo().getRegionNameAsString()) +
+                ", server=" + (this.getRegionServerServices() == null ? "unknown" :
+                this.getRegionServerServices().getServerName()));
+      }
+    } catch (InterruptedException ie) {
+      LOG.info("Interrupted while waiting for a lock");
+      InterruptedIOException iie = new InterruptedIOException();
+      iie.initCause(ie);
+      throw iie;
+    }
+  }
+
+  private void lock(final Lock lock, final boolean isBulkload) throws RegionTooBusyException,
+      InterruptedIOException {
+    lock(lock, 1, isBulkload);
+  }
+  
+  private void lock(final Lock lock, final int multiplier, final boolean isBulkload)
+      throws RegionTooBusyException, InterruptedIOException {
+    try {
+      long generalWaitTime =
+          Math.min(maxBusyWaitDuration,
+            busyWaitDuration * Math.min(multiplier, maxBusyWaitMultiplier));
+      final long waitTime =
+          (isBulkload && (0 < this.bulkloadWaitDuration)) ? this.bulkloadWaitDuration
+              : generalWaitTime;
       if (!lock.tryLock(waitTime, TimeUnit.MILLISECONDS)) {
         throw new RegionTooBusyException(
             "failed to get a lock in " + waitTime + " ms. " +

@@ -54,9 +54,10 @@ public interface WALProvider {
 
   /**
    * @param identifier may not be null. contents will not be altered.
+   * @param namespace could be null, and will use default namespace if null
    * @return a WAL for writing entries for the given region.
    */
-  WAL getWAL(final byte[] identifier) throws IOException;
+  WAL getWAL(final byte[] identifier, byte[] namespace) throws IOException;
 
   /**
    * persist outstanding WALs to storage and stop accepting new appends.
@@ -79,5 +80,15 @@ public interface WALProvider {
     void append(WAL.Entry entry) throws IOException;
     long getLength() throws IOException;
   }
+
+  /**
+   * Get number of the log files this provider is managing
+   */
+  long getNumLogFiles();
+
+  /**
+   * Get size of the log files this provider is managing
+   */
+  long getLogFileSize();
 
 }

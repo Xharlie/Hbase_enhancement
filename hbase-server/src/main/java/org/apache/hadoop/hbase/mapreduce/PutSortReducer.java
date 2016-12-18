@@ -22,6 +22,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.TreeSet;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.Cell;
@@ -44,6 +46,7 @@ import org.apache.hadoop.util.StringUtils;
 @InterfaceStability.Stable
 public class PutSortReducer extends
     Reducer<ImmutableBytesWritable, Put, ImmutableBytesWritable, KeyValue> {
+  static Log LOG = LogFactory.getLog(PutSortReducer.class);
   
   @Override
   protected void reduce(
@@ -69,6 +72,17 @@ public class PutSortReducer extends
             map.add(kv);
             curSize += kv.heapSize();
           }
+        }
+
+        // recheck curSize in case of huge sums of same kvs
+        if (curSize >= threshold) {
+          long before = curSize;
+          curSize = 0;
+          for (KeyValue kv : map) {
+            curSize += kv.heapSize();
+          }
+
+          LOG.info("Recheck curSize, before: " + before + ", after: " + curSize);
         }
       }
       context.setStatus("Read " + map.size() + " entries of " + map.getClass()

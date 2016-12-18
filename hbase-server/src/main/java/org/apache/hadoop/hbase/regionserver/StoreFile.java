@@ -45,6 +45,7 @@ import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
 import org.apache.hadoop.hbase.io.hfile.BlockType;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
@@ -628,6 +629,18 @@ public class StoreFile {
 
       if (!fs.exists(dir)) {
         fs.mkdirs(dir);
+      }
+
+      // set block storage policy for temp path
+      String policyName = this.conf.get(HStore.BLOCK_STORAGE_POLICY_KEY);
+      if (null != policyName && !policyName.trim().isEmpty()) {
+        if (LOG.isTraceEnabled()) {
+          LOG.trace("set block storage policy of [" + dir + "] to [" + policyName + "]");
+        }
+
+        if (this.fs instanceof HFileSystem) {
+          ((HFileSystem) this.fs).setStoragePolicy(dir, policyName.trim());
+        }
       }
 
       if (filePath == null) {

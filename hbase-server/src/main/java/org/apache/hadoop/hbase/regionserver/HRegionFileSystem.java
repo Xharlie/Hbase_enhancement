@@ -174,6 +174,36 @@ public class HRegionFileSystem {
   }
 
   /**
+   * Set the directory of CF to the specified storage policy. <br>
+   * <i>"LAZY_PERSIST"</i>, <i>"ALL_SSD"</i>, <i>"ONE_SSD"</i>, <i>"HOT"</i>, <i>"WARM"</i>,
+   * <i>"COLD"</i> <br>
+   * <br>
+   * See {@link org.apache.hadoop.hdfs.protocol.HdfsConstants} for more details.
+   * @param familyName The name of column family.
+   * @param policyName The name of the storage policy.
+   */
+  public void setStoragePolicy(String familyName, String policyName) {
+    if (this.fs instanceof HFileSystem) {
+      Path storeDir = getStoreDir(familyName);
+      ((HFileSystem) this.fs).setStoragePolicy(storeDir, policyName);
+    }
+  }
+
+  /**
+   * Get the storage policy of the directory of CF.
+   * @param familyName The name of column family.
+   * @return Storage policy name.
+   */
+  public String getStoragePolicy(String familyName) {
+    if (this.fs instanceof HFileSystem) {
+      Path storeDir = getStoreDir(familyName);
+      return ((HFileSystem) this.fs).getStoragePolicy(storeDir);
+    }
+
+    return null;
+  }
+
+  /**
    * Returns the store files available for the family.
    * This methods performs the filtering based on the valid store files.
    * @param familyName Column Family Name

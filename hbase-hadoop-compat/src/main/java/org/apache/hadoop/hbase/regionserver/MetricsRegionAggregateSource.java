@@ -34,7 +34,7 @@ public interface MetricsRegionAggregateSource extends BaseSource {
   /**
    * The name of the metrics context that metrics will be under.
    */
-  String METRICS_CONTEXT = "regionserver";
+  String METRICS_CONTEXT = "regionserver-dynamic";
 
   /**
    * Description

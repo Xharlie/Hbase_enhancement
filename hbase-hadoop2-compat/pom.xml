@@ -21,12 +21,14 @@ limitations under the License.
   <parent>
     <artifactId>hbase</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>1.1.2</version>
+    <version>1.1.2-adp-0.1</version>
     <relativePath>..</relativePath>
   </parent>
 
+  <groupId>org.apache.hbase</groupId>
   <artifactId>hbase-hadoop2-compat</artifactId>
-  <name>Apache HBase - Hadoop Two Compatibility</name>
+  <version>1.1.2-adp-0.1</version>
+  <name>ADP HBase - Hadoop Two Compatibility</name>
   <description>
         Interfaces to be implemented in order to smooth
         over hadoop version differences

@@ -768,7 +768,7 @@ public class TestHRegion {
       assertEquals(3, region.getStore(family).getStorefilesCount());
 
       // now find the compacted file, and manually add it to the recovered edits
-      Path tmpDir = region.getRegionFileSystem().getTempDir();
+      Path tmpDir = new Path(region.getRegionFileSystem().getTempDir(), Bytes.toString(family));
       FileStatus[] files = FSUtils.listStatus(fs, tmpDir);
       String errorMsg = "Expected to find 1 file in the region temp directory "
           + "from the compaction, could not find any";
@@ -836,7 +836,7 @@ public class TestHRegion {
     final Configuration walConf = new Configuration(TEST_UTIL.getConfiguration());
     FSUtils.setRootDir(walConf, logDir);
     final WALFactory wals = new WALFactory(walConf, null, method);
-    final WAL wal = wals.getWAL(tableName.getName());
+    final WAL wal = wals.getWAL(tableName.getName(), tableName.getNamespace());
 
     this.region = initHRegion(tableName.getName(), HConstants.EMPTY_START_ROW,
       HConstants.EMPTY_END_ROW, method, CONF, false, Durability.USE_DEFAULT, wal, family);
@@ -994,7 +994,7 @@ public class TestHRegion {
     final Configuration walConf = new Configuration(TEST_UTIL.getConfiguration());
     FSUtils.setRootDir(walConf, logDir);
     final WALFactory wals = new WALFactory(walConf, null, method);
-    WAL wal = spy(wals.getWAL(tableName.getName()));
+    WAL wal = spy(wals.getWAL(tableName.getName(), tableName.getNamespace()));
 
     this.region = initHRegion(tableName.getName(), HConstants.EMPTY_START_ROW,
       HConstants.EMPTY_END_ROW, method, CONF, false, Durability.USE_DEFAULT, wal, family);
@@ -4620,7 +4620,7 @@ public class TestHRegion {
     final Configuration walConf = new Configuration(conf);
     FSUtils.setRootDir(walConf, logDir);
     final WALFactory wals = new WALFactory(walConf, null, UUID.randomUUID().toString());
-    final WAL wal = spy(wals.getWAL(tableName.getName()));
+    final WAL wal = spy(wals.getWAL(tableName.getName(), tableName.getNamespace()));
     this.region = initHRegion(tableName.getName(), HConstants.EMPTY_START_ROW,
         HConstants.EMPTY_END_ROW, method, conf, false, tableDurability, wal,
         new byte[][] { family });

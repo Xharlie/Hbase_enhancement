@@ -24,9 +24,10 @@ import java.util.Random;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
-import static org.apache.hadoop.hbase.wal.BoundedRegionGroupingProvider.NUM_REGION_GROUPS;
-import static org.apache.hadoop.hbase.wal.BoundedRegionGroupingProvider.DEFAULT_NUM_REGION_GROUPS;
+import static org.apache.hadoop.hbase.wal.BoundedGroupingStrategy.NUM_REGION_GROUPS;
+import static org.apache.hadoop.hbase.wal.BoundedGroupingStrategy.DEFAULT_NUM_REGION_GROUPS;
 import static org.apache.hadoop.hbase.wal.WALFactory.WAL_PROVIDER;
+import static org.apache.hadoop.hbase.wal.RegionGroupingProvider.REGION_GROUPING_STRATEGY;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -48,8 +49,8 @@ import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
 @Category(LargeTests.class)
-public class TestBoundedRegionGroupingProvider {
-  protected static final Log LOG = LogFactory.getLog(TestBoundedRegionGroupingProvider.class);
+public class TestBoundedRegionGroupingStrategy {
+  protected static final Log LOG = LogFactory.getLog(TestBoundedRegionGroupingStrategy.class);
 
   @Rule
   public TestName currentTest = new TestName();
@@ -84,7 +85,8 @@ public class TestBoundedRegionGroupingProvider {
     conf.setInt("dfs.client.block.recovery.retries", 1);
     conf.setInt("hbase.ipc.client.connection.maxidletime", 500);
 
-    conf.setClass(WAL_PROVIDER, BoundedRegionGroupingProvider.class, WALProvider.class);
+    conf.setClass(WAL_PROVIDER, RegionGroupingProvider.class, WALProvider.class);
+    conf.set(REGION_GROUPING_STRATEGY, RegionGroupingProvider.Strategies.bounded.name());
 
     TEST_UTIL.startMiniDFSCluster(3);
 
@@ -168,7 +170,7 @@ public class TestBoundedRegionGroupingProvider {
       int count = 0;
       // we know that this should see one of the wals more than once
       for (int i = 0; i < temp*8; i++) {
-        final WAL maybeNewWAL = wals.getWAL(Bytes.toBytes(random.nextInt()));
+        final WAL maybeNewWAL = wals.getWAL(Bytes.toBytes(random.nextInt()), null);
         LOG.info("Iteration " + i + ", checking wal " + maybeNewWAL);
         if (seen.add(maybeNewWAL)) {
           count++;

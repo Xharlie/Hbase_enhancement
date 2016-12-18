@@ -23,6 +23,7 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -76,6 +77,16 @@ public class DefaultWALProvider implements WALProvider {
   }
 
   protected FSHLog log = null;
+  private WALFactory factory = null;
+  private Configuration conf = null;
+  private List<WALActionsListener> listeners = null;
+  private String providerId = null;
+  private AtomicBoolean initialized = new AtomicBoolean(false);
+
+  /**
+   * we synchronized on walCreateLock to prevent wal recreation in different threads
+   */
+  private final Object walCreateLock = new Object();
 
   /**
    * @param factory factory that made us, identity used for FS layout. may not be null
@@ -87,31 +98,47 @@ public class DefaultWALProvider implements WALProvider {
   @Override
   public void init(final WALFactory factory, final Configuration conf,
       final List<WALActionsListener> listeners, String providerId) throws IOException {
-    if (null != log) {
+    if (initialized.get()) {
       throw new IllegalStateException("WALProvider.init should only be called once.");
     }
-    if (null == providerId) {
-      providerId = DEFAULT_PROVIDER_ID;
-    }
-    final String logPrefix = factory.factoryId + WAL_FILE_NAME_DELIMITER + providerId;
-    log = new FSHLog(FileSystem.get(conf), FSUtils.getRootDir(conf),
-        getWALDirectoryName(factory.factoryId), HConstants.HREGION_OLDLOGDIR_NAME, conf, listeners,
-        true, logPrefix, META_WAL_PROVIDER_ID.equals(providerId) ? META_WAL_PROVIDER_ID : null);
+    initialized.compareAndSet(false, true);
+    this.factory = factory;
+    this.conf = conf;
+    this.listeners = listeners;
+    this.providerId = providerId;
   }
 
   @Override
-  public WAL getWAL(final byte[] identifier) throws IOException {
-   return log;
+  public WAL getWAL(final byte[] identifier, byte[] namespace) throws IOException {
+    // must lock since getWAL will create hlog on fs which is time consuming
+    synchronized (walCreateLock) {
+      if (log == null) {
+        StringBuilder sb = new StringBuilder().append(factory.factoryId);
+        if (providerId != null) {
+          if (providerId.startsWith(WAL_FILE_NAME_DELIMITER)) {
+            sb.append(providerId);
+          } else {
+            sb.append(WAL_FILE_NAME_DELIMITER).append(providerId);
+          }
+        }
+        final String logPrefix = sb.toString();
+        log = new FSHLog(FileSystem.get(conf), FSUtils.getRootDir(conf),
+                getWALDirectoryName(factory.factoryId), HConstants.HREGION_OLDLOGDIR_NAME, conf,
+                listeners, true, logPrefix,
+                META_WAL_PROVIDER_ID.equals(providerId) ? META_WAL_PROVIDER_ID : null);
+      }
+    }
+    return log;
   }
 
   @Override
   public void close() throws IOException {
-    log.close();
+    if (log != null) log.close();
   }
 
   @Override
   public void shutdown() throws IOException {
-    log.shutdown();
+    if (log != null) log.shutdown();
   }
 
   // should be package private; more visible for use in FSHLog
@@ -129,36 +156,20 @@ public class DefaultWALProvider implements WALProvider {
    * iff the given WALFactory is using the DefaultWALProvider for meta and/or non-meta,
    * count the number of files (rolled and active). if either of them aren't, count 0
    * for that provider.
-   * @param walFactory may not be null.
    */
-  public static long getNumLogFiles(WALFactory walFactory) {
-    long result = 0;
-    if (walFactory.provider instanceof DefaultWALProvider) {
-      result += ((FSHLog)((DefaultWALProvider)walFactory.provider).log).getNumLogFiles();
-    }
-    WALProvider meta = walFactory.metaProvider.get();
-    if (meta instanceof DefaultWALProvider) {
-      result += ((FSHLog)((DefaultWALProvider)meta).log).getNumLogFiles();
-    }
-    return result;
+  @Override
+  public long getNumLogFiles() {
+    return log == null ? 0 : this.log.getNumLogFiles();
   }
 
   /**
    * iff the given WALFactory is using the DefaultWALProvider for meta and/or non-meta,
    * count the size of files (rolled and active). if either of them aren't, count 0
    * for that provider.
-   * @param walFactory may not be null.
    */
-  public static long getLogFileSize(WALFactory walFactory) {
-    long result = 0;
-    if (walFactory.provider instanceof DefaultWALProvider) {
-      result += ((FSHLog)((DefaultWALProvider)walFactory.provider).log).getLogFileSize();
-    }
-    WALProvider meta = walFactory.metaProvider.get();
-    if (meta instanceof DefaultWALProvider) {
-      result += ((FSHLog)((DefaultWALProvider)meta).log).getLogFileSize();
-    }
-    return result;
+  @Override
+  public long getLogFileSize() {
+    return log == null ? 0 : this.log.getLogFileSize();
   }
 
   /**
@@ -364,6 +375,17 @@ public class DefaultWALProvider implements WALProvider {
       LOG.debug("Error instantiating log writer.", e);
       throw new IOException("cannot get log writer", e);
     }
+  }
+
+  /**
+   * Get prefix of the log from its name, assuming WAL name in format of
+   * log_prefix.filenumber.log_suffix @see {@link FSHLog#getCurrentFileName()}
+   * @param name Name of the WAL to parse
+   * @return prefix of the log
+   */
+  public static String getWALPrefixFromWALName(String name) {
+    int endIndex = name.replaceAll(META_WAL_PROVIDER_ID, "").lastIndexOf(".");
+    return name.substring(0, endIndex);
   }
 
 }

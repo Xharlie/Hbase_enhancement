@@ -23,12 +23,14 @@
   <parent>
     <artifactId>hbase</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>1.1.2</version>
+    <version>1.1.2-adp-0.1</version>
     <relativePath>..</relativePath>
   </parent>
 
+  <groupId>org.apache.hbase</groupId>
   <artifactId>hbase-it</artifactId>
-  <name>Apache HBase - Integration Tests</name>
+  <version>1.1.2-adp-0.1</version>
+  <name>ADP HBase - Integration Tests</name>
   <description>Integration and System tests for HBase</description>
 
   <properties>

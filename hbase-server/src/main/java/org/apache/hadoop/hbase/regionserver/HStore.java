@@ -130,6 +130,7 @@ public class HStore implements Store {
   public static final String COMPACTCHECKER_INTERVAL_MULTIPLIER_KEY =
       "hbase.server.compactchecker.interval.multiplier";
   public static final String BLOCKING_STOREFILES_KEY = "hbase.hstore.blockingStoreFiles";
+  public static final String BLOCK_STORAGE_POLICY_KEY = "hbase.hstore.block.storage.policy";
   public static final int DEFAULT_COMPACTCHECKER_INTERVAL_MULTIPLIER = 1000;
   public static final int DEFAULT_BLOCKING_STOREFILE_COUNT = 7;
 
@@ -228,6 +229,17 @@ public class HStore implements Store {
       .addStringMap(family.getConfiguration())
       .addWritableMap(family.getValues());
     this.blocksize = family.getBlocksize();
+
+    // set block storage policy for store directory
+    String policyName = this.conf.get(BLOCK_STORAGE_POLICY_KEY);
+    if (null != policyName && !policyName.trim().isEmpty()) {
+      if (LOG.isTraceEnabled()) {
+        LOG.trace("set block storage policy of [" + family.getNameAsString() + "] to ["
+            + policyName + "]");
+      }
+
+      this.fs.setStoragePolicy(family.getNameAsString(), policyName.trim());
+    }
 
     this.dataBlockEncoder =
         new HFileDataBlockEncoderImpl(family.getDataBlockEncoding());
@@ -1004,9 +1016,10 @@ public class HStore implements Store {
     }
     HFileContext hFileContext = createFileContext(compression, includeMVCCReadpoint, includesTag,
       cryptoContext);
+    Path familyTempDir = new Path(fs.getTempDir(), family.getNameAsString());
     StoreFile.Writer w = new StoreFile.WriterBuilder(conf, writerCacheConf,
         this.getFileSystem())
-            .withFilePath(fs.createTempName())
+            .withOutputDir(familyTempDir)
             .withComparator(comparator)
             .withBloomType(family.getBloomFilterType())
             .withMaxKeyCount(maxKeyCount)

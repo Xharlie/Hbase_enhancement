@@ -34,8 +34,6 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.io.hfile.BlockCache;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.CacheStats;
-import org.apache.hadoop.hbase.wal.BoundedRegionGroupingProvider;
-import org.apache.hadoop.hbase.wal.DefaultWALProvider;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
 import org.apache.hadoop.metrics2.MetricsExecutor;
@@ -510,10 +508,10 @@ class MetricsRegionServerWrapperImpl
       }
       lastRan = currentTime;
 
-      numWALFiles = DefaultWALProvider.getNumLogFiles(regionServer.walFactory) +
-          BoundedRegionGroupingProvider.getNumLogFiles(regionServer.walFactory);
-      walFileSize = DefaultWALProvider.getLogFileSize(regionServer.walFactory) +
-          BoundedRegionGroupingProvider.getLogFileSize(regionServer.walFactory);
+      numWALFiles = regionServer.walFactory.getWALProvider().getNumLogFiles() +
+          regionServer.walFactory.getMetaWALProvider().getNumLogFiles();
+      walFileSize = regionServer.walFactory.getWALProvider().getLogFileSize() +
+          regionServer.walFactory.getMetaWALProvider().getLogFileSize();
       //Copy over computed values so that no thread sees half computed values.
       numStores = tempNumStores;
       numStoreFiles = tempNumStoreFiles;

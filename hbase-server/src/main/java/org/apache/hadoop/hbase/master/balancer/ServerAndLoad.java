@@ -18,6 +18,7 @@
 package org.apache.hadoop.hbase.master.balancer;
 
 import java.io.Serializable;
+import java.util.Random;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.ServerName;
@@ -30,6 +31,7 @@ class ServerAndLoad implements Comparable<ServerAndLoad>, Serializable {
   private static final long serialVersionUID = 2735470854607296965L;
   private final ServerName sn;
   private final int load;
+  private final Random rand = new Random(System.currentTimeMillis());
 
   ServerAndLoad(final ServerName sn, final int load) {
     this.sn = sn;
@@ -47,7 +49,8 @@ class ServerAndLoad implements Comparable<ServerAndLoad>, Serializable {
   @Override
   public int compareTo(ServerAndLoad other) {
     int diff = this.load - other.load;
-    return diff != 0 ? diff : this.sn.compareTo(other.getServerName());
+//    return diff != 0 ? diff : this.sn.compareTo(other.getServerName());
+    return diff != 0 ? diff : (rand.nextBoolean() ? 1 : -1);
   }
 
   @Override

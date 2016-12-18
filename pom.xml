@@ -39,8 +39,8 @@
   <groupId>org.apache.hbase</groupId>
   <artifactId>hbase</artifactId>
   <packaging>pom</packaging>
-  <version>1.1.2</version>
-  <name>Apache HBase</name>
+  <version>1.1.2-adp-0.1</version>
+  <name>HBase of Ali-search Data Platform</name>
   <description>
     Apache HBase is the Hadoop database. Use it when you need
     random, realtime read/write access to your Big Data.
@@ -78,9 +78,9 @@
     </pluginRepository>
   </pluginRepositories>
   <scm>
-    <connection>scm:git:git://git.apache.org/hbase.git</connection>
-    <developerConnection>scm:git:https://git-wip-us.apache.org/repos/asf/hbase.git</developerConnection>
-    <url>https://git-wip-us.apache.org/repos/asf?p=hbase.git</url>
+    <connection>scm:git:git@gitlab.alibaba-inc.com:search-data-infrastructure/hbase.git</connection>
+    <developerConnection>scm:git:git@gitlab.alibaba-inc.com:search-data-infrastructure/hbase.git</developerConnection>
+    <url>http://gitlab.alibaba-inc.com/search-data-infrastructure/hbase</url>
   </scm>
   <issueManagement>
     <system>JIRA</system>
@@ -1157,7 +1157,7 @@
     <maven.min.version>3.0.3</maven.min.version>
     <java.min.version>${compileSource}</java.min.version>
     <!-- Dependencies -->
-    <hadoop-two.version>2.5.1</hadoop-two.version>
+    <hadoop-two.version>2.6.0</hadoop-two.version>
     <!-- minikdc introduced in hadoop-2.3; override when building earlier versions -->
     <hadoop-two-minikdc.version>${hadoop-two.version}</hadoop-two-minikdc.version>
     <hadoop-three.version>3.0.0-SNAPSHOT</hadoop-three.version>
