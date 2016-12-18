@@ -14,15 +14,18 @@ capabilities on top of Apache Hadoop
 
 ## Major MileStone
 
-* **New rpc layer **: 
+* **New rpc layer**: 
   Use Netty to facilitate the rpc, take the advantage of the direct buffer and EventLoop thread mechanism.
 * **Direct Health Check**: 
-  With regard to original health check setting, the health check chore is fired up by the server itself, in order to detect the hanging machine which wouldn’t allow new threads to be initiated.
-* **New Encoding **: 
+  With regard to original health check setting, the health check chore is fired up by the server itself, 
+  in order to detect the hanging machine which wouldn’t allow new threads to be initiated.
+* **New Encoding**: 
   Put Binary Search inside the file to achieve acceleration of the read operation and improvement of space usage. 
-* **Overall Level Balancer **: 
-  Simple balancer can only gurantee table level balance or cluster level, we need to empower the balancer by enable balance both at table level and cluster level
-* **put Stage Event Driven**: 
+* **Overall Level Balancer**: 
+  Simple balancer can only gurantee table level balance or cluster level, 
+  we need to empower the balancer by enable balance both at table level and cluster level
+* **Put operation Staged Event Driven**: 
   Separate the handler of CPU bounding activities from I/O bounding activities
+  <http://dl.acm.org/citation.cfm?id=502057>
 
   
