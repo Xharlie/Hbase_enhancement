@@ -20,12 +20,16 @@ package org.apache.hadoop.hbase.codec;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
-import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.NoTagsKeyValue;
+import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.io.ByteBufferInputStream;
+import org.apache.hadoop.hbase.io.util.StreamUtils;
+import org.apache.hadoop.io.IOUtils;
 
 /**
  * Codec that does KeyValue version 1 serialization.
@@ -65,7 +69,26 @@ public class KeyValueCodec implements Codec {
     }
 
     protected Cell parseCell() throws IOException {
-      return KeyValue.iscreate(in);
+      if (in instanceof ByteBufferInputStream) {
+        // This stream is backed by a ByteBuffer. We can directly read the Cell length from this
+        // Buffer and create Cell instance directly on top of it. No need for reading into temp
+        // byte[] and create Cell on top of that. It saves lot of garbage.
+        ByteBufferInputStream bis = (ByteBufferInputStream) in;
+        int len = bis.readInt();
+        ByteBuffer buf = bis.getBuffer();
+        assert buf.hasArray();
+        Cell c = createCell(buf.array(), buf.arrayOffset() + buf.position(), len);
+        bis.skip(len);
+        return c;
+      }
+      int len = StreamUtils.readInt(in);
+      byte[] bytes = new byte[len];
+      IOUtils.readFully(in, bytes, 0, bytes.length);
+      return createCell(bytes, 0, len);
+    }
+
+    protected Cell createCell(byte[] buf, int offset, int len) {
+      return new NoTagsKeyValue(buf, offset, len);
     }
   }
 

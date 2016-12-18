@@ -90,13 +90,9 @@ public class TestLogRolling  {
   private MiniDFSCluster dfsCluster;
   private Admin admin;
   private MiniHBaseCluster cluster;
-  private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  protected static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   @Rule public final TestName name = new TestName();
 
-  /**
-   * constructor
-   * @throws Exception
-   */
   public TestLogRolling()  {
     this.server = null;
     this.tableName = null;
@@ -311,6 +307,7 @@ public class TestLogRolling  {
     // Create the test table and open it
     HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(getName()));
     desc.addFamily(new HColumnDescriptor(HConstants.CATALOG_FAMILY));
+    setHTableDescriptor(desc);
 
     admin.createTable(desc);
     Table table = TEST_UTIL.getConnection().getTable(desc.getTableName());
@@ -430,6 +427,7 @@ public class TestLogRolling  {
       // Create the test table and open it
       HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(getName()));
       desc.addFamily(new HColumnDescriptor(HConstants.CATALOG_FAMILY));
+      setHTableDescriptor(desc);
 
       admin.createTable(desc);
       Table table = new HTable(TEST_UTIL.getConfiguration(), desc.getTableName());
@@ -535,7 +533,16 @@ public class TestLogRolling  {
 
       // flush all regions
       for (Region r: server.getOnlineRegionsLocalContext()) {
-        r.flush(true);
+        try {
+          r.flush(true);
+        } catch (Exception e) {
+          // This try/catch was added by HBASE-14317. It is needed
+          // because this issue tightened up the semantic such that
+          // a failed append could not be followed by a successful
+          // sync. What is coming out here is a failed sync, a sync
+          // that used to 'pass'.
+          LOG.info(e);
+        }
       }
 
       ResultScanner scanner = table.getScanner(new Scan());
@@ -632,8 +639,17 @@ public class TestLogRolling  {
     // Create the test table and open it
     HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(tableName));
     desc.addFamily(new HColumnDescriptor(HConstants.CATALOG_FAMILY));
+    setHTableDescriptor(desc);
     admin.createTable(desc);
     return new HTable(TEST_UTIL.getConfiguration(), desc.getTableName());
+  }
+
+  /**
+   * Method to set table descriptor, mainly for hqueue testing
+   * @param tableDescriptor The table descriptor to set
+   */
+  protected void setHTableDescriptor(HTableDescriptor tableDescriptor) {
+    // do nothing here
   }
 }
 

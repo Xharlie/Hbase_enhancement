@@ -48,4 +48,14 @@ public class MetricsHBaseServerWrapperStub implements MetricsHBaseServerWrapper{
   public int getActiveRpcHandlerCount() {
     return 106;
   }
+
+  @Override
+  public long getResponseQueueSize() {
+    return 107;
+  }
+
+  @Override
+  public int getResponseQueueLength() {
+    return 108;
+  }
 }

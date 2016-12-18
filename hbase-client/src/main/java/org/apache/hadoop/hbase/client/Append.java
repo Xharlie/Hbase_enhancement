@@ -68,6 +68,13 @@ public class Append extends Mutation {
   }
 
   /**
+   * for pre-0.94 users
+   * @deprecated use {@link Append(byte[] row)}
+   */
+  public Append() {
+  }
+
+  /**
    * Create a Append operation for the specified row.
    * <p>
    * At least one column must be appended to.

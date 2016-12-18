@@ -23,6 +23,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.regionserver.RegionServerServices;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.util.ReflectionUtils;
 
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.CONFIG)
@@ -33,23 +34,23 @@ public class CompactionThroughputControllerFactory {
   public static final String HBASE_THROUGHPUT_CONTROLLER_KEY =
       "hbase.regionserver.throughput.controller";
 
-  private static final Class<? extends CompactionThroughputController>
+  private static final Class<? extends ThroughputController>
       DEFAULT_THROUGHPUT_CONTROLLER_CLASS = NoLimitCompactionThroughputController.class;
 
-  public static CompactionThroughputController create(RegionServerServices server,
+  public static ThroughputController create(RegionServerServices server,
       Configuration conf) {
-    Class<? extends CompactionThroughputController> clazz = getThroughputControllerClass(conf);
-    CompactionThroughputController controller = ReflectionUtils.newInstance(clazz, conf);
+    Class<? extends ThroughputController> clazz = getThroughputControllerClass(conf);
+    ThroughputController controller = ReflectionUtils.newInstance(clazz, conf);
     controller.setup(server);
     return controller;
   }
 
-  public static Class<? extends CompactionThroughputController> getThroughputControllerClass(
+  public static Class<? extends ThroughputController> getThroughputControllerClass(
       Configuration conf) {
     String className =
         conf.get(HBASE_THROUGHPUT_CONTROLLER_KEY, DEFAULT_THROUGHPUT_CONTROLLER_CLASS.getName());
     try {
-      return Class.forName(className).asSubclass(CompactionThroughputController.class);
+      return Class.forName(className).asSubclass(ThroughputController.class);
     } catch (Exception e) {
       LOG.warn(
         "Unable to load configured throughput controller '" + className

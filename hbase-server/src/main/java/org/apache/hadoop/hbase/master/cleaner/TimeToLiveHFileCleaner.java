@@ -51,8 +51,8 @@ public class TimeToLiveHFileCleaner extends BaseHFileCleanerDelegate {
     long time = fStat.getModificationTime();
     long life = currentTime - time;
     if (LOG.isTraceEnabled()) {
-      LOG.trace("HFile life:" + life + ", ttl:" + ttl + ", current:" + currentTime + ", from: "
-          + time);
+      LOG.trace("HFile " + fStat.getPath() + " life:" + life + ", ttl:" + ttl + ", current:"
+          + currentTime + ", from: " + time);
     }
     if (life < 0) {
       LOG.warn("Found a hfile (" + fStat.getPath() + ") newer than current time (" + currentTime

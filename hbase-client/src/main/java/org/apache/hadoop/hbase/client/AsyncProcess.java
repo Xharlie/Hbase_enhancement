@@ -43,6 +43,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.CallQueueTooBigException;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
@@ -52,6 +53,7 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.backoff.ServerStatistics;
 import org.apache.hadoop.hbase.client.coprocessor.Batch;
+import org.apache.hadoop.hbase.exceptions.ClientExceptionsUtil;
 import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -110,6 +112,17 @@ class AsyncProcess {
   public static final String START_LOG_ERRORS_AFTER_COUNT_KEY =
       "hbase.client.start.log.errors.counter";
   public static final int DEFAULT_START_LOG_ERRORS_AFTER_COUNT = 9;
+
+  /**
+   * Configuration to decide whether to log details for batch error
+   */
+  public static final String LOG_DETAILS_FOR_BATCH_ERROR = "hbase.client.log.batcherrors.details";
+
+  private final int thresholdToLogUndoneTaskDetails;
+  private static final String THRESHOLD_TO_LOG_UNDONE_TASK_DETAILS =
+      "hbase.client.threshold.log.details";
+  private static final int DEFAULT_THRESHOLD_TO_LOG_UNDONE_TASK_DETAILS = 10;
+  private final int THRESHOLD_TO_LOG_REGION_DETAILS = 2;
 
   /**
    * The context used to wait for results from one submit call.
@@ -199,10 +212,13 @@ class AsyncProcess {
    */
   protected final int maxConcurrentTasksPerServer;
   protected final long pause;
+  protected final long specialPause;
   protected int numTries;
   protected int serverTrackerTimeout;
   protected int timeout;
   protected long primaryCallTimeoutMicroseconds;
+  /** Whether to log details for batch errors */
+  private final boolean logBatchErrorDetails;
   // End configuration settings.
 
   protected static class BatchErrors {
@@ -224,9 +240,12 @@ class AsyncProcess {
       return !throwables.isEmpty();
     }
 
-    private synchronized RetriesExhaustedWithDetailsException makeException() {
-      return new RetriesExhaustedWithDetailsException(
-          new ArrayList<Throwable>(throwables),
+    private synchronized RetriesExhaustedWithDetailsException makeException(boolean logDetails) {
+      if (logDetails) {
+        LOG.error("Exception occurred! Exception details: " + throwables + ";\nActions: "
+            + actions);
+      }
+      return new RetriesExhaustedWithDetailsException(new ArrayList<Throwable>(throwables),
           new ArrayList<Row>(actions), new ArrayList<String>(addresses));
     }
 
@@ -257,6 +276,8 @@ class AsyncProcess {
 
     this.pause = conf.getLong(HConstants.HBASE_CLIENT_PAUSE,
         HConstants.DEFAULT_HBASE_CLIENT_PAUSE);
+    this.specialPause = conf.getLong(HConstants.HBASE_CLIENT_PAUSE_SPECIAL_CASE,
+        HConstants.DEFAULT_HBASE_CLIENT_PAUSE_SPECIAL_CASE);
     this.numTries = conf.getInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER,
         HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER);
     this.timeout = conf.getInt(HConstants.HBASE_RPC_TIMEOUT_KEY,
@@ -299,6 +320,11 @@ class AsyncProcess {
 
     this.rpcCallerFactory = rpcCaller;
     this.rpcFactory = rpcFactory;
+    this.logBatchErrorDetails = conf.getBoolean(LOG_DETAILS_FOR_BATCH_ERROR, false);
+
+    this.thresholdToLogUndoneTaskDetails =
+        conf.getInt(THRESHOLD_TO_LOG_UNDONE_TASK_DETAILS,
+          DEFAULT_THRESHOLD_TO_LOG_UNDONE_TASK_DETAILS);
   }
 
   /**
@@ -352,7 +378,7 @@ class AsyncProcess {
     List<Integer> locationErrorRows = null;
     do {
       // Wait until there is at least one slot for a new task.
-      waitForMaximumCurrentTasks(maxTotalConcurrentTasks - 1);
+      waitForMaximumCurrentTasks(maxTotalConcurrentTasks - 1, tableName.getNameAsString());
 
       // Remember the previous decisions about regions or region servers we put in the
       //  final multi.
@@ -1167,7 +1193,10 @@ class AsyncProcess {
       //  2) We want to take into account the location when calculating the sleep time.
       // It should be possible to have some heuristics to take the right decision. Short term,
       //  we go for one.
-      long backOffTime = errorsByServer.calculateBackoffTime(oldServer, pause);
+      // sleep longer if call queue full, TODO regardless of call queue imbalance
+      long pauseBase =
+          ClientExceptionsUtil.isCallQueueTooBigException(throwable) ? specialPause : pause;
+      long backOffTime = errorsByServer.calculateBackoffTime(oldServer, pauseBase);
       if (numAttempt > startLogErrorsCnt) {
         // We use this value to have some logs when we have multiple failures, but not too many
         //  logs, as errors are to be expected when a region moves, splits and so on
@@ -1243,6 +1272,7 @@ class AsyncProcess {
           // Failure: retry if it's make sense else update the errors lists
           if (result == null || result instanceof Throwable) {
             Row row = sentAction.getAction();
+            throwable = ClientExceptionsUtil.findException(result);
             // Register corresponding failures once per server/once per region.
             if (!regionFailureRegistered) {
               regionFailureRegistered = true;
@@ -1568,13 +1598,17 @@ class AsyncProcess {
         if (!hasWait) { // Only log if wait is infinite.
           if (now > lastLog + 10000) {
             lastLog = now;
-            LOG.info("#" + id + ", waiting for " + currentInProgress + "  actions to finish");
+            LOG.info("#" + id + ", waiting for " + currentInProgress
+                + "  actions to finish on table: " + tableName);
+            if (currentInProgress <= thresholdToLogUndoneTaskDetails) {
+              logDetailsOfUndoneTasks(currentInProgress);
+            }
           }
         }
         synchronized (actionsInProgress) {
           if (actionsInProgress.get() == 0) break;
           if (!hasWait) {
-            actionsInProgress.wait(100);
+            actionsInProgress.wait(10);
           } else {
             long waitMicroSecond = Math.min(100000L, (cutoff - now * 1000L));
             TimeUnit.MICROSECONDS.timedWait(actionsInProgress, waitMicroSecond);
@@ -1596,7 +1630,7 @@ class AsyncProcess {
 
     @Override
     public RetriesExhaustedWithDetailsException getErrors() {
-      return errors.makeException();
+      return errors.makeException(logBatchErrorDetails);
     }
 
     @Override
@@ -1635,32 +1669,63 @@ class AsyncProcess {
   @VisibleForTesting
   /** Waits until all outstanding tasks are done. Used in tests. */
   void waitUntilDone() throws InterruptedIOException {
-    waitForMaximumCurrentTasks(0);
+    waitForMaximumCurrentTasks(0, null);
   }
 
   /** Wait until the async does not have more than max tasks in progress. */
-  private void waitForMaximumCurrentTasks(int max) throws InterruptedIOException {
+  private void waitForMaximumCurrentTasks(int max, String tableName) throws InterruptedIOException {
+    waitForMaximumCurrentTasks(max, tasksInProgress, id, tableName);
+  }
+
+  // Break out this method so testable
+  @VisibleForTesting
+  void waitForMaximumCurrentTasks(int max, final AtomicLong tasksInProgress, final long id,
+      String tableName) throws InterruptedIOException {
     long lastLog = EnvironmentEdgeManager.currentTime();
     long currentInProgress, oldInProgress = Long.MAX_VALUE;
-    while ((currentInProgress = this.tasksInProgress.get()) > max) {
+    while ((currentInProgress = tasksInProgress.get()) > max) {
       if (oldInProgress != currentInProgress) { // Wait for in progress to change.
         long now = EnvironmentEdgeManager.currentTime();
         if (now > lastLog + 10000) {
           lastLog = now;
           LOG.info("#" + id + ", waiting for some tasks to finish. Expected max="
-              + max + ", tasksInProgress=" + currentInProgress);
+              + max + ", tasksInProgress=" + currentInProgress +
+              " hasError=" + hasError() + tableName == null ? "" : ", tableName=" + tableName);
+          if (currentInProgress <= thresholdToLogUndoneTaskDetails) {
+            logDetailsOfUndoneTasks(currentInProgress);
+          }
         }
       }
       oldInProgress = currentInProgress;
       try {
-        synchronized (this.tasksInProgress) {
-          if (tasksInProgress.get() != oldInProgress) break;
-          this.tasksInProgress.wait(100);
+        synchronized (tasksInProgress) {
+          if (tasksInProgress.get() == oldInProgress) {
+            tasksInProgress.wait(10);
+          }
         }
       } catch (InterruptedException e) {
         throw new InterruptedIOException("#" + id + ", interrupted." +
             " currentNumberOfTask=" + currentInProgress);
       }
+    }
+  }
+
+  private void logDetailsOfUndoneTasks(long taskInProgress) {
+    ArrayList<ServerName> servers = new ArrayList<ServerName>();
+    for (Map.Entry<ServerName, AtomicInteger> entry : taskCounterPerServer.entrySet()) {
+      if (entry.getValue().get() > 0) {
+        servers.add(entry.getKey());
+      }
+    }
+    LOG.info("Left over " + taskInProgress + " task(s) are processed on server(s): " + servers);
+    if (taskInProgress <= THRESHOLD_TO_LOG_REGION_DETAILS) {
+      ArrayList<String> regions = new ArrayList<String>();
+      for (Map.Entry<byte[], AtomicInteger> entry : taskCounterPerRegion.entrySet()) {
+        if (entry.getValue().get() > 0) {
+          regions.add(Bytes.toString(entry.getKey()));
+        }
+      }
+      LOG.info("Regions against which left over task(s) are processed: " + regions);
     }
   }
 
@@ -1679,19 +1744,20 @@ class AsyncProcess {
    * failed operations themselves.
    * @param failedRows an optional list into which the rows that failed since the last time
    *        {@link #waitForAllPreviousOpsAndReset(List)} was called, or AP was created, are saved.
+   * @param tableName name of the table
    * @return all the errors since the last time {@link #waitForAllPreviousOpsAndReset(List)}
    *          was called, or AP was created.
    */
   public RetriesExhaustedWithDetailsException waitForAllPreviousOpsAndReset(
-      List<Row> failedRows) throws InterruptedIOException {
-    waitForMaximumCurrentTasks(0);
+      List<Row> failedRows, String tableName) throws InterruptedIOException {
+    waitForMaximumCurrentTasks(0, tableName);
     if (!globalErrors.hasErrors()) {
       return null;
     }
     if (failedRows != null) {
       failedRows.addAll(globalErrors.actions);
     }
-    RetriesExhaustedWithDetailsException result = globalErrors.makeException();
+    RetriesExhaustedWithDetailsException result = globalErrors.makeException(logBatchErrorDetails);
     globalErrors.clear();
     return result;
   }

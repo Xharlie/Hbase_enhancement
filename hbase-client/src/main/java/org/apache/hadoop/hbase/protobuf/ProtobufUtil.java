@@ -550,7 +550,7 @@ public final class ProtobufUtil {
     MutationType type = proto.getMutateType();
     assert type == MutationType.PUT: type.name();
     long timestamp = proto.hasTimestamp()? proto.getTimestamp(): HConstants.LATEST_TIMESTAMP;
-    Put put = null;
+    Put put = proto.hasRow() ? new Put(proto.getRow().toByteArray(), timestamp) : null;
     int cellCount = proto.hasAssociatedCellCount()? proto.getAssociatedCellCount(): 0;
     if (cellCount > 0) {
       // The proto has metadata only and the data is separate to be found in the cellScanner.
@@ -570,9 +570,7 @@ public final class ProtobufUtil {
         put.add(cell);
       }
     } else {
-      if (proto.hasRow()) {
-        put = new Put(proto.getRow().asReadOnlyByteBuffer(), timestamp);
-      } else {
+      if (put == null) {
         throw new IllegalArgumentException("row cannot be null");
       }
       // The proto has the metadata and the data itself
@@ -649,12 +647,8 @@ public final class ProtobufUtil {
   throws IOException {
     MutationType type = proto.getMutateType();
     assert type == MutationType.DELETE : type.name();
-    byte [] row = proto.hasRow()? proto.getRow().toByteArray(): null;
-    long timestamp = HConstants.LATEST_TIMESTAMP;
-    if (proto.hasTimestamp()) {
-      timestamp = proto.getTimestamp();
-    }
-    Delete delete = null;
+    long timestamp = proto.hasTimestamp() ? proto.getTimestamp() : HConstants.LATEST_TIMESTAMP;
+    Delete delete = proto.hasRow() ? new Delete(proto.getRow().toByteArray(), timestamp) : null;
     int cellCount = proto.hasAssociatedCellCount()? proto.getAssociatedCellCount(): 0;
     if (cellCount > 0) {
       // The proto has metadata only and the data is separate to be found in the cellScanner.
@@ -677,7 +671,9 @@ public final class ProtobufUtil {
         delete.addDeleteMarker(cell);
       }
     } else {
-      delete = new Delete(row, timestamp);
+      if (delete == null) {
+        throw new IllegalArgumentException("row cannot be null");
+      }
       for (ColumnValue column: proto.getColumnValueList()) {
         byte[] family = column.getFamily().toByteArray();
         for (QualifierValue qv: column.getQualifierValueList()) {
@@ -1195,10 +1191,6 @@ public final class ProtobufUtil {
         valueBuilder.setValue(ByteStringer.wrap(
             cell.getValueArray(), cell.getValueOffset(), cell.getValueLength()));
         valueBuilder.setTimestamp(cell.getTimestamp());
-        if(cell.getTagsLength() > 0) {
-          valueBuilder.setTags(ByteStringer.wrap(cell.getTagsArray(), cell.getTagsOffset(),
-              cell.getTagsLength()));
-        }
         if (type == MutationType.DELETE || (type == MutationType.PUT && CellUtil.isDelete(cell))) {
           KeyValue.Type keyValueType = KeyValue.Type.codeToType(cell.getTypeByte());
           valueBuilder.setDeleteType(toDeleteType(keyValueType));
@@ -2446,13 +2438,13 @@ public final class ProtobufUtil {
    */
   public static String getRegionEncodedName(
       final RegionSpecifier regionSpecifier) throws DoNotRetryIOException {
-    byte[] value = regionSpecifier.getValue().toByteArray();
+    ByteString value = regionSpecifier.getValue();
     RegionSpecifierType type = regionSpecifier.getType();
     switch (type) {
       case REGION_NAME:
-        return HRegionInfo.encodeRegionName(value);
+        return HRegionInfo.encodeRegionName(value.toByteArray());
       case ENCODED_REGION_NAME:
-        return Bytes.toString(value);
+        return value.toStringUtf8();
       default:
         throw new DoNotRetryIOException(
           "Unsupported region specifier type: " + type);
@@ -3153,6 +3145,19 @@ public final class ProtobufUtil {
     codedInput.setSizeLimit(length);
     builder.mergeFrom(codedInput);
     codedInput.checkLastTagWas(0);
+  }
+
+  public static void mergeFrom(Message.Builder builder, CodedInputStream codedInput, int length)
+      throws IOException {
+    codedInput.resetSizeCounter();
+    int prevLimit = codedInput.setSizeLimit(length);
+
+    int limit = codedInput.pushLimit(length);
+    builder.mergeFrom(codedInput);
+    codedInput.popLimit(limit);
+
+    codedInput.checkLastTagWas(0);
+    codedInput.setSizeLimit(prevLimit);
   }
 
   public static ReplicationLoadSink toReplicationLoadSink(

@@ -54,7 +54,8 @@
 #   HBASE_SHELL_OPTS Extra options passed to the hbase shell.
 #                    Empty by default.
 #
-bin=`dirname "$0"`
+#bin=`dirname "$0"`
+bin=`S=\`readlink "$0"\`; [ -z "$S" ] && S=$0; dirname $S`
 bin=`cd "$bin">/dev/null; pwd`
 
 # This will set HBASE_HOME, etc.
@@ -316,6 +317,18 @@ elif [ "$COMMAND" = "regionserver" ] ; then
   CLASS='org.apache.hadoop.hbase.regionserver.HRegionServer'
   if [ "$1" != "stop" ] ; then
     HBASE_OPTS="$HBASE_OPTS $HBASE_REGIONSERVER_OPTS"
+  fi
+  CGROUP_CPU_PATH=${CGROUP_CPU_PATH:-/sys/fs/cgroup/cpu/hbase-regionserver}
+  if [ -w $CGROUP_CPU_PATH/tasks ] ; then
+    echo ${CGROUP_RS_CPU_SHARES:-10240} > $CGROUP_CPU_PATH/cpu.shares
+    echo $$ >> $CGROUP_CPU_PATH/tasks
+    echo "put to cgroup: $CGROUP_CPU_PATH"
+  fi
+  CGROUP_BLKIO_PATH=${CGROUP_BLKIO_PATH:-/sys/fs/cgroup/blkio}
+  if [ -w $CGROUP_BLKIO_PATH/tasks ] ; then
+    echo ${CGROUP_RS_BLK_WEIGHT:-900} > $CGROUP_BLKIO_PATH/blkio.weight
+    echo $$ >> $CGROUP_BLKIO_PATH/tasks
+    echo "put to cgroup: $CGROUP_BLKIO_PATH"
   fi
 elif [ "$COMMAND" = "thrift" ] ; then
   CLASS='org.apache.hadoop.hbase.thrift.ThriftServer'

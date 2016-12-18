@@ -65,13 +65,14 @@ public class KeyValueCodecWithTags implements Codec {
     }
   }
 
-  public static class KeyValueDecoder extends BaseDecoder {
+  public static class KeyValueDecoder extends KeyValueCodec.KeyValueDecoder {
     public KeyValueDecoder(final InputStream in) {
       super(in);
     }
 
-    protected Cell parseCell() throws IOException {
-      return KeyValue.iscreate(in);
+    @Override
+    protected Cell createCell(byte[] buf, int offset, int len) {
+      return new KeyValue(buf, offset, len);
     }
   }
 

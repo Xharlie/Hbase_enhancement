@@ -187,7 +187,7 @@ public class TestStripeCompactor {
 
     // Create store mock that is satisfactory for compactor.
     HColumnDescriptor col = new HColumnDescriptor(NAME_OF_THINGS);
-    ScanInfo si = new ScanInfo(col, Long.MAX_VALUE, 0, new KVComparator());
+    ScanInfo si = new ScanInfo(conf, col, Long.MAX_VALUE, 0, new KVComparator());
     Store store = mock(Store.class);
     when(store.getFamily()).thenReturn(col);
     when(store.getScanInfo()).thenReturn(si);
@@ -195,7 +195,7 @@ public class TestStripeCompactor {
     when(store.getFileSystem()).thenReturn(mock(FileSystem.class));
     when(store.getRegionInfo()).thenReturn(new HRegionInfo(TABLE_NAME));
     when(store.createWriterInTmp(anyLong(), any(Compression.Algorithm.class),
-        anyBoolean(), anyBoolean(), anyBoolean())).thenAnswer(writers);
+        anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean())).thenAnswer(writers);
     when(store.getComparator()).thenReturn(new KVComparator());
 
     return new StripeCompactor(conf, store) {
@@ -226,6 +226,7 @@ public class TestStripeCompactor {
       .thenReturn(mock(StoreFileScanner.class));
     when(sf.getReader()).thenReturn(r);
     when(sf.createReader()).thenReturn(r);
+    when(sf.createReader(anyBoolean())).thenReturn(r);
     return new CompactionRequest(Arrays.asList(sf));
   }
 

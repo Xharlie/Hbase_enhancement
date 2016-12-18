@@ -895,6 +895,18 @@ module Hbase
     end
 
     #----------------------------------------------------------------------------------------------
+    # Set the whole cluster as unavailable to prevent any request.
+    def set_cluster_unavailable()
+      return @admin.setClusterUnavailable();
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # Set the whole cluster as available client requests.
+    def set_cluster_available()
+      return @admin.setClusterAvailable();
+    end
+
+    #----------------------------------------------------------------------------------------------
     # Returns namespace's structure description
     def describe_namespace(namespace_name)
       namespace = @admin.getNamespaceDescriptor(namespace_name)

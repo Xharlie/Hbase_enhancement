@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.annotations.VisibleForTesting;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
@@ -41,6 +42,7 @@ import org.apache.hadoop.hbase.wal.WALProvider.Writer;
 import org.apache.hadoop.hbase.util.CancelableProgressable;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 
+import org.apache.hadoop.hbase.util.FSUtils;
 // imports for things that haven't moved from regionserver.wal yet.
 import org.apache.hadoop.hbase.regionserver.wal.MetricsWAL;
 import org.apache.hadoop.hbase.regionserver.wal.ProtobufLogReader;
@@ -108,6 +110,9 @@ public class WALFactory {
   private final int timeoutMillis;
 
   private final Configuration conf;
+
+  private Path walDirectory = null;
+  private FileSystem fs = null;
 
   // Used for the singleton WALFactory, see below.
   private WALFactory(Configuration conf) {
@@ -183,6 +188,9 @@ public class WALFactory {
       provider = new DisabledWALProvider();
       provider.init(this, conf, null, factoryId);
     }
+    fs = FileSystem.get(conf);
+    walDirectory =
+        new Path(FSUtils.getRootDir(conf), DefaultWALProvider.getWALDirectoryName(factoryId));
   }
 
   /**
@@ -199,6 +207,10 @@ public class WALFactory {
     // within the getInstance method.
     if (null != provider) {
       provider.close();
+    }
+    // we should contain no more files and ok to delete the whole WAL dir if reach here
+    if (this.fs != null && this.walDirectory != null) {
+      FSUtils.deleteDirectory(this.fs, this.walDirectory);
     }
   }
 
@@ -452,5 +464,10 @@ public class WALFactory {
 
   public final WALProvider getMetaWALProvider() {
     return this.metaProvider.get();
+  }
+
+  @VisibleForTesting
+  public Path getWALDirectory() {
+    return this.walDirectory;
   }
 }

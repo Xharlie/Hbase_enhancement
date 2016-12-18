@@ -44,6 +44,7 @@ import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
+import org.apache.hadoop.hbase.HServerAddress;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.ServerName;
@@ -68,6 +69,7 @@ import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.RegionAction;
 import org.apache.hadoop.hbase.protobuf.generated.HBaseProtos.CompareType;
 import org.apache.hadoop.hbase.protobuf.generated.MasterProtos.GetTableDescriptorsRequest;
 import org.apache.hadoop.hbase.protobuf.generated.MasterProtos.GetTableDescriptorsResponse;
+import org.apache.hadoop.hbase.util.Addressing;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
@@ -135,6 +137,22 @@ public class HTable implements HTableInterface, RegionLocator {
   protected AsyncProcess multiAp;
   private RpcRetryingCallerFactory rpcCallerFactory;
   private RpcControllerFactory rpcControllerFactory;
+
+  /**
+   * for pre-0.92 users
+   * @deprecated use {@link HTable(Configuration, String)}
+   */
+  public HTable(final String tableName) throws IOException {
+    this(HBaseConfiguration.create(), Bytes.toBytes(tableName));
+  }
+
+  /**
+   * for pre-0.92 users
+   * @deprecated use {@link HTable(Configuration, byte[])}
+   */
+  public HTable(final byte[] tableName) throws IOException {
+    this(HBaseConfiguration.create(), tableName);
+  }
 
   /**
    * Creates an object to access a HBase table.
@@ -637,6 +655,32 @@ public class HTable implements HTableInterface, RegionLocator {
   }
 
   /**
+   * for pre-0.94 users<br>
+   * Gets all the regions and their address for this table.
+   * @return A map of HRegionInfo with it's server address
+   * @throws IOException if a remote or network exception occurs
+   * @deprecated Use {@link #getRegionLocations()} or {@link #getStartEndKeys()}
+   */
+  public Map<HRegionInfo, HServerAddress> getRegionsInfo() throws IOException {
+    final Map<HRegionInfo, HServerAddress> regionMap = new TreeMap<HRegionInfo, HServerAddress>();
+
+    final Map<HRegionInfo, ServerName> regionLocations = getRegionLocations();
+
+    for (Map.Entry<HRegionInfo, ServerName> entry : regionLocations.entrySet()) {
+      HServerAddress server = new HServerAddress();
+      ServerName serverName = entry.getValue();
+      if (serverName != null && serverName.getHostAndPort() != null) {
+        server =
+            new HServerAddress(Addressing.createInetSocketAddressFromHostAndPortStr(serverName
+                .getHostAndPort()));
+      }
+      regionMap.put(entry.getKey(), server);
+    }
+
+    return regionMap;
+  }
+
+  /**
    * Gets all the regions and their address for this table.
    * <p>
    * This is mainly useful for the MapReduce integration.
@@ -1031,10 +1075,10 @@ public class HTable implements HTableInterface, RegionLocator {
 
   /**
    * {@inheritDoc}
-   * @throws IOException
    */
   @Override
-  public void put(final Put put) throws IOException {
+  public void put(final Put put) throws InterruptedIOException,
+      RetriesExhaustedWithDetailsException {
     getBufferedMutator().mutate(put);
     if (autoFlush) {
       flushCommits();
@@ -1046,7 +1090,8 @@ public class HTable implements HTableInterface, RegionLocator {
    * @throws IOException
    */
   @Override
-  public void put(final List<Put> puts) throws IOException {
+  public void put(final List<Put> puts) throws InterruptedIOException,
+      RetriesExhaustedWithDetailsException {
     getBufferedMutator().mutate(puts);
     if (autoFlush) {
       flushCommits();
@@ -1438,10 +1483,9 @@ public class HTable implements HTableInterface, RegionLocator {
 
   /**
    * {@inheritDoc}
-   * @throws IOException
    */
   @Override
-  public void flushCommits() throws IOException {
+  public void flushCommits() throws RetriesExhaustedWithDetailsException, InterruptedIOException {
     if (mutator == null) {
       // nothing to flush if there's no mutator; don't bother creating one.
       return;
@@ -1911,7 +1955,7 @@ public class HTable implements HTableInterface, RegionLocator {
   }
 
   @VisibleForTesting
-  BufferedMutator getBufferedMutator() throws IOException {
+  BufferedMutator getBufferedMutator() {
     if (mutator == null) {
       this.mutator = (BufferedMutatorImpl) connection.getBufferedMutator(
           new BufferedMutatorParams(tableName)

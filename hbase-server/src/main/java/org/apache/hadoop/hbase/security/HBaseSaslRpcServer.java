@@ -110,7 +110,7 @@ public class HBaseSaslRpcServer {
         char[] password = getPassword(tokenIdentifier);
         UserGroupInformation user = null;
         user = tokenIdentifier.getUser(); // may throw exception
-        connection.attemptingUser = user;
+        connection.setAttemptingUser(user);
         if (LOG.isDebugEnabled()) {
           LOG.debug("SASL server DIGEST-MD5 callback: setting password "
               + "for client: " + tokenIdentifier.getUser());

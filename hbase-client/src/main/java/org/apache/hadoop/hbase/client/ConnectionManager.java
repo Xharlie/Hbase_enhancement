@@ -42,10 +42,12 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.CallQueueTooBigException;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
@@ -68,6 +70,7 @@ import org.apache.hadoop.hbase.client.MetaScanner.MetaScannerVisitorBase;
 import org.apache.hadoop.hbase.client.backoff.ClientBackoffPolicy;
 import org.apache.hadoop.hbase.client.backoff.ClientBackoffPolicyFactory;
 import org.apache.hadoop.hbase.client.coprocessor.Batch;
+import org.apache.hadoop.hbase.exceptions.ClientExceptionsUtil;
 import org.apache.hadoop.hbase.exceptions.RegionMovedException;
 import org.apache.hadoop.hbase.exceptions.RegionOpeningException;
 import org.apache.hadoop.hbase.ipc.RpcClient;
@@ -188,6 +191,8 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.BlockingRpcChannel;
 import com.google.protobuf.RpcController;
 import com.google.protobuf.ServiceException;
+import org.apache.hadoop.hbase.ClusterNotAvailableException;
+import org.apache.hadoop.hbase.zookeeper.ClusterAvailabilityTracker;
 
 /**
  * An internal, non-instantiable class that manages creation of {@link HConnection}s.
@@ -545,11 +550,14 @@ class ConnectionManager {
   static class HConnectionImplementation implements ClusterConnection, Closeable {
     static final Log LOG = LogFactory.getLog(HConnectionImplementation.class);
     private final long pause;
+    private final long specialPause;
     private final boolean useMetaReplicas;
     private final int numTries;
     final int rpcTimeout;
     private NonceGenerator nonceGenerator = null;
     private final AsyncProcess asyncProcess;
+    private  boolean useClusterAvailability;
+    public volatile ClusterAvailabilityTracker clusterAvailabilityTracker;
     // single tracker per connection
     private final ServerStatisticTracker stats;
 
@@ -609,6 +617,9 @@ class ConnectionManager {
      Registry registry;
 
     private final ClientBackoffPolicy backoffPolicy;
+
+    /** lock guards against multiple threads trying to query the meta region at the same time */
+    private final ReentrantLock userRegionLock = new ReentrantLock();
 
      HConnectionImplementation(Configuration conf, boolean managed) throws IOException {
        this(conf, managed, null, null);
@@ -691,6 +702,9 @@ class ConnectionManager {
       this.interceptor = (new RetryingCallerInterceptorFactory(conf)).build();
       this.rpcCallerFactory = RpcRetryingCallerFactory.instantiate(conf, interceptor, this.stats);
       this.backoffPolicy = ClientBackoffPolicyFactory.create(conf);
+      this.specialPause = conf.getLong(HConstants.HBASE_CLIENT_PAUSE_SPECIAL_CASE,
+          HConstants.DEFAULT_HBASE_CLIENT_PAUSE_SPECIAL_CASE);
+      this.useClusterAvailability = conf.getBoolean(HConstants.HBASE_CLIENT_CLUSTER_AVAILABILITY, HConstants.DEFAULT_USE_CLUSTER_AVAILABILITY);
     }
 
     @Override
@@ -1148,11 +1162,38 @@ class ConnectionManager {
         throw new IllegalArgumentException(
             "table name cannot be null or zero length");
       }
+      if (this.useClusterAvailability){
+        checkAndStartClusterAvailabilityTracker();
+        checkIfClusterAvailable();
+      }
       if (tableName.equals(TableName.META_TABLE_NAME)) {
         return locateMeta(tableName, useCache, replicaId);
       } else {
         // Region not in the cache - have to go to the meta RS
         return locateRegionInMeta(tableName, row, useCache, retry, replicaId);
+      }
+    }
+
+    public void checkIfClusterAvailable() throws IOException {
+      if(null != clusterAvailabilityTracker
+                      && !clusterAvailabilityTracker.isClusterAvailable()) {
+        String errorMsg = "HBase cluster is not available! The Master is not finished starting or admin set cluster to be unavailable.";
+        LOG.warn(errorMsg);
+        throw new ClusterNotAvailableException(errorMsg);
+      }
+    }
+
+    public void checkAndStartClusterAvailabilityTracker() throws IOException {
+      if (clusterAvailabilityTracker == null) {
+        clusterAvailabilityTracker = new ClusterAvailabilityTracker(getKeepAliveZooKeeperWatcher(), this);
+        clusterAvailabilityTracker.start();
+      }
+    }
+
+    public void stopClusterAvailabilityTracker(){
+      if (clusterAvailabilityTracker != null) {
+        clusterAvailabilityTracker.stop();
+        clusterAvailabilityTracker = null;
       }
     }
 
@@ -1240,7 +1281,15 @@ class ConnectionManager {
         }
 
         // Query the meta region
+        long pauseBase = this.pause;
+        userRegionLock.lock();
         try {
+          if (useCache) {// re-check cache after get lock
+            RegionLocations locations = getCachedLocation(tableName, row);
+            if (locations != null && locations.getRegionLocation(replicaId) != null) {
+              return locations;
+            }
+          }
           Result regionInfoRow = null;
           ReversedClientScanner rcs = null;
           try {
@@ -1314,13 +1363,18 @@ class ConnectionManager {
           if (e instanceof RemoteException) {
             e = ((RemoteException)e).unwrapRemoteException();
           }
+          if (e instanceof CallQueueTooBigException) {
+            // use a longer pause between retries when meta call queue already full
+            // TODO regardless of call queue imbalance
+            pauseBase = this.specialPause;
+          }
           if (tries < localNumRetries - 1) {
             if (LOG.isDebugEnabled()) {
               LOG.debug("locateRegionInMeta parentTable=" +
                   TableName.META_TABLE_NAME + ", metaLocation=" +
                 ", attempt=" + tries + " of " +
                 localNumRetries + " failed; retrying after sleep of " +
-                ConnectionUtils.getPauseTime(this.pause, tries) + " because: " + e.getMessage());
+                ConnectionUtils.getPauseTime(pauseBase, tries) + " because: " + e.getMessage());
             }
           } else {
             throw e;
@@ -1330,9 +1384,11 @@ class ConnectionManager {
               e instanceof NoServerForRegionException)) {
             relocateRegion(TableName.META_TABLE_NAME, metaKey, replicaId);
           }
+        } finally {
+          userRegionLock.unlock();
         }
         try{
-          Thread.sleep(ConnectionUtils.getPauseTime(this.pause, tries));
+          Thread.sleep(ConnectionUtils.getPauseTime(pauseBase, tries));
         } catch (InterruptedException e) {
           throw new InterruptedIOException("Giving up trying to location region in " +
             "meta: thread is interrupted.");
@@ -1676,6 +1732,7 @@ class ConnectionManager {
           LOG.info("Closing zookeeper sessionid=0x" +
             Long.toHexString(
               keepAliveZookeeper.getRecoverableZooKeeper().getSessionId()));
+          stopClusterAvailabilityTracker();
           keepAliveZookeeper.internalClose();
           keepAliveZookeeper = null;
         }
@@ -2141,9 +2198,9 @@ class ConnectionManager {
       }
 
       HRegionInfo regionInfo = oldLocation.getRegionInfo();
-      Throwable cause = findException(exception);
+      Throwable cause = ClientExceptionsUtil.findException(exception);
       if (cause != null) {
-        if (cause instanceof RegionTooBusyException || cause instanceof RegionOpeningException) {
+        if (!ClientExceptionsUtil.isMetaClearingException(cause)) {
           // We know that the region is still on this region server
           return;
         }
@@ -2542,6 +2599,11 @@ class ConnectionManager {
     @Override
     public boolean isManaged() {
       return managed;
+    }
+
+    @Override
+    public boolean supportsCellBlock() {
+      return this.rpcClient.supportsCellBlock();
     }
   }
 

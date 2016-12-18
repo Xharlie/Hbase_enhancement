@@ -17,10 +17,14 @@
  */
 package org.apache.hadoop.hbase.io;
 
+import java.io.EOFException;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.util.ByteBufferUtils;
+import org.apache.hadoop.hbase.util.Bytes;
 
 /**
  * Not thread safe!
@@ -47,6 +51,22 @@ public class ByteBufferInputStream extends InputStream {
       return (this.buf.get() & 0xff);
     }
     return -1;
+  }
+
+  /**
+   * Reads the next 4 bytes as an 'int' value from this input stream. If not enough bytes left in
+   * stream, throws EOFException
+   *
+   * @return Next 4 bytes of data read as int
+   * @throws IOException if an IO error occurs
+   */
+  public int readInt() throws IOException{
+    if(this.available()<Bytes.SIZEOF_INT){
+      throw new EOFException();
+    }
+    int i = ByteBufferUtils.toInt(this.buf, this.buf.position());
+    this.buf.position(this.buf.position() + Bytes.SIZEOF_INT);
+    return i;
   }
 
   /**
@@ -97,5 +117,9 @@ public class ByteBufferInputStream extends InputStream {
    */
   public int available() {
     return this.buf.remaining();
+  }
+
+  public ByteBuffer getBuffer(){
+    return this.buf;
   }
 }

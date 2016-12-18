@@ -34,6 +34,8 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.io.hfile.BlockCache;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.CacheStats;
+import org.apache.hadoop.hbase.io.hfile.HFile;
+import org.apache.hadoop.hbase.ipc.RpcServer;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
 import org.apache.hadoop.metrics2.MetricsExecutor;
@@ -60,6 +62,11 @@ class MetricsRegionServerWrapperImpl
   private volatile double requestsPerSecond = 0.0;
   private volatile long readRequestsCount = 0;
   private volatile long writeRequestsCount = 0;
+  private volatile long activeRpcHandlerCount = 0;
+  private volatile long totalSlowRpcCalls = 0;
+  private volatile long totalRpcCalls = 0;
+  private volatile long incSlowRpcCalls = 0;
+  private volatile long incRpcCalls = 0;
   private volatile long checkAndMutateChecksFailed = 0;
   private volatile long checkAndMutateChecksPassed = 0;
   private volatile long storefileIndexSize = 0;
@@ -168,6 +175,21 @@ class MetricsRegionServerWrapperImpl
   }
 
   @Override
+  public long getMultiGetRequestCount() {
+    return regionServer.rpcServices.multiGetRequestCount.get();
+  }
+
+  @Override
+  public long getPutRequestCount() {
+    return regionServer.rpcServices.putRequestCount.get();
+  }
+
+  @Override
+  public long getScanCachingRequestCount() {
+    return regionServer.rpcServices.scanCachingRequestCount.get();
+  }
+
+  @Override
   public int getSplitQueueSize() {
     if (this.regionServer.compactSplitThread == null) {
       return 0;
@@ -268,11 +290,50 @@ class MetricsRegionServerWrapperImpl
   }
 
   @Override
+  public double getBlockCacheMetaHitPercent() {
+    if (this.cacheStats == null) {
+      return 0;
+    }
+    return (int) (this.cacheStats.getMetaHitRatio() * 100);
+  }
+
+  @Override
+  public double getBlockCacheDataHitPercent() {
+    if (this.cacheStats == null) {
+      return 0;
+    }
+    return (int) (this.cacheStats.getDataHitRatio() * 100);
+  }
+
+  @Override
   public int getBlockCacheHitCachingPercent() {
     if (this.cacheStats == null) {
       return 0;
     }
     return (int) (this.cacheStats.getHitCachingRatio() * 100);
+  }
+
+  @Override
+  public int getBlockCacheMetaHitCachingPercent() {
+    if (null == this.cacheStats) {
+      return 0;
+    }
+
+    return (int) (this.cacheStats.getMetaHitCachingRatio() * 100);
+  }
+
+  @Override
+  public int getBlockCacheDataHitCachingPercent() {
+    if (null == this.cacheStats) {
+      return 0;
+    }
+
+    return (int) (this.cacheStats.getDataHitCachingRatio() * 100);
+  }
+
+  @Override
+  public long getBlockCacheFailedInsertions() {
+    return this.cacheStats.getFailedInserts();
   }
 
   @Override public void forceRecompute() {
@@ -321,6 +382,51 @@ class MetricsRegionServerWrapperImpl
   @Override
   public long getWriteRequestsCount() {
     return writeRequestsCount;
+  }
+
+  @Override
+  public long getRpcGetRequestsCount() {
+    return regionServer.rpcServices.rpcGetRequestCount.get();
+  }
+
+  @Override
+  public long getRpcScanRequestsCount() {
+    return regionServer.rpcServices.rpcScanRequestCount.get();
+  }
+
+  @Override
+  public long getRpcMultiRequestsCount() {
+    return regionServer.rpcServices.rpcMultiRequestCount.get();
+  }
+
+  @Override
+  public long getRpcMutateRequestsCount() {
+    return regionServer.rpcServices.rpcMutateRequestCount.get();
+  }
+
+  @Override
+  public long getActiveRpcHandlerCount() {
+    return activeRpcHandlerCount;
+  }
+
+  @Override
+  public long getRpcTotalSlowCallsCount() {
+    return totalSlowRpcCalls;
+  }
+
+  @Override
+  public long getRpcTotalCallsCount() {
+    return totalRpcCalls;
+  }
+
+  @Override
+  public long getRpcIncSlowCallsCount() {
+    return incSlowRpcCalls;
+  }
+
+  @Override
+  public long getRpcIncCallsCount() {
+    return incRpcCalls;
   }
 
   @Override
@@ -415,126 +521,170 @@ class MetricsRegionServerWrapperImpl
 
     private long lastRan = 0;
     private long lastRequestCount = 0;
+    private long lastTime = 0;
+    private long lastTotalCalls = 0;
+    private long lastTotalSlowCalls = 0;
 
-    @Override
-    synchronized public void run() {
-      initBlockCache();
-      cacheStats = blockCache.getStats();
+    @Override synchronized public void run() {
+      try {
+        initBlockCache();
+        cacheStats = blockCache.getStats();
 
-      HDFSBlocksDistribution hdfsBlocksDistribution =
-          new HDFSBlocksDistribution();
-      HDFSBlocksDistribution hdfsBlocksDistributionSecondaryRegions =
-          new HDFSBlocksDistribution();
+        HDFSBlocksDistribution hdfsBlocksDistribution = new HDFSBlocksDistribution();
+        HDFSBlocksDistribution hdfsBlocksDistributionSecondaryRegions =
+            new HDFSBlocksDistribution();
 
-      long tempNumStores = 0;
-      long tempNumStoreFiles = 0;
-      long tempMemstoreSize = 0;
-      long tempStoreFileSize = 0;
-      long tempReadRequestsCount = 0;
-      long tempWriteRequestsCount = 0;
-      long tempCheckAndMutateChecksFailed = 0;
-      long tempCheckAndMutateChecksPassed = 0;
-      long tempStorefileIndexSize = 0;
-      long tempTotalStaticIndexSize = 0;
-      long tempTotalStaticBloomSize = 0;
-      long tempNumMutationsWithoutWAL = 0;
-      long tempDataInMemoryWithoutWAL = 0;
-      int tempPercentFileLocal = 0;
-      int tempPercentFileLocalSecondaryRegions = 0;
-      long tempFlushedCellsCount = 0;
-      long tempCompactedCellsCount = 0;
-      long tempMajorCompactedCellsCount = 0;
-      long tempFlushedCellsSize = 0;
-      long tempCompactedCellsSize = 0;
-      long tempMajorCompactedCellsSize = 0;
-      long tempBlockedRequestsCount = 0L;
+        long tempNumStores = 0;
+        long tempNumStoreFiles = 0;
+        long tempMemstoreSize = 0;
+        long tempStoreFileSize = 0;
+        long tempReadRequestsCount = 0;
+        long tempWriteRequestsCount = 0;
+        long tempActiveRpcHandlerCount = 0;
+        long tempCheckAndMutateChecksFailed = 0;
+        long tempCheckAndMutateChecksPassed = 0;
+        long tempStorefileIndexSize = 0;
+        long tempTotalStaticIndexSize = 0;
+        long tempTotalStaticBloomSize = 0;
+        long tempNumMutationsWithoutWAL = 0;
+        long tempDataInMemoryWithoutWAL = 0;
+        int tempPercentFileLocal = 0;
+        int tempPercentFileLocalSecondaryRegions = 0;
+        long tempFlushedCellsCount = 0;
+        long tempCompactedCellsCount = 0;
+        long tempMajorCompactedCellsCount = 0;
+        long tempFlushedCellsSize = 0;
+        long tempCompactedCellsSize = 0;
+        long tempMajorCompactedCellsSize = 0;
+        long tempBlockedRequestsCount = 0L;
 
-      for (Region r : regionServer.getOnlineRegionsLocalContext()) {
-        tempNumMutationsWithoutWAL += r.getNumMutationsWithoutWAL();
-        tempDataInMemoryWithoutWAL += r.getDataInMemoryWithoutWAL();
-        tempReadRequestsCount += r.getReadRequestsCount();
-        tempWriteRequestsCount += r.getWriteRequestsCount();
-        tempCheckAndMutateChecksFailed += r.getCheckAndMutateChecksFailed();
-        tempCheckAndMutateChecksPassed += r.getCheckAndMutateChecksPassed();
-        tempBlockedRequestsCount += r.getBlockedRequestsCount();
-        List<Store> storeList = r.getStores();
-        tempNumStores += storeList.size();
-        for (Store store : storeList) {
-          tempNumStoreFiles += store.getStorefilesCount();
-          tempMemstoreSize += store.getMemStoreSize();
-          tempStoreFileSize += store.getStorefilesSize();
-          tempStorefileIndexSize += store.getStorefilesIndexSize();
-          tempTotalStaticBloomSize += store.getTotalStaticBloomSize();
-          tempTotalStaticIndexSize += store.getTotalStaticIndexSize();
-          tempFlushedCellsCount += store.getFlushedCellsCount();
-          tempCompactedCellsCount += store.getCompactedCellsCount();
-          tempMajorCompactedCellsCount += store.getMajorCompactedCellsCount();
-          tempFlushedCellsSize += store.getFlushedCellsSize();
-          tempCompactedCellsSize += store.getCompactedCellsSize();
-          tempMajorCompactedCellsSize += store.getMajorCompactedCellsSize();
+        for (Region r : regionServer.getOnlineRegionsLocalContext()) {
+          tempNumMutationsWithoutWAL += r.getNumMutationsWithoutWAL();
+          tempDataInMemoryWithoutWAL += r.getDataInMemoryWithoutWAL();
+          tempReadRequestsCount += r.getReadRequestsCount();
+          tempWriteRequestsCount += r.getWriteRequestsCount();
+          tempCheckAndMutateChecksFailed += r.getCheckAndMutateChecksFailed();
+          tempCheckAndMutateChecksPassed += r.getCheckAndMutateChecksPassed();
+          tempBlockedRequestsCount += r.getBlockedRequestsCount();
+          List<Store> storeList = r.getStores();
+          tempNumStores += storeList.size();
+          for (Store store : storeList) {
+            tempNumStoreFiles += store.getStorefilesCount();
+            tempMemstoreSize += store.getMemStoreSize();
+            tempStoreFileSize += store.getStorefilesSize();
+            tempStorefileIndexSize += store.getStorefilesIndexSize();
+            tempTotalStaticBloomSize += store.getTotalStaticBloomSize();
+            tempTotalStaticIndexSize += store.getTotalStaticIndexSize();
+            tempFlushedCellsCount += store.getFlushedCellsCount();
+            tempCompactedCellsCount += store.getCompactedCellsCount();
+            tempMajorCompactedCellsCount += store.getMajorCompactedCellsCount();
+            tempFlushedCellsSize += store.getFlushedCellsSize();
+            tempCompactedCellsSize += store.getCompactedCellsSize();
+            tempMajorCompactedCellsSize += store.getMajorCompactedCellsSize();
+          }
+
+          HDFSBlocksDistribution distro = r.getHDFSBlocksDistribution();
+          hdfsBlocksDistribution.add(distro);
+          if (r.getRegionInfo().getReplicaId() != HRegionInfo.DEFAULT_REPLICA_ID) {
+            hdfsBlocksDistributionSecondaryRegions.add(distro);
+          }
         }
 
-        HDFSBlocksDistribution distro = r.getHDFSBlocksDistribution();
-        hdfsBlocksDistribution.add(distro);
-        if (r.getRegionInfo().getReplicaId() != HRegionInfo.DEFAULT_REPLICA_ID) {
-          hdfsBlocksDistributionSecondaryRegions.add(distro);
+        float localityIndex =
+            hdfsBlocksDistribution
+                .getBlockLocalityIndex(regionServer.getServerName().getHostname());
+        tempPercentFileLocal = (int) (localityIndex * 100);
+
+        float localityIndexSecondaryRegions =
+            hdfsBlocksDistributionSecondaryRegions.getBlockLocalityIndex(regionServer
+                .getServerName().getHostname());
+        tempPercentFileLocalSecondaryRegions = (int) (localityIndexSecondaryRegions * 100);
+
+        // Compute the number of requests per second
+        long currentTime = EnvironmentEdgeManager.currentTime();
+
+        // assume that it took PERIOD seconds to start the executor.
+        // this is a guess but it's a pretty good one.
+        if (lastRan == 0) {
+          lastRan = currentTime - period;
         }
+
+        // calculate rpc calls per seconds
+        if (null != regionServer && null != regionServer.getRpcServer()
+            && (regionServer.getRpcServer() instanceof RpcServer)) {
+          RpcServer server = (RpcServer) regionServer.getRpcServer();
+          if (null != server.getScheduler()) {
+            tempActiveRpcHandlerCount = server.getScheduler().getActiveRpcHandlerCount();
+          }
+
+          totalSlowRpcCalls = server.getTotalSlowRpcCalls();
+
+          totalRpcCalls = server.getTotalRpcCalls();
+        }
+
+        // If we've time traveled keep the last requests per second.
+        if ((currentTime - lastRan) > 0) {
+          long currentRequestCount = getTotalRequestCount();
+          requestsPerSecond =
+              (currentRequestCount - lastRequestCount) / ((currentTime - lastRan) / 1000.0);
+          lastRequestCount = currentRequestCount;
+        }
+        lastRan = currentTime;
+
+        // increment rpc metrics use a longer period to control the report interval
+        if (null != regionServer && null != regionServer.getRpcServer()
+            && (regionServer.getRpcServer() instanceof RpcServer)) {
+          RpcServer server = (RpcServer) regionServer.getRpcServer();
+          long incPeriod = server.getIncrementPeriod();
+          if (currentTime - lastTime >= incPeriod) {
+            long curTotalSlowCalls = server.getTotalSlowRpcCalls();
+            incSlowRpcCalls = curTotalSlowCalls - lastTotalSlowCalls;
+            lastTotalSlowCalls = curTotalSlowCalls;
+
+            long curTotalCalls = server.getTotalRpcCalls();
+            incRpcCalls = curTotalCalls - lastTotalCalls;
+            lastTotalCalls = curTotalCalls;
+
+            lastTime = currentTime;
+          }
+        }
+
+        if (null != regionServer.walFactory && null != regionServer.walFactory.getWALProvider()
+            && null != regionServer.walFactory.getMetaWALProvider()) {
+          numWALFiles =
+              regionServer.walFactory.getWALProvider().getNumLogFiles()
+                  + regionServer.walFactory.getMetaWALProvider().getNumLogFiles();
+          walFileSize =
+              regionServer.walFactory.getWALProvider().getLogFileSize()
+                  + regionServer.walFactory.getMetaWALProvider().getLogFileSize();
+        }
+        // Copy over computed values so that no thread sees half computed values.
+        numStores = tempNumStores;
+        numStoreFiles = tempNumStoreFiles;
+        memstoreSize = tempMemstoreSize;
+        storeFileSize = tempStoreFileSize;
+        readRequestsCount = tempReadRequestsCount;
+        writeRequestsCount = tempWriteRequestsCount;
+        activeRpcHandlerCount = tempActiveRpcHandlerCount;
+        checkAndMutateChecksFailed = tempCheckAndMutateChecksFailed;
+        checkAndMutateChecksPassed = tempCheckAndMutateChecksPassed;
+        storefileIndexSize = tempStorefileIndexSize;
+        totalStaticIndexSize = tempTotalStaticIndexSize;
+        totalStaticBloomSize = tempTotalStaticBloomSize;
+        numMutationsWithoutWAL = tempNumMutationsWithoutWAL;
+        dataInMemoryWithoutWAL = tempDataInMemoryWithoutWAL;
+        percentFileLocal = tempPercentFileLocal;
+        percentFileLocalSecondaryRegions = tempPercentFileLocalSecondaryRegions;
+        flushedCellsCount = tempFlushedCellsCount;
+        compactedCellsCount = tempCompactedCellsCount;
+        majorCompactedCellsCount = tempMajorCompactedCellsCount;
+        flushedCellsSize = tempFlushedCellsSize;
+        compactedCellsSize = tempCompactedCellsSize;
+        majorCompactedCellsSize = tempMajorCompactedCellsSize;
+        blockedRequestsCount = tempBlockedRequestsCount;
+      } catch (Throwable e) {
+        LOG.warn("Caught exception! Will suppress and retry.", e);
       }
-
-      float localityIndex = hdfsBlocksDistribution.getBlockLocalityIndex(
-          regionServer.getServerName().getHostname());
-      tempPercentFileLocal = (int) (localityIndex * 100);
-
-      float localityIndexSecondaryRegions = hdfsBlocksDistributionSecondaryRegions
-          .getBlockLocalityIndex(regionServer.getServerName().getHostname());
-      tempPercentFileLocalSecondaryRegions = (int) (localityIndexSecondaryRegions * 100);
-
-      //Compute the number of requests per second
-      long currentTime = EnvironmentEdgeManager.currentTime();
-
-      // assume that it took PERIOD seconds to start the executor.
-      // this is a guess but it's a pretty good one.
-      if (lastRan == 0) {
-        lastRan = currentTime - period;
-      }
-
-
-      //If we've time traveled keep the last requests per second.
-      if ((currentTime - lastRan) > 0) {
-        long currentRequestCount = getTotalRequestCount();
-        requestsPerSecond = (currentRequestCount - lastRequestCount) /
-            ((currentTime - lastRan) / 1000.0);
-        lastRequestCount = currentRequestCount;
-      }
-      lastRan = currentTime;
-
-      numWALFiles = regionServer.walFactory.getWALProvider().getNumLogFiles() +
-          regionServer.walFactory.getMetaWALProvider().getNumLogFiles();
-      walFileSize = regionServer.walFactory.getWALProvider().getLogFileSize() +
-          regionServer.walFactory.getMetaWALProvider().getLogFileSize();
-      //Copy over computed values so that no thread sees half computed values.
-      numStores = tempNumStores;
-      numStoreFiles = tempNumStoreFiles;
-      memstoreSize = tempMemstoreSize;
-      storeFileSize = tempStoreFileSize;
-      readRequestsCount = tempReadRequestsCount;
-      writeRequestsCount = tempWriteRequestsCount;
-      checkAndMutateChecksFailed = tempCheckAndMutateChecksFailed;
-      checkAndMutateChecksPassed = tempCheckAndMutateChecksPassed;
-      storefileIndexSize = tempStorefileIndexSize;
-      totalStaticIndexSize = tempTotalStaticIndexSize;
-      totalStaticBloomSize = tempTotalStaticBloomSize;
-      numMutationsWithoutWAL = tempNumMutationsWithoutWAL;
-      dataInMemoryWithoutWAL = tempDataInMemoryWithoutWAL;
-      percentFileLocal = tempPercentFileLocal;
-      percentFileLocalSecondaryRegions = tempPercentFileLocalSecondaryRegions;
-      flushedCellsCount = tempFlushedCellsCount;
-      compactedCellsCount = tempCompactedCellsCount;
-      majorCompactedCellsCount = tempMajorCompactedCellsCount;
-      flushedCellsSize = tempFlushedCellsSize;
-      compactedCellsSize = tempCompactedCellsSize;
-      majorCompactedCellsSize = tempMajorCompactedCellsSize;
-      blockedRequestsCount = tempBlockedRequestsCount;
     }
   }
 

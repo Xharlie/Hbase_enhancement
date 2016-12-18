@@ -47,6 +47,8 @@ import org.apache.hadoop.hbase.regionserver.Store;
 import org.apache.hadoop.hbase.regionserver.StoreEngine;
 import org.apache.hadoop.hbase.regionserver.StripeStoreConfig;
 import org.apache.hadoop.hbase.regionserver.StripeStoreEngine;
+import org.apache.hadoop.hbase.regionserver.controller.FlushThroughputControllerFactory;
+import org.apache.hadoop.hbase.regionserver.controller.PressureAwareFlushThroughputController;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVMClusterUtil;
@@ -201,24 +203,24 @@ public class TestCompactionWithThroughputController {
       PressureAwareCompactionThroughputController throughputController =
           (PressureAwareCompactionThroughputController) regionServer.compactSplitThread
               .getCompactionThroughputController();
-      assertEquals(10L * 1024 * 1024, throughputController.maxThroughput, EPSILON);
+      assertEquals(10L * 1024 * 1024, throughputController.getMaxThroughput(), EPSILON);
       Table table = conn.getTable(tableName);
       for (int i = 0; i < 5; i++) {
         table.put(new Put(Bytes.toBytes(i)).add(family, qualifier, new byte[0]));
         TEST_UTIL.flush(tableName);
       }
       Thread.sleep(2000);
-      assertEquals(15L * 1024 * 1024, throughputController.maxThroughput, EPSILON);
+      assertEquals(15L * 1024 * 1024, throughputController.getMaxThroughput(), EPSILON);
 
       table.put(new Put(Bytes.toBytes(5)).add(family, qualifier, new byte[0]));
       TEST_UTIL.flush(tableName);
       Thread.sleep(2000);
-      assertEquals(20L * 1024 * 1024, throughputController.maxThroughput, EPSILON);
+      assertEquals(20L * 1024 * 1024, throughputController.getMaxThroughput(), EPSILON);
 
       table.put(new Put(Bytes.toBytes(6)).add(family, qualifier, new byte[0]));
       TEST_UTIL.flush(tableName);
       Thread.sleep(2000);
-      assertEquals(Double.MAX_VALUE, throughputController.maxThroughput, EPSILON);
+      assertEquals(Double.MAX_VALUE, throughputController.getMaxThroughput(), EPSILON);
 
       conf.set(CompactionThroughputControllerFactory.HBASE_THROUGHPUT_CONTROLLER_KEY,
         NoLimitCompactionThroughputController.class.getName());

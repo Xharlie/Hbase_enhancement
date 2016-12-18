@@ -525,6 +525,7 @@ public class AssignmentManager extends ZooKeeperListener {
     }
 
     boolean failover = !serverManager.getDeadServers().isEmpty();
+    boolean failoverByWALSplit = false;
     if (failover) {
       // This may not be a failover actually, especially if meta is on this master.
       if (LOG.isDebugEnabled()) {
@@ -590,6 +591,9 @@ public class AssignmentManager extends ZooKeeperListener {
           if (fs.exists(logDir) || fs.exists(splitDir)) {
             LOG.debug("Found queued dead server " + serverName);
             failover = true;
+            //if killed some rs while shutdown the whole cluster, ssh will have no chance to
+            //process the WAL, only process those rs by ssh to keep rs locality
+            failoverByWALSplit = true;
             break;
           }
         }
@@ -606,14 +610,35 @@ public class AssignmentManager extends ZooKeeperListener {
     Set<TableName> disabledOrDisablingOrEnabling = null;
     Map<HRegionInfo, ServerName> allRegions = null;
 
-    if (!failover) {
+    Map<HRegionInfo, ServerName> regionsToRetain = null;
+    Set<ServerName> queuedDeadServers = serverManager.getRequeuedDeadServers().keySet();
+    Set<HRegionInfo> regionsOnQueuedDeadServer = null;
+
+    //not clean start up, get all regions on queued dead server
+    if (failoverByWALSplit) {
+      if (queuedDeadServers != null && !queuedDeadServers.isEmpty()) {
+        Iterator<ServerName> serverNameIterator = queuedDeadServers.iterator();
+        ServerName sn = null;
+        regionsOnQueuedDeadServer = new HashSet<HRegionInfo>();
+        while (serverNameIterator.hasNext()) {
+          sn = serverNameIterator.next();
+          Set<HRegionInfo> hRegionInfoSet = regionStates.getServerRegions(sn);
+          if (hRegionInfoSet != null) {
+            regionsOnQueuedDeadServer.addAll(hRegionInfoSet);
+          }
+        }
+      }
+    }
+
+    if (!failover || failoverByWALSplit) {
       disabledOrDisablingOrEnabling = tableStateManager.getTablesInStates(
         ZooKeeperProtos.Table.State.DISABLED, ZooKeeperProtos.Table.State.DISABLING,
         ZooKeeperProtos.Table.State.ENABLING);
 
       // Clean re/start, mark all user regions closed before reassignment
       allRegions = regionStates.closeAllUserRegions(
-        disabledOrDisablingOrEnabling);
+        disabledOrDisablingOrEnabling, regionsOnQueuedDeadServer);
+      regionsToRetain = allRegions;
     }
 
     // Now region states are restored
@@ -624,7 +649,7 @@ public class AssignmentManager extends ZooKeeperListener {
       LOG.info("Found regions out on cluster or in RIT; presuming failover");
       // Process list of dead servers and regions in RIT.
       // See HBASE-4580 for more information.
-      processDeadServersAndRecoverLostRegions(deadServers);
+      processDeadServersAndRecoverLostRegions(failoverByWALSplit ? queuedDeadServers : deadServers);
     }
 
     if (!failover && useZKForAssignment) {
@@ -639,10 +664,10 @@ public class AssignmentManager extends ZooKeeperListener {
     // in transition, if any, are for regions not related to those
     // dead servers at all, and can be done in parallel to SSH.
     failoverCleanupDone();
-    if (!failover) {
+    if (!failover || failoverByWALSplit) {
       // Fresh cluster startup.
       LOG.info("Clean cluster startup. Assigning user regions");
-      assignAllUserRegions(allRegions);
+      assignAllUserRegions(regionsToRetain);
     }
     // unassign replicas of the split parents and the merged regions
     // the daughter replicas are opened in assignAllUserRegions if it was
@@ -2050,7 +2075,7 @@ public class AssignmentManager extends ZooKeeperListener {
    * @param forceNewPlan
    */
   private void assign(RegionState state,
-      final boolean setOfflineInZK, final boolean forceNewPlan) {
+      boolean setOfflineInZK, final boolean forceNewPlan) {
     long startTime = EnvironmentEdgeManager.currentTime();
     try {
       Configuration conf = server.getConfiguration();
@@ -2096,6 +2121,7 @@ public class AssignmentManager extends ZooKeeperListener {
           return;
         }
         if (setOfflineInZK && versionOfOfflineNode == -1) {
+          LOG.info("Setting node as OFFLINED in ZooKeeper for region " + region);
           // get the version of the znode after setting it to OFFLINE.
           // versionOfOfflineNode will be -1 if the znode was not set to OFFLINE
           versionOfOfflineNode = setOfflineInZooKeeper(currentState, plan.getDestination());
@@ -2265,8 +2291,13 @@ public class AssignmentManager extends ZooKeeperListener {
             // Clean out plan we failed execute and one that doesn't look like it'll
             // succeed anyways; we need a new plan!
             // Transition back to OFFLINE
+            LOG.info("Region assignment plan changed from " + plan.getDestination() + " to "
+                + newPlan.getDestination() + " server.");
             currentState = regionStates.updateRegionState(region, State.OFFLINE);
             versionOfOfflineNode = -1;
+            if (useZKForAssignment) {
+              setOfflineInZK = true;
+            }
             plan = newPlan;
           } else if(plan.getDestination().equals(newPlan.getDestination()) &&
               previousException instanceof FailedServerException) {
@@ -2299,7 +2330,33 @@ public class AssignmentManager extends ZooKeeperListener {
     LOG.debug("ALREADY_OPENED " + region.getRegionNameAsString()
       + " to " + sn);
     String encodedName = region.getEncodedName();
-    deleteNodeInStates(encodedName, "offline", sn, EventType.M_ZK_REGION_OFFLINE);
+    
+    //If use ZkForAssignment, region already Opened event should not be handled, 
+    //leave it to zk event. See HBase-14407.
+    if(useZKForAssignment){
+      String node = ZKAssign.getNodeName(watcher, encodedName);
+      Stat stat = new Stat();
+      try {
+        byte[] existingBytes = ZKUtil.getDataNoWatch(watcher, node, stat);
+        if(existingBytes!=null){
+          RegionTransition rt= RegionTransition.parseFrom(existingBytes);
+          EventType et = rt.getEventType();
+          if (et.equals(EventType.RS_ZK_REGION_OPENED)) {
+            LOG.debug("ALREADY_OPENED " + region.getRegionNameAsString()
+              + " and node in "+et+" state");
+            return;
+          }
+        }
+      } catch (KeeperException ke) {
+        LOG.warn("Unexpected ZK exception getData " + node
+          + " node for the region " + encodedName, ke);
+      } catch (DeserializationException e) {
+        LOG.warn("Get RegionTransition from zk deserialization failed! ", e);
+      }
+      
+      deleteNodeInStates(encodedName, "offline", sn, EventType.M_ZK_REGION_OFFLINE);
+    }
+    
     regionStates.regionOnline(region, sn);
   }
 

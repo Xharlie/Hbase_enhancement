@@ -19,9 +19,12 @@
 --%>
 <%@ page contentType="text/html;charset=UTF-8"
   import="static org.apache.commons.lang.StringEscapeUtils.escapeXml"
-  import="java.util.TreeMap"
-  import="java.util.Map"
+  import="java.util.*"
+  import="com.google.protobuf.ByteString"
+  import="org.apache.hadoop.hbase.protobuf.generated.*"
+  import="org.apache.hadoop.hbase.protobuf.generated.HBaseProtos.RegionSpecifier.RegionSpecifierType"
   import="org.apache.hadoop.conf.Configuration"
+  import="org.apache.hadoop.util.StringUtils"
   import="org.apache.hadoop.hbase.client.HTable"
   import="org.apache.hadoop.hbase.client.Admin"
   import="org.apache.hadoop.hbase.client.HConnectionManager"
@@ -44,8 +47,14 @@
   Configuration conf = master.getConfiguration();
   MetaTableLocator metaTableLocator = new MetaTableLocator();
   String fqtn = request.getParameter("name");
+  String sortKey = request.getParameter("sort");
+  String reverse = request.getParameter("reverse");
+  final boolean reverseOrder = (reverse==null||!reverse.equals("false"));
+  String showWholeKey = request.getParameter("showwhole");
+  final boolean showWhole = (showWholeKey!=null && showWholeKey.equals("true"));
   HTable table = null;
   String tableHeader;
+  String newTableHeader;
   boolean withReplica = false;
   ServerName rl = metaTableLocator.getMetaRegionLocation(master.getZooKeeper());
   boolean showFragmentation = conf.getBoolean("hbase.master.ui.fragmentation.enabled", false);
@@ -122,9 +131,11 @@ if ( fqtn != null ) {
   table = new HTable(conf, fqtn);
   if (table.getTableDescriptor().getRegionReplication() > 1) {
     tableHeader = "<h2>Table Regions</h2><table class=\"table table-striped\" style=\"table-layout: fixed; word-wrap: break-word;\"><tr><th style=\"width:22%\">Name</th><th>Region Server</th><th style=\"width:22%\">Start Key</th><th style=\"width:22%\">End Key</th><th>Locality</th><th>Requests</th><th>ReplicaID</th></tr>";
+    newTableHeader = "<h2>Table Regions</h2><table class=\"table table-striped\" style=\"table-layout: fixed; word-wrap: break-word;\"><tr><th>Name</th><th>Region Server</th><th>ReadRequests</th><th>WriteRequests</th><th>RegionSize</th><th>FileNum</th><th>MemSize</th><th>Locality</th><th>Start Key</th><th>End Key</th><th>ReplicaID</th></tr>";
     withReplica = true;
   } else {
     tableHeader = "<h2>Table Regions</h2><table class=\"table table-striped\" style=\"table-layout: fixed; word-wrap: break-word;\"><tr><th style=\"width:22%\">Name</th><th>Region Server</th><th style=\"width:22%\">Start Key</th><th style=\"width:22%\">End Key</th><th>Locality</th><th>Requests</th></tr>";
+    newTableHeader = "<h2>Table Regions</h2><table class=\"table table-striped\" style=\"table-layout: fixed; word-wrap: break-word;\"><tr><th>Name</th><th>Region Server</th><th>ReadRequests</th><th>WriteRequests</th><th>RegionSize</th><th>FileNum</th><th>MemSize</th><th>Locality</th><th>Start Key</th><th>End Key</th></tr>";
   }
   if ( !readOnly && action != null ) { 
 %>
@@ -175,7 +186,7 @@ if ( fqtn != null ) {
 <%
   if(fqtn.equals(TableName.META_TABLE_NAME.getNameAsString())) {
 %>
-<%= tableHeader %>
+<%= newTableHeader %>
 <%
   // NOTE: Presumes meta with one or more replicas
   for (int j = 0; j < numMetaReplicas; j++) {
@@ -183,16 +194,42 @@ if ( fqtn != null ) {
                             HRegionInfo.FIRST_META_REGIONINFO, j);
     ServerName metaLocation = metaTableLocator.waitMetaRegionLocation(master.getZooKeeper(), j, 1);
     for (int i = 0; i < 1; i++) {
-      String url = "//" + metaLocation.getHostname() + ":" +
-                   master.getRegionServerInfoPort(metaLocation) + "/";
+      String url = "";
+      String readReq = "N/A";
+      String writeReq = "N/A";
+      String fileSize = "N/A";
+      String fileNum = "N/A";
+      String memSize = "N/A";
+      float locality = 0.0f;
+
+      if (metaLocation != null && master.isActiveMaster()) {
+        ServerLoad sl = master.getServerManager().getLoad(metaLocation);
+        url = "//" + metaLocation.getHostname() + ":" + master.getRegionServerInfoPort(metaLocation) + "/";
+        if (sl != null) {
+          Map<byte[], RegionLoad> map = sl.getRegionsLoad();
+          if (map.containsKey(meta.getRegionName())) {
+            RegionLoad load = map.get(meta.getRegionName());
+            readReq = String.format("%,1d", load.getReadRequestsCount());
+            writeReq = String.format("%,1d", load.getWriteRequestsCount());
+            fileSize = StringUtils.byteDesc(load.getStorefileSizeMB()*1024l*1024);
+            fileNum = String.format("%,1d", load.getStorefiles());
+            memSize = StringUtils.byteDesc(load.getMemStoreSizeMB()*1024l*1024);
+            locality = load.getDataLocality();
+          }
+        }
+      }
 %>
 <tr>
   <td><%= escapeXml(meta.getRegionNameAsString()) %></td>
     <td><a href="<%= url %>"><%= metaLocation.getHostname().toString() + ":" + master.getRegionServerInfoPort(metaLocation) %></a></td>
+    <td><%= readReq%></td>
+    <td><%= writeReq%></td>
+    <td><%= fileSize%></td>
+    <td><%= fileNum%></td>
+    <td><%= memSize%></td>
+    <td><%= locality%></td>
     <td><%= escapeXml(Bytes.toString(meta.getStartKey())) %></td>
     <td><%= escapeXml(Bytes.toString(meta.getEndKey())) %></td>
-    <td>-</td>
-    <td>-</td>
 </tr>
 <%  } %>
 <%} %>
@@ -239,26 +276,271 @@ if ( fqtn != null ) {
 <%  } %>
 </table>
 <%
+  long totalReadReq = 0;
+  long totalWriteReq = 0;
+  long totalSize = 0;
+  long totalFileNum = 0;
+  long totalMemSize = 0;
+  String urlRegionServer = null;
   Map<ServerName, Integer> regDistribution = new TreeMap<ServerName, Integer>();
-  Map<HRegionInfo, ServerName> regions = table.getRegionLocations();
-  if(regions != null && regions.size() > 0) { %>
-<%=     tableHeader %>
-<%
-  for (Map.Entry<HRegionInfo, ServerName> hriEntry : regions.entrySet()) {
+  Map<HRegionInfo, RegionLoad> regionsToLoad = new LinkedHashMap<HRegionInfo, RegionLoad>();
+  Map<HRegionInfo, ServerName> regionsToServer = table.getRegionLocations();
+  for (Map.Entry<HRegionInfo, ServerName> hriEntry : regionsToServer.entrySet()) {
     HRegionInfo regionInfo = hriEntry.getKey();
     ServerName addr = hriEntry.getValue();
-    long req = 0;
-    float locality = 0.0f;
-    String urlRegionServer = null;
 
     if (addr != null) {
-      ServerLoad sl = master.getServerManager().getLoad(addr);
+      ServerLoad sl = master.isActiveMaster() ? master.getServerManager().getLoad(addr) : null;
       if (sl != null) {
-        Map<byte[], RegionLoad> map = sl.getRegionsLoad();
-        if (map.containsKey(regionInfo.getRegionName())) {
-          req = map.get(regionInfo.getRegionName()).getRequestsCount();
-          locality = map.get(regionInfo.getRegionName()).getDataLocality();
+        Map<byte[], RegionLoad> regionLoads = sl.getRegionsLoad();
+        RegionLoad regionload = regionLoads.get(regionInfo.getRegionName());
+        regionsToLoad.put(regionInfo, regionload);
+        if(regionload != null) {
+          totalReadReq += regionload.getReadRequestsCount();
+          totalWriteReq += regionload.getWriteRequestsCount();
+          totalSize += regionload.getStorefileSizeMB();
+          totalFileNum += regionload.getStorefiles();
+          totalMemSize += regionload.getMemStoreSizeMB();
+        } else {
+          RegionLoad load0 = new RegionLoad(ClusterStatusProtos.RegionLoad.newBuilder().setRegionSpecifier(HBaseProtos.RegionSpecifier.newBuilder().setValue(ByteString.copyFrom(regionInfo.getRegionName())).setType(RegionSpecifierType.REGION_NAME).build()).build());
+          regionsToLoad.put(regionInfo, load0);
         }
+      }else{
+        RegionLoad load0 = new RegionLoad(ClusterStatusProtos.RegionLoad.newBuilder().setRegionSpecifier(HBaseProtos.RegionSpecifier.newBuilder().setValue(ByteString.copyFrom(regionInfo.getRegionName())).setType(RegionSpecifierType.REGION_NAME).build()).build());
+        regionsToLoad.put(regionInfo, load0);
+      }
+    }else{
+      RegionLoad load0 = new RegionLoad(ClusterStatusProtos.RegionLoad.newBuilder().setRegionSpecifier(HBaseProtos.RegionSpecifier.newBuilder().setValue(ByteString.copyFrom(regionInfo.getRegionName())).setType(RegionSpecifierType.REGION_NAME).build()).build());
+      regionsToLoad.put(regionInfo, load0);
+    }
+  }
+
+  if(regionsToServer != null && regionsToServer.size() > 0) { %>
+<h2>Table Regions</h2>
+<%
+  if (!master.isActiveMaster()) {
+%>
+<div class="alert alert-warning">
+We're on Backup Master now, information displayed is incomplete, please check Active Master to confirm
+</div>
+<%
+  }
+%>
+Sort As
+<select id="sel">
+<option value="regionName">RegionName</option>
+<option value="readrequest">ReadRequest</option>
+<option value="writerequest">WriteRequest</option>
+<option value="size">RegionSize</option>
+<option value="filenum">FileNum</option>
+<option value="memstore">MemstoreSize</option>
+<option value="locality">Locality</option>
+</select>
+Ascending<input type="checkbox" id="ascending" value="Ascending">
+ShowDetailName&Start/End Key<input type="checkbox" id="showWhole">
+<input type="button" id="submit" value="Reorder" onClick="reloadAsSort()" style="font-size: 12pt; width: 10em" class="btn">
+<p>
+
+<table class="table table-striped">
+<tr>
+<th>Name(<%= String.format("%,1d", regionsToServer.size())%>)</th>
+<th>Region Server</th>
+<th>ReadRequests<br>(<%= String.format("%,1d", totalReadReq)%>)</th>
+<th>WriteRequests<br>(<%= String.format("%,1d", totalWriteReq)%>)</th>
+<th>RegionSize<br>(<%= StringUtils.byteDesc(totalSize*1024l*1024)%>)</th>
+<th>FileNum<br>(<%= String.format("%,1d", totalFileNum)%>)</th>
+<th>MemSize<br>(<%= StringUtils.byteDesc(totalMemSize*1024l*1024)%>)</th>
+<th>Locality</th>
+<th>Start Key</th>
+<th>End Key</th>
+<%
+  if (withReplica) {
+%>
+<th>ReplicaID</th>
+<%
+  }
+%>
+</tr>
+
+<%
+  List<Map.Entry<HRegionInfo, RegionLoad>> entryList = new ArrayList<Map.Entry<HRegionInfo, RegionLoad>>(regionsToLoad.entrySet());
+  if(sortKey != null) {
+    if (sortKey.equals("readrequest")) {
+      Collections.sort(entryList,
+          new Comparator<Map.Entry<HRegionInfo, RegionLoad>>() {
+            public int compare(
+                Map.Entry<HRegionInfo, RegionLoad> entry1,
+                Map.Entry<HRegionInfo, RegionLoad> entry2) {
+              if (entry1 == null || entry1.getValue() == null) {
+                return -1;
+              } else if (entry2 == null || entry2.getValue() == null) {
+                return 1;
+              }
+              int result = 0;
+              if (entry1.getValue().getReadRequestsCount() < entry2.getValue().getReadRequestsCount()) {
+                result = -1;
+              } else if (entry1.getValue().getReadRequestsCount() > entry2.getValue().getReadRequestsCount()) {
+                result = 1;
+              }
+              if (reverseOrder) {
+                result = -1 * result;
+              }
+              return result;
+            }
+          });
+    } else if (sortKey.equals("writerequest")) {
+      Collections.sort(entryList,
+          new Comparator<Map.Entry<HRegionInfo, RegionLoad>>() {
+            public int compare(
+                Map.Entry<HRegionInfo, RegionLoad> entry1,
+                Map.Entry<HRegionInfo, RegionLoad> entry2) {
+              if (entry1 == null || entry1.getValue() == null) {
+                return -1;
+              } else if (entry2 == null || entry2.getValue() == null) {
+                return 1;
+              }
+              int result = 0;
+              if (entry1.getValue().getWriteRequestsCount() < entry2.getValue()
+                  .getWriteRequestsCount()) {
+                result = -1;
+              } else if (entry1.getValue().getWriteRequestsCount() > entry2.getValue()
+                  .getWriteRequestsCount()) {
+                result = 1;
+              }
+              if (reverseOrder) {
+                result = -1 * result;
+              }
+              return result;
+            }
+          });
+    } else if (sortKey.equals("size")) {
+      Collections.sort(entryList,
+          new Comparator<Map.Entry<HRegionInfo, RegionLoad>>() {
+            public int compare(
+                Map.Entry<HRegionInfo, RegionLoad> entry1,
+                Map.Entry<HRegionInfo, RegionLoad> entry2) {
+              if (entry1 == null || entry1.getValue() == null) {
+                return -1;
+              } else if (entry2 == null || entry2.getValue() == null) {
+                return 1;
+              }
+              int result = 0;
+              if (entry1.getValue().getStorefileSizeMB() < entry2.getValue()
+                  .getStorefileSizeMB()) {
+                result = -1;
+              } else if (entry1.getValue().getStorefileSizeMB() > entry2
+                  .getValue().getStorefileSizeMB()) {
+                result = 1;
+              }
+              if (reverseOrder) {
+                result = -1 * result;
+              }
+              return result;
+            }
+          });
+    } else if (sortKey.equals("filenum")) {
+      Collections.sort(entryList,
+          new Comparator<Map.Entry<HRegionInfo, RegionLoad>>() {
+            public int compare(
+                Map.Entry<HRegionInfo, RegionLoad> entry1,
+                Map.Entry<HRegionInfo, RegionLoad> entry2) {
+              if (entry1 == null || entry1.getValue() == null) {
+                return -1;
+              } else if (entry2 == null || entry2.getValue() == null) {
+                return 1;
+              }
+              int result = 0;
+              if (entry1.getValue().getStorefiles() < entry2.getValue()
+                  .getStorefiles()) {
+                result = -1;
+              } else if (entry1.getValue().getStorefiles() > entry2.getValue()
+                  .getStorefiles()) {
+                result = 1;
+              }
+              if (reverseOrder) {
+                result = -1 * result;
+              }
+              return result;
+            }
+          });
+    } else if (sortKey.equals("memstore")) {
+      Collections.sort(entryList,
+          new Comparator<Map.Entry<HRegionInfo, RegionLoad>>() {
+            public int compare(
+                Map.Entry<HRegionInfo, RegionLoad> entry1,
+                Map.Entry<HRegionInfo, RegionLoad> entry2) {
+              if (entry1 == null || entry1.getValue()==null) {
+                return -1;
+              } else if (entry2 == null || entry2.getValue()==null) {
+                return 1;
+              }
+              int result = 0;
+              if (entry1.getValue().getMemStoreSizeMB() < entry2.getValue()
+                  .getMemStoreSizeMB()) {
+                result = -1;
+              } else if (entry1.getValue().getMemStoreSizeMB() > entry2
+                  .getValue().getMemStoreSizeMB()) {
+                result = 1;
+              }
+              if (reverseOrder) {
+                result = -1 * result;
+              }
+              return result;
+            }
+          });
+    } else if (sortKey.equals("locality")) {
+      Collections.sort(entryList,
+          new Comparator<Map.Entry<HRegionInfo, RegionLoad>>() {
+            public int compare(
+                Map.Entry<HRegionInfo, RegionLoad> entry1,
+                Map.Entry<HRegionInfo, RegionLoad> entry2) {
+              if (entry1 == null || entry1.getValue()==null) {
+                return -1;
+              } else if (entry2 == null || entry2.getValue()==null) {
+                return 1;
+              }
+              int result = 0;
+              if (entry1.getValue().getDataLocality() < entry2.getValue()
+                  .getDataLocality()) {
+                result = -1;
+              } else if (entry1.getValue().getDataLocality() > entry2
+                  .getValue().getDataLocality()) {
+                result = 1;
+              }
+              if (reverseOrder) {
+                result = -1 * result;
+              }
+              return result;
+            }
+          });
+    }
+  }
+
+  for (Map.Entry<HRegionInfo, RegionLoad> hriEntry : entryList) {
+    HRegionInfo regionInfo = hriEntry.getKey();
+    ServerName addr = regionsToServer.get(regionInfo);
+    RegionLoad load = hriEntry.getValue();
+    String readReq = "N/A";
+    String writeReq = "N/A";
+    String regionSize = "N/A";
+    String fileNum = "N/A";
+    String memSize = "N/A";
+    float locality = 0.0f;
+    if(load != null) {
+      readReq = String.format("%,1d", load.getReadRequestsCount());
+      writeReq = String.format("%,1d", load.getWriteRequestsCount());
+      regionSize = StringUtils.byteDesc(load.getStorefileSizeMB()*1024l*1024);
+      fileNum = String.format("%,1d", load.getStorefiles());
+      memSize = StringUtils.byteDesc(load.getMemStoreSizeMB()*1024l*1024);
+      locality = load.getDataLocality();
+    }
+
+    if (addr != null && master.isActiveMaster()) {
+      ServerLoad sl = master.getServerManager().getLoad(addr);
+      // This port might be wrong if RS actually ended up using something else.
+      urlRegionServer =
+          "//" + addr.getHostname() + ":" + master.getRegionServerInfoPort(addr) + "/";
+      if(sl != null) {
         Integer i = regDistribution.get(addr);
         if (null == i) i = Integer.valueOf(0);
         regDistribution.put(addr, i + 1);
@@ -266,13 +548,12 @@ if ( fqtn != null ) {
     }
 %>
 <tr>
-  <td><%= escapeXml(Bytes.toStringBinary(regionInfo.getRegionName())) %></td>
+  <td><%= escapeXml(showWhole?Bytes.toStringBinary(regionInfo.getRegionName()):regionInfo.getEncodedName()) %></td>
   <%
-  if (addr != null) {
-    String url = "//" + addr.getHostname() + ":" + master.getRegionServerInfoPort(addr) + "/";
+  if (urlRegionServer != null) {
   %>
   <td>
-     <a href="<%= url %>"><%= addr.getHostname().toString() + ":" + addr.getPort() %></a>
+     <a href="<%= urlRegionServer %>"><%= addr.getHostname().toString() + ":" + master.getRegionServerInfoPort(addr) %></a>
   </td>
   <%
   } else {
@@ -281,10 +562,14 @@ if ( fqtn != null ) {
   <%
   }
   %>
-  <td><%= escapeXml(Bytes.toStringBinary(regionInfo.getStartKey())) %></td>
-  <td><%= escapeXml(Bytes.toStringBinary(regionInfo.getEndKey())) %></td>
+  <td><%= readReq%></td>
+  <td><%= writeReq%></td>
+  <td><%= regionSize%></td>
+  <td><%= fileNum%></td>
+  <td><%= memSize%></td>
   <td><%= locality%></td>
-  <td><%= req%></td>
+  <td><%= escapeXml(showWhole?Bytes.toStringBinary(regionInfo.getStartKey()):"-")%></td>
+  <td><%= escapeXml(showWhole?Bytes.toStringBinary(regionInfo.getEndKey()):"-")%></td>
   <%
   if (withReplica) {
   %>
@@ -303,7 +588,7 @@ if ( fqtn != null ) {
      String url = "//" + addr.getHostname() + ":" + master.getRegionServerInfoPort(addr) + "/";
 %>
 <tr>
-  <td><a href="<%= url %>"><%= addr.getHostname().toString() + ":" + addr.getPort() %></a></td>
+  <td><a href="<%= url %>"><%= addr.getHostname().toString() + ":" + master.getRegionServerInfoPort(addr) %></a></td>
   <td><%= rdEntry.getValue()%></td>
 </tr>
 <% } %>
@@ -376,3 +661,35 @@ Actions:
 
 </body>
 </html>
+
+<script>
+var index=0;
+var sortKeyValue='<%= sortKey %>';
+if(sortKeyValue=="readrequest")index=1;
+else if(sortKeyValue=="writerequest")index=2;
+else if(sortKeyValue=="size")index=3;
+else if(sortKeyValue=="filenum")index=4;
+else if(sortKeyValue=="memstore")index=5;
+else if(sortKeyValue=="locality")index=6;
+document.getElementById("sel").selectedIndex=index;
+
+var reverse='<%= reverseOrder %>';
+if(reverse=='false')document.getElementById("ascending").checked=true;
+
+var showWhole='<%= showWhole %>';
+if(showWhole=='true')document.getElementById("showWhole").checked=true;
+
+function reloadAsSort(){
+  var url="?name="+'<%= fqtn %>';
+  if(document.getElementById("sel").selectedIndex>0){
+    url=url+"&sort="+document.getElementById("sel").value;
+  }
+  if(document.getElementById("ascending").checked){
+    url=url+"&reverse=false";
+  }
+  if(document.getElementById("showWhole").checked){
+    url=url+"&showwhole=true";
+  }
+  location.href=url;
+}
+</script>

@@ -105,6 +105,8 @@ public class TestClientNoCluster extends Configured implements Tool {
     // allows me insert mocks and also use my Registry below rather than the default zk based
     // one so tests run faster and don't have zk dependency.
     this.conf.set("hbase.client.registry.impl", SimpleRegistry.class.getName());
+    // We don't want the case to check ZK to determine whether the cluster is available
+    this.conf.setBoolean(HConstants.HBASE_CLIENT_CLUSTER_AVAILABILITY, false);
   }
 
   /**

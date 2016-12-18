@@ -31,6 +31,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.CompatibilitySingletonFactory;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.KVComparator;
@@ -38,6 +39,7 @@ import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.HFile.FileInfo;
+import org.apache.hadoop.hbase.regionserver.MetricsHFileSource;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.io.Writable;
@@ -108,6 +110,8 @@ public abstract class AbstractHFileWriter implements HFile.Writer {
   
   protected final HFileContext hFileContext;
 
+  protected final MetricsHFileSource hfileMetrics;
+
   public AbstractHFileWriter(CacheConfig cacheConf,
       FSDataOutputStream outputStream, Path path, 
       KVComparator comparator, HFileContext fileContext) {
@@ -126,6 +130,7 @@ public abstract class AbstractHFileWriter implements HFile.Writer {
 
     closeOutputStream = path != null;
     this.cacheConf = cacheConf;
+    this.hfileMetrics = CompatibilitySingletonFactory.getInstance(MetricsHFileSource.class);
   }
 
   /**

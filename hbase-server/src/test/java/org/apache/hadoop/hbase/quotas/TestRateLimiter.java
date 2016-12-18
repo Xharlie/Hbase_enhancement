@@ -119,7 +119,10 @@ public class TestRateLimiter {
     limiter.consume(20);
     // To consume 1 resource also wait for 1000ms
     assertEquals(1000, limiter.waitInterval(1));
-    // To consume 10 resource wait for 100ms
+    limiter.setNextRefillTime(limiter.getNextRefillTime() - 1000);
+    // undate nextRefillTime
+    limiter.refill(10);
+    // To consume 10 resource wait for 1000ms
     assertEquals(1000, limiter.waitInterval(10));
 
     limiter.setNextRefillTime(limiter.getNextRefillTime() - 900);

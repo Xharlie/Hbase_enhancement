@@ -46,7 +46,7 @@ import org.apache.hadoop.hbase.regionserver.Store;
 import org.apache.hadoop.hbase.regionserver.StoreFile;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionContext;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
-import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputController;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.regionserver.wal.WALUtil;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -121,7 +121,7 @@ public class TestIOFencing {
 
     @Override
     public boolean compact(CompactionContext compaction, Store store,
-        CompactionThroughputController throughputController) throws IOException {
+        ThroughputController throughputController) throws IOException {
       try {
         return super.compact(compaction, store, throughputController);
       } finally {
@@ -283,7 +283,7 @@ public class TestIOFencing {
         FAMILY, Lists.newArrayList(new Path("/a")), Lists.newArrayList(new Path("/b")),
         new Path("store_dir"));
       WALUtil.writeCompactionMarker(compactingRegion.getWAL(), table.getTableDescriptor(),
-        oldHri, compactionDescriptor, new AtomicLong(Long.MAX_VALUE-100));
+        oldHri, compactionDescriptor, compactingRegion.getMVCC());
 
       // Wait till flush has happened, otherwise there won't be multiple store files
       long startWaitTime = System.currentTimeMillis();

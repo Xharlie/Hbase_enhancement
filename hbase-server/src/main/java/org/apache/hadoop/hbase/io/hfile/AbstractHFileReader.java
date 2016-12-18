@@ -26,12 +26,14 @@ import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.CompatibilitySingletonFactory;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.HFile.FileInfo;
+import org.apache.hadoop.hbase.regionserver.MetricsHFileSource;
 
 /**
  * Common functionality needed by all versions of {@link HFile} readers.
@@ -96,6 +98,8 @@ public abstract class AbstractHFileReader
 
   protected Configuration conf;
 
+  protected final MetricsHFileSource hfileMetrics;
+
   @edu.umd.cs.findbugs.annotations.SuppressWarnings(value="URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD")
   protected AbstractHFileReader(Path path, FixedFileTrailer trailer,
       final long fileSize, final CacheConfig cacheConf, final HFileSystem hfs,
@@ -108,6 +112,7 @@ public abstract class AbstractHFileReader
     this.name = path.getName();
     this.hfs = hfs; // URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD
     this.conf = conf;
+    this.hfileMetrics = CompatibilitySingletonFactory.getInstance(MetricsHFileSource.class);
   }
 
   @SuppressWarnings("serial")

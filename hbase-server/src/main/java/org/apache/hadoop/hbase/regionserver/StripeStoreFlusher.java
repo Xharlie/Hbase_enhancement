@@ -33,6 +33,7 @@ import org.apache.hadoop.hbase.monitoring.MonitoredTask;
 import org.apache.hadoop.hbase.regionserver.StoreFile.Writer;
 import org.apache.hadoop.hbase.regionserver.StripeMultiFileWriter;
 import org.apache.hadoop.hbase.regionserver.compactions.StripeCompactionPolicy;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 
 import com.google.common.annotations.VisibleForTesting;
 
@@ -56,7 +57,7 @@ public class StripeStoreFlusher extends StoreFlusher {
 
   @Override
   public List<Path> flushSnapshot(MemStoreSnapshot snapshot, long cacheFlushSeqNum,
-      MonitoredTask status) throws IOException {
+      MonitoredTask status, ThroughputController throughputController) throws IOException {
     List<Path> result = new ArrayList<Path>();
     int cellsCount = snapshot.getCellsCount();
     if (cellsCount == 0) return result; // don't flush if there are no entries
@@ -80,7 +81,7 @@ public class StripeStoreFlusher extends StoreFlusher {
       mw.init(storeScanner, factory, store.getComparator());
 
       synchronized (flushLock) {
-        performFlush(scanner, mw, smallestReadPoint);
+        performFlush(scanner, mw, smallestReadPoint, throughputController);
         result = mw.commitWriters(cacheFlushSeqNum, false);
         success = true;
       }
@@ -109,7 +110,11 @@ public class StripeStoreFlusher extends StoreFlusher {
       @Override
       public Writer createWriter() throws IOException {
         StoreFile.Writer writer = store.createWriterInTmp(
-            kvCount, store.getFamily().getCompression(), false, true, true);
+            kvCount, store.getFamily().getCompression(),
+            /* isCompaction = */ false,
+            /* includeMVCCReadpoint = */ true,
+            /* includesTags = */ true,
+            /* shouldDropBehind = */ false);
         writer.setTimeRangeTracker(tracker);
         return writer;
       }

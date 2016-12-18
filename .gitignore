@@ -14,5 +14,7 @@ hbase-*/test
 *.iws
 *.iml
 *.ipr
+*.rpm
+rpm.log
 patchprocess/
 dependency-reduced-pom.xml

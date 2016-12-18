@@ -22,6 +22,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.io.hfile.HFileContext;
@@ -45,7 +46,19 @@ public class HFileTestUtil {
       byte[] family, byte[] qualifier,
       byte[] startKey, byte[] endKey, int numRows) throws IOException
   {
-    HFileContext meta = new HFileContextBuilder().build();
+    createHFileWithDataBlockEncoding(configuration, fs, path, DataBlockEncoding.NONE,
+        family, qualifier, startKey, endKey, numRows);
+  }
+
+  public static void createHFileWithDataBlockEncoding(
+      Configuration configuration,
+      FileSystem fs, Path path, DataBlockEncoding encoding,
+      byte[] family, byte[] qualifier,
+      byte[] startKey, byte[] endKey, int numRows) throws IOException
+  {
+    HFileContext meta = new HFileContextBuilder()
+        .withDataBlockEncoding(encoding)
+        .build();
     HFile.Writer writer = HFile.getWriterFactory(configuration, new CacheConfig(configuration))
         .withPath(fs, path)
         .withFileContext(meta)

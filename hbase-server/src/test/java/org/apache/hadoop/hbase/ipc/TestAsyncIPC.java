@@ -84,8 +84,16 @@ public class TestAsyncIPC extends AbstractTestIPC {
     List<Object[]> paramList = new ArrayList<Object[]>();
     paramList.add(new Object[] { false, false });
     paramList.add(new Object[] { false, true });
-    paramList.add(new Object[] { true, false });
-    paramList.add(new Object[] { true, true });
+    /**
+     * Disable testing on epoll mode since libnetty-transport-native-epoll.so in netty 4.0.23
+     * requires GLIBC vesion higher than 2.10, which might not be satisfied in test env. What's
+     * more, epoll mode in netty is less stable, more details see
+     * https://issues.apache.org/jira/browse/SPARK-2468?focusedCommentId
+     * =14200519&page=com.atlassian.
+     * jira.plugin.system.issuetabpanels:comment-tabpanel#comment-14200519
+     */
+    //paramList.add(new Object[] { true, false });
+    //paramList.add(new Object[] { true, true });
     return paramList;
   }
 

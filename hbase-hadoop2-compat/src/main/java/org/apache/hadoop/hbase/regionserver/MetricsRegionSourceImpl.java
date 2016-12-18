@@ -18,11 +18,8 @@
 
 package org.apache.hadoop.hbase.regionserver;
 
-import java.util.Map;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.commons.math.stat.descriptive.DescriptiveStatistics;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.metrics2.MetricsRecordBuilder;
 import org.apache.hadoop.metrics2.impl.JmxCacheBuster;
@@ -48,7 +45,8 @@ public class MetricsRegionSourceImpl implements MetricsRegionSource {
   private String regionGetKey;
   private String regionIncrementKey;
   private String regionAppendKey;
-  private String regionScanNextKey;
+  private final String regionScanSizeKey;
+  private final String regionScanTimeKey;
   private MutableCounterLong regionPut;
   private MutableCounterLong regionDelete;
 
@@ -56,7 +54,8 @@ public class MetricsRegionSourceImpl implements MetricsRegionSource {
   private MutableCounterLong regionAppend;
 
   private MutableHistogram regionGet;
-  private MutableHistogram regionScanNext;
+  private final MutableHistogram regionScanSize;
+  private final MutableHistogram regionScanTime;
 
   public MetricsRegionSourceImpl(MetricsRegionWrapper regionWrapper,
                                  MetricsRegionAggregateSourceImpl aggregate) {
@@ -91,8 +90,11 @@ public class MetricsRegionSourceImpl implements MetricsRegionSource {
     regionGetKey = regionNamePrefix + MetricsRegionServerSource.GET_KEY;
     regionGet = registry.newHistogram(regionGetKey);
 
-    regionScanNextKey = regionNamePrefix + MetricsRegionServerSource.SCAN_NEXT_KEY;
-    regionScanNext = registry.newHistogram(regionScanNextKey);
+    regionScanSizeKey = regionNamePrefix + MetricsRegionServerSource.SCAN_SIZE_KEY;
+    regionScanSize = registry.newHistogram(regionScanSizeKey);
+
+    regionScanTimeKey = regionNamePrefix + MetricsRegionServerSource.SCAN_TIME_KEY;
+    regionScanTime = registry.newHistogram(regionScanTimeKey);
   }
 
   @Override
@@ -109,7 +111,8 @@ public class MetricsRegionSourceImpl implements MetricsRegionSource {
     registry.removeMetric(regionAppendKey);
 
     registry.removeMetric(regionGetKey);
-    registry.removeMetric(regionScanNextKey);
+    registry.removeMetric(regionScanSizeKey);
+    registry.removeMetric(regionScanTimeKey);
 
     JmxCacheBuster.clearJmxCache();
   }
@@ -130,8 +133,13 @@ public class MetricsRegionSourceImpl implements MetricsRegionSource {
   }
 
   @Override
-  public void updateScan(long scanSize) {
-    regionScanNext.add(scanSize);
+  public void updateScanSize(long scanSize) {
+    regionScanSize.add(scanSize);
+  }
+
+  @Override
+  public void updateScanTime(long mills) {
+    regionScanTime.add(mills);
   }
 
   @Override
@@ -197,32 +205,5 @@ public class MetricsRegionSourceImpl implements MetricsRegionSource {
     mrb.addCounter(Interns.info(regionNamePrefix + MetricsRegionSource.NUM_FILES_COMPACTED_COUNT,
         MetricsRegionSource.NUM_FILES_COMPACTED_DESC),
         this.regionWrapper.getNumFilesCompacted());
-    for (Map.Entry<String, DescriptiveStatistics> entry : this.regionWrapper
-        .getCoprocessorExecutionStatistics()
-        .entrySet()) {
-      DescriptiveStatistics ds = entry.getValue();
-      mrb.addGauge(Interns.info(regionNamePrefix + " " + entry.getKey() + " "
-          + MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS,
-        MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS_DESC + "Min: "), ds.getMin() / 1000);
-      mrb.addGauge(Interns.info(regionNamePrefix + " " + entry.getKey() + " "
-          + MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS,
-        MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS_DESC + "Mean: "), ds.getMean() / 1000);
-      mrb.addGauge(Interns.info(regionNamePrefix + " " + entry.getKey() + " "
-          + MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS,
-        MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS_DESC + "Max: "), ds.getMax() / 1000);
-      mrb.addGauge(Interns.info(regionNamePrefix + " " + entry.getKey() + " "
-          + MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS,
-        MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS_DESC + "90th percentile: "), ds
-          .getPercentile(90d) / 1000);
-      mrb.addGauge(Interns.info(regionNamePrefix + " " + entry.getKey() + " "
-          + MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS,
-        MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS_DESC + "95th percentile: "), ds
-          .getPercentile(95d) / 1000);
-      mrb.addGauge(Interns.info(regionNamePrefix + " " + entry.getKey() + " "
-          + MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS,
-        MetricsRegionSource.COPROCESSOR_EXECUTION_STATISTICS_DESC + "99th percentile: "), ds
-          .getPercentile(99d) / 1000);
-    }
-
   }
 }

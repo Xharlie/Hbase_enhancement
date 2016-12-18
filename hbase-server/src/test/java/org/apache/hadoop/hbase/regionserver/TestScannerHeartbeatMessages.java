@@ -126,6 +126,7 @@ public class TestScannerHeartbeatMessages {
     conf.setInt(HConstants.HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD, CLIENT_TIMEOUT);
     conf.setInt(HConstants.HBASE_RPC_TIMEOUT_KEY, CLIENT_TIMEOUT);
     conf.setInt(HConstants.HBASE_CLIENT_PAUSE, 1);
+    conf.setBoolean(RSRpcServices.REGION_SERVER_SCAN_HEARTBEAT, true);
 
     // Check the timeout condition after every cell
     conf.setLong(StoreScanner.HBASE_CELLS_SCANNED_PER_HEARTBEAT_CHECK, 1);

@@ -21,8 +21,10 @@ package org.apache.hadoop.hbase.client;
 
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.CallQueueTooBigException;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.RegionLocations;
+import org.apache.hadoop.hbase.RegionTooBusyException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
@@ -43,6 +45,8 @@ import org.junit.experimental.categories.Category;
 import org.junit.rules.Timeout;
 import org.mockito.Mockito;
 
+import static org.junit.Assert.assertTrue;
+
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
@@ -52,7 +56,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
@@ -209,28 +218,35 @@ public class TestAsyncProcess {
 
   static class CallerWithFailure extends RpcRetryingCaller<MultiResponse>{
 
-    public CallerWithFailure() {
+    private final IOException e;
+
+    public CallerWithFailure(IOException e) {
       super(100, 100, 9);
+      this.e = e;
     }
 
     @Override
     public MultiResponse callWithoutRetries(RetryingCallable<MultiResponse> callable, int callTimeout)
         throws IOException, RuntimeException {
-      throw new IOException("test");
+      throw e;
     }
   }
 
+
   static class AsyncProcessWithFailure extends MyAsyncProcess {
 
-    public AsyncProcessWithFailure(ClusterConnection hc, Configuration conf) {
+    private final IOException ioe;
+
+    public AsyncProcessWithFailure(ClusterConnection hc, Configuration conf, IOException ioe) {
       super(hc, conf, true);
+      this.ioe = ioe;
       serverTrackerTimeout = 1;
     }
 
     @Override
     protected RpcRetryingCaller<MultiResponse> createCaller(MultiServerCallable<Row> callable) {
       callsCt.incrementAndGet();
-      return new CallerWithFailure();
+      return new CallerWithFailure(ioe);
     }
   }
 
@@ -349,6 +365,11 @@ public class TestAsyncProcess {
     public RegionLocations locateRegion(TableName tableName,
         byte[] row, boolean useCache, boolean retry, int replicaId) throws IOException {
       return new RegionLocations(loc1);
+    }
+
+    @Override
+    public boolean supportsCellBlock() {
+      return false;
     }
   }
 
@@ -822,7 +843,7 @@ public class TestAsyncProcess {
   public void testGlobalErrors() throws IOException {
     ClusterConnection conn = new MyConnectionImpl(conf);
     BufferedMutatorImpl mutator = (BufferedMutatorImpl) conn.getBufferedMutator(DUMMY_TABLE);
-    AsyncProcessWithFailure ap = new AsyncProcessWithFailure(conn, conf);
+    AsyncProcessWithFailure ap = new AsyncProcessWithFailure(conn, conf, new IOException("test"));
     mutator.ap = ap;
 
     Assert.assertNotNull(mutator.ap.createServerErrorTracker());
@@ -837,6 +858,85 @@ public class TestAsyncProcess {
     }
     // Checking that the ErrorsServers came into play and didn't make us stop immediately
     Assert.assertEquals(NB_RETRIES + 1, ap.callsCt.get());
+  }
+
+
+  @Test
+  public void testCallQueueTooLarge() throws IOException {
+    ClusterConnection conn = new MyConnectionImpl(conf);
+    BufferedMutatorImpl mutator = (BufferedMutatorImpl) conn.getBufferedMutator(DUMMY_TABLE);
+    AsyncProcessWithFailure ap = new AsyncProcessWithFailure(conn, conf, new CallQueueTooBigException());
+    mutator.ap = ap;
+
+    Assert.assertNotNull(mutator.ap.createServerErrorTracker());
+
+    Put p = createPut(1, true);
+    mutator.mutate(p);
+
+    try {
+      mutator.flush();
+      Assert.fail();
+    } catch (RetriesExhaustedWithDetailsException expected) {
+    }
+    // Checking that the ErrorsServers came into play and didn't make us stop immediately
+    Assert.assertEquals(NB_RETRIES + 1, ap.callsCt.get());
+  }
+
+  @Test
+  public void testRetryWithCallQueueTooBigException() throws Exception {
+    Configuration myConf = new Configuration(conf);
+    final long specialPause =500L;
+    final int tries = 3;
+    myConf.setLong(HConstants.HBASE_CLIENT_PAUSE_SPECIAL_CASE, specialPause);
+    myConf.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, tries);
+    ClusterConnection conn = new MyConnectionImpl(myConf);
+    BufferedMutatorImpl mutator = (BufferedMutatorImpl) conn.getBufferedMutator(DUMMY_TABLE);
+    AsyncProcessWithFailure ap =
+        new AsyncProcessWithFailure(conn, myConf, new CallQueueTooBigException());
+    mutator.ap = ap;
+
+    Assert.assertNotNull(mutator.ap.createServerErrorTracker());
+
+    Put p = createPut(1, true);
+    mutator.mutate(p);
+
+    long startTime = System.currentTimeMillis();
+    try {
+      mutator.flush();
+      Assert.fail();
+    } catch (RetriesExhaustedWithDetailsException expected) {
+    }
+    long actualSleep = System.currentTimeMillis() - startTime;
+    long expectedSleep = 0L;
+    for (int i = 0; i < tries - 1; i++) {
+      expectedSleep += ConnectionUtils.getPauseTime(specialPause, i);
+      // Prevent jitter in CollectionUtils#getPauseTime to affect result
+      actualSleep += (long) (specialPause * 0.01f);
+    }
+    Assert.assertTrue("Expected to sleep " + expectedSleep + " but actually " + actualSleep + "ms",
+      actualSleep >= expectedSleep);
+
+    // check and confirm normal IOE will use the normal pause
+    final long normalPause =
+        myConf.getLong(HConstants.HBASE_CLIENT_PAUSE, HConstants.DEFAULT_HBASE_CLIENT_PAUSE);
+    ap = new AsyncProcessWithFailure(conn, myConf, new IOException());
+    mutator.ap = ap;
+    Assert.assertNotNull(mutator.ap.createServerErrorTracker());
+    mutator.mutate(p);
+    startTime = System.currentTimeMillis();
+    try {
+      mutator.flush();
+      Assert.fail();
+    } catch (RetriesExhaustedWithDetailsException expected) {
+    }
+    actualSleep = System.currentTimeMillis() - startTime;
+    expectedSleep = 0L;
+    for (int i = 0; i < tries - 1; i++) {
+      expectedSleep += ConnectionUtils.getPauseTime(normalPause, i);
+    }
+    // plus an additional pause to balance the program execution time
+    expectedSleep += normalPause;
+    Assert.assertTrue("Slept for too long: " + actualSleep + "ms", actualSleep <= expectedSleep);
   }
 
   /**
@@ -1048,5 +1148,83 @@ public class TestAsyncProcess {
     p.add(DUMMY_BYTES_1, DUMMY_BYTES_1, DUMMY_BYTES_1);
 
     return p;
+  }
+
+  static class MyThreadPoolExecutor extends ThreadPoolExecutor {
+    public MyThreadPoolExecutor(int coreThreads, int maxThreads, long keepAliveTime,
+        TimeUnit timeunit, BlockingQueue<Runnable> blockingqueue) {
+      super(coreThreads, maxThreads, keepAliveTime, timeunit, blockingqueue);
+    }
+
+    @Override
+    public Future submit(Runnable runnable) {
+      throw new OutOfMemoryError("OutOfMemory error thrown by means");
+    }
+  }
+
+  static class AsyncProcessForThrowableCheck extends AsyncProcess {
+    public AsyncProcessForThrowableCheck(ClusterConnection hc, Configuration conf,
+        ExecutorService pool) {
+      super(hc, conf, pool, new RpcRetryingCallerFactory(conf), false, new RpcControllerFactory(
+          conf));
+    }
+  }
+
+  @Test
+  public void testUncheckedException() throws Exception {
+    // Test the case pool.submit throws unchecked exception
+    ClusterConnection hc = createHConnection();
+    MyThreadPoolExecutor myPool =
+        new MyThreadPoolExecutor(1, 20, 60, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<Runnable>(200));
+    AsyncProcess ap = new AsyncProcessForThrowableCheck(hc, conf, myPool);
+
+    List<Put> puts = new ArrayList<Put>();
+    puts.add(createPut(1, true));
+
+    ap.submit(DUMMY_TABLE, puts, false, null, false);
+    Assert.assertTrue(puts.isEmpty());
+  }
+
+  @Test
+  public void testWaitForMaximumCurrentTasks() throws Exception {
+    final AtomicLong tasks = new AtomicLong(0);
+    final AtomicInteger max = new AtomicInteger(0);
+    final CyclicBarrier barrier = new CyclicBarrier(2);
+    ClusterConnection hc = createHConnection();
+    final AsyncProcess ap = new MyAsyncProcess(hc, conf);
+    Runnable runnable = new Runnable() {
+      @Override
+      public void run() {
+        try {
+          barrier.await();
+          ap.waitForMaximumCurrentTasks(max.get(), tasks, 1, null);
+        } catch (InterruptedIOException e) {
+          Assert.fail(e.getMessage());
+        } catch (InterruptedException e) {
+          // TODO Auto-generated catch block
+          e.printStackTrace();
+        } catch (BrokenBarrierException e) {
+          // TODO Auto-generated catch block
+          e.printStackTrace();
+        }
+      }
+    };
+    // First test that our runnable thread only exits when tasks is zero.
+    Thread t = new Thread(runnable);
+    t.start();
+    barrier.await();
+    t.join();
+    // Now assert we stay running if max == zero and tasks is > 0.
+    barrier.reset();
+    tasks.set(1000000);
+    t = new Thread(runnable);
+    t.start();
+    barrier.await();
+    while (tasks.get() > 0) {
+      assertTrue(t.isAlive());
+      tasks.set(tasks.get() - 1);
+    }
+    t.join();
   }
 }

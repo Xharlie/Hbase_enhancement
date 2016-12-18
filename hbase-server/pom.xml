@@ -23,12 +23,12 @@
   <parent>
     <artifactId>hbase</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>1.1.2-adp-0.1</version>
+    <version>1.1.2-adp-1.0.8.1</version>
     <relativePath>..</relativePath>
   </parent>
   <groupId>org.apache.hbase</groupId>
   <artifactId>hbase-server</artifactId>
-  <version>1.1.2-adp-0.1</version>
+  <version>1.1.2-adp-1.0.8.1</version>
   <name>ADP HBase - Server</name>
   <description>Main functionality for HBase</description>
   <properties>
@@ -563,6 +563,30 @@
       <artifactId>bcprov-jdk16</artifactId>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>com.etao.hbase</groupId>
+      <artifactId>hqueue-coprocessor</artifactId>
+      <version>0.7.1.3</version>
+      <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <groupId>org.apache.hbase</groupId>
+          <artifactId>hbase-server</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.apache.hbase</groupId>
+          <artifactId>hbase-common</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.apache.hbase</groupId>
+          <artifactId>hbase-client</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.apache.hbase</groupId>
+          <artifactId>hbase-testing-util</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
   </dependencies>
   <profiles>
     <!-- Needs to make the profile in apache parent pom -->
@@ -761,7 +785,6 @@
           <groupId>io.netty</groupId>
           <artifactId>netty</artifactId>
           <version>3.6.2.Final</version>
-          <scope>test</scope>
         </dependency>
       </dependencies>
       <build>

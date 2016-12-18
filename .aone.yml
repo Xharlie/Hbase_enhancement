@@ -1,0 +1,86 @@
+t-search-adp-hbase-server-0_9:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-client-0_9:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-server-0_9-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-0_9_1-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-client-0_9_1-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-client-1_0-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-server-1_0-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-server-1_0_1-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_2-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_3-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_4-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_5-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_6-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_7-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_8-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_8_1-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3

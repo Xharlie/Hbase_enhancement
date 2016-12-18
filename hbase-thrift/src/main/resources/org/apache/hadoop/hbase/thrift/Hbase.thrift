@@ -191,6 +191,33 @@ exception AlreadyExists {
   1:string message
 }
 
+/**
+ * A MessageID object.
+ */
+struct TMessageID {
+  1:i64 timestamp,
+  2:i16 sequenceID
+}
+
+/**
+ * A Message object.
+ */
+struct TMessage {
+  1:optional TMessageID id,
+  2:Bytes topic,
+  3:Bytes value
+  4:optional i16 partitionID
+}
+
+/**
+ * A PartitionScan object is used to specify scanner parameters when opening a scanner.
+ */
+struct TMessageScan {
+  1:TMessageID startMessageID,
+  2:TMessageID stopMessageID,
+  3:optional list<Text> topics
+}
+
 //
 // Service 
 //
@@ -447,6 +474,25 @@ service Hbase {
 
     /** Get attributes */
     3:map<Text, Text> attributes
+  ) throws (1:IOError io)
+
+  /**
+   * Get all the data for the specified table and row specialized versions.
+   *  Returns an empty list if the row does not exist.
+   *
+   * @return TRowResult containing the row and map of columns to TCells
+   */
+  list<TRowResult> getRowVers(
+      /** name of table */
+      1:Text tableName,
+
+      /** row key */
+      2:Text row,
+
+      /** Get attributes */
+      3:map<Text, Text> attributes,
+
+      4:i32 numVersions
   ) throws (1:IOError io)
 
   /**
@@ -859,6 +905,44 @@ service Hbase {
     6:map<Text, Text> attributes
   ) throws (1:IOError io)
 
+   /**
+   * Get a scanner on the current table starting and stopping at the
+   * specified rows.  ending at the last row in the table.  Return the
+   * specified columns.  Only values with the specified time range are
+   * returned.
+   *
+   * @return scanner id to be used with other scanner procedures
+   */
+  ScannerID scannerOpenWithTimeRange(
+    /** name of table */
+    1:Text tableName,
+
+    /**
+     * Starting row in table to scan.
+     * Send "" (empty string) to start at the first row.
+     */
+    2:Text startRow,
+
+    /**
+     * row to stop scanning on. This row is *not* included in the
+     * scanner's results
+     */
+    3:Text stopRow,
+
+    /**
+     * columns to scan. If column name is a column family, all
+     * columns of the specified column family are returned. It's also possible
+     * to pass a regex in the column qualifier.
+     */
+    4:list<Text> columns,
+
+    /** start timestamp */
+    5:i64 startTime,
+
+    /** end timestamp */
+    6:i64 endTime
+  ) throws (1:IOError io)
+
   /**
    * Returns the scanner's current row value and advances to the next
    * row in the table.  When there are no more rows in the table, or a key
@@ -971,5 +1055,232 @@ service Hbase {
 
     /** Mutation attributes */
     7:map<Text, Text> attributes
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Get a scanner on the current table starting and stopping at the
+   * specified rows.  ending at the last row in the table.  Return the
+   * specified columns.  Only values with the specified time range are
+   * returned.
+   *
+   * @return scanner id to be used with other scanner procedures
+   */
+  ScannerID messageScannerOpen(
+    /** name of queue */
+    1:Text queueName,
+
+    /**
+     * Starting row in table to scan.
+     * Send "" (empty string) to start at the first row.
+     */
+    2:i16 partitionID,
+
+    /**
+     * row to stop scanning on. This row is *not* included in the
+     * scanner's results
+     */
+    3:TMessageScan messageScan,
+  )throws (1:IOError io)
+
+  /**
+   * Returns the scanner's current row value and advances to the next
+   * row in the table.  When there are no more rows in the table, or a key
+   * greater-than-or-equal-to the scanner's specified stopRow is reached,
+   * an empty list is returned.
+   *
+   * @return a Message
+   *
+   * @throws IllegalArgument if ScannerID is invalid
+   *
+   * @throws NotFound when the scanner reaches the end
+   */
+  TMessage messageScannerGet(
+    /** id of a scanner returned by messageScannerOpen */
+    1:ScannerID id
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  list<TMessage> messageScannerGetList(
+    /** id of a scanner returned by scannerOpen */
+    1:ScannerID id,
+
+    /** number of messages to return */
+    2:i32 nbMessages
+  )  throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Get a scanner on the current table starting and stopping at the
+   * specified rows.  ending at the last row in the table.  Return the
+   * specified columns.  Only values with the specified time range are
+   * returned.
+   *
+   * @return scanner id to be used with other scanner procedures
+   */
+  ScannerID partitionScannerOpen(
+    /** name of queue */
+    1:Text queueName,
+
+    /**
+     * Starting row in table to scan.
+     * Send "" (empty string) to start at the first row.
+     */
+    2:i16 partitionID,
+
+    /**
+     * row to stop scanning on. This row is *not* included in the
+     * scanner's results
+     */
+    3:TMessageScan messageScan,
+  )throws (1:IOError io)
+
+  /**
+   * Returns the scanner's current row value and advances to the next
+   * row in the table.  When there are no more rows in the table, or a key
+   * greater-than-or-equal-to the scanner's specified stopRow is reached,
+   * an empty list is returned.
+   *
+   * @return a Message
+   *
+   * @throws IllegalArgument if ScannerID is invalid
+   *
+   * @throws NotFound when the scanner reaches the end
+   */
+  TMessage partitionScannerGet(
+    /** id of a scanner returned by messageScannerOpen */
+    1:ScannerID id
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  list<TMessage> partitionScannerGetList(
+    /** id of a scanner returned by scannerOpen */
+    1:ScannerID id,
+
+    /** number of messages to return */
+    2:i32 nbMessages
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Get a scanner on the current table starting and stopping at the
+   * specified rows.  ending at the last row in the table.  Return the
+   * specified columns.  Only values with the specified time range are
+   * returned.
+   *
+   * @return scanner id to be used with other scanner procedures
+   */
+  ScannerID queueScannerOpen(
+    /** name of queue */
+    1:Text queueName,
+
+    /**
+     * row to stop scanning on. This row is *not* included in the
+     * scanner's results
+     */
+    2:TMessageScan messageScan,
+  )throws (1:IOError io)
+
+  /**
+   * Returns the scanner's current row value and advances to the next
+   * row in the table.  When there are no more rows in the table, or a key
+   * greater-than-or-equal-to the scanner's specified stopRow is reached,
+   * an empty list is returned.
+   *
+   * @return a Message
+   *
+   * @throws IllegalArgument if ScannerID is invalid
+   *
+   * @throws NotFound when the scanner reaches the end
+   */
+  TMessage queueScannerGet(
+    /** id of a scanner returned by messageScannerOpen */
+    1:ScannerID id
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  list<TMessage> queueScannerGetList(
+    /** id of a scanner returned by scannerOpen */
+    1:ScannerID id,
+
+    /** number of messages to return */
+    2:i32 nbMessages
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Put a message to queue
+   */
+  void putMessageWithPid(
+    /** name of queue */
+    1:Text queueName,
+
+    /** partition ID */
+    2:i16 partitionID,
+
+    /** Message */
+    3:TMessage tMessage
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  void putMessage(
+    /** name of queue */
+    1:Text queueName,
+
+    /** Message */
+    2:TMessage tMessage
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Put messages list to queue
+   */
+  void putMessagesWithPid(
+    /** name of queue */
+    1:Text queueName,
+
+    /** partition ID */
+    2:i16 partitionID,
+
+    /** Message */
+    3:list<TMessage> tMessages
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  void putMessages(
+    /** name of queue */
+    1:Text queueName,
+
+    /** Message */
+    2:list<TMessage> tMessages
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Closes the server-state associated with an open scanner.
+   *
+   * @throws IllegalArgument if ScannerID is invalid
+   */
+  void messageScannerClose(
+    /** id of a scanner returned by scannerOpen */
+    1:ScannerID id
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Closes the server-state associated with an open scanner.
+   *
+   * @throws IllegalArgument if ScannerID is invalid
+   */
+  void partitionScannerClose(
+    /** id of a scanner returned by scannerOpen */
+    1:ScannerID id
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Closes the server-state associated with an open scanner.
+   *
+   * @throws IllegalArgument if ScannerID is invalid
+   */
+  void queueScannerClose(
+    /** id of a scanner returned by scannerOpen */
+    1:ScannerID id
+  ) throws (1:IOError io, 2:IllegalArgument ia)
+
+  /**
+   * Get Queue Partition locations
+   *
+   * @throws IllegalArgument if queueName is invalid
+   */
+  list<Text> getQueueLocations(
+    1:Text queueName
   ) throws (1:IOError io, 2:IllegalArgument ia)
 }

@@ -152,6 +152,7 @@ import org.apache.hadoop.hbase.zookeeper.RegionServerTracker;
 import org.apache.hadoop.hbase.zookeeper.ZKClusterId;
 import org.apache.hadoop.hbase.zookeeper.ZKUtil;
 import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
+import org.apache.hadoop.hbase.zookeeper.ClusterAvailabilityTracker;
 import org.apache.zookeeper.KeeperException;
 import org.mortbay.jetty.Connector;
 import org.mortbay.jetty.nio.SelectChannelConnector;
@@ -789,6 +790,7 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
     status.markComplete("Initialization successful");
     LOG.info("Master has completed initialization");
     configurationManager.registerObserver(this.balancer);
+    configurationManager.registerObserver(this.hfileCleaner);
     initialized = true;
     
     status.setStatus("Starting quota manager");
@@ -821,7 +823,23 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
         LOG.error("Coprocessor postStartMaster() hook failed", ioe);
       }
     }
-
+    // Logic to set cluster availabled
+    boolean useClusterAvailability = conf.getBoolean(HConstants.HBASE_CLIENT_CLUSTER_AVAILABILITY, HConstants.DEFAULT_USE_CLUSTER_AVAILABILITY);
+    ClusterAvailabilityTracker clusterAvailabilityTracker = new ClusterAvailabilityTracker(this.getZooKeeper(), this);
+    if (useClusterAvailability) {
+      clusterAvailabilityTracker.start();
+      if (!clusterAvailabilityTracker.isClusterAvailable()) {
+        LOG.info("initialize cluster availability tracker in postStartMaster");
+        if (!clusterAvailabilityTracker.isClusterAvailable()) {
+          try {
+            clusterAvailabilityTracker.setClusterAvailable();
+            LOG.info("Mark cluster available after cluster started");
+          } catch (KeeperException e) {
+            LOG.error("Failed to mark cluster available, check and manually set cluster available if cluster started successfully", e);
+          }
+        }
+      }
+    }
     zombieDetector.interrupt();
   }
 
@@ -2141,7 +2159,32 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
         LOG.error("Error call master coprocessor preShutdown()", ioe);
       }
     }
-
+    // Logic to set cluster unavailabled
+    boolean useClusterAvailability = conf.getBoolean("hbase.client.cluster.availability", false);
+    ClusterAvailabilityTracker clusterAvailabilityTracker = new ClusterAvailabilityTracker(this.getZooKeeper(), this);
+    if (useClusterAvailability) {
+      clusterAvailabilityTracker.start();
+      if (!clusterAvailabilityTracker.isClusterAvailable()) {
+        try {
+          clusterAvailabilityTracker.setClusterUnavailable();
+          LOG.info("Mark cluster unavailable after cluster shutdown");
+          clusterAvailabilityTracker.stop();
+        } catch (KeeperException e) {
+          if (e instanceof KeeperException.SessionExpiredException) {
+            LOG.warn("ZK session expired. Retry a new connection...");
+            try {
+              this.getZooKeeper().reconnectAfterExpiration();
+              clusterAvailabilityTracker.setClusterUnavailable();
+            } catch (Exception ex) {
+              LOG.error("Retry setClusterUnavailable failed", ex);
+            }
+          } else {
+            LOG.error("Failed to set cluster to unavailable due to ZooKeeper exception, " +
+                    "please check and manually set cluster to unavailable if cluster shutdown", e);
+          }
+        }
+      }
+    }
     if (this.serverManager != null) {
       this.serverManager.shutdownCluster();
     }

@@ -20,19 +20,13 @@
 package org.apache.hadoop.hbase.wal;
 
 import java.io.IOException;
-import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
-import org.apache.hadoop.hbase.TableName;
-
+import org.apache.hadoop.hbase.classification.InterfaceAudience;
 // imports for things that haven't moved yet
 import org.apache.hadoop.hbase.regionserver.wal.FSHLog;
 import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
@@ -66,11 +60,11 @@ public class FaultyFSLog extends FSHLog {
 
   @Override
   public long append(HTableDescriptor htd, HRegionInfo info, WALKey key, WALEdit edits,
-      AtomicLong sequenceId, boolean isInMemstore, List<Cell> cells) throws IOException {
+      boolean inMemstore) throws IOException {
     if (this.ft == FailureType.APPEND) {
       throw new IOException("append");
     }
-    return super.append(htd, info, key, edits, sequenceId, isInMemstore, cells);
+    return super.append(htd, info, key, edits, inMemstore);
   }
 }
 

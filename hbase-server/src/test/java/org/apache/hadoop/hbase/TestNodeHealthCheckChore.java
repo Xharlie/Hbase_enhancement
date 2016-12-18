@@ -25,6 +25,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.apache.commons.logging.Log;
@@ -33,7 +36,11 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HealthChecker.HealthCheckerExitStatus;
+import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
+import org.apache.hadoop.hbase.tool.HealthCheck;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.JVMClusterUtil.RegionServerThread;
 import org.apache.hadoop.util.Shell;
 import org.junit.After;
 import org.junit.Test;
@@ -83,7 +90,7 @@ public class TestNodeHealthCheckChore {
     long timeout = config.getLong(HConstants.HEALTH_SCRIPT_TIMEOUT, SCRIPT_TIMEOUT);
 
     HealthChecker checker = new HealthChecker();
-    checker.init(location, timeout);
+    checker.init(location, timeout, 0, 0, 0);
 
     createScript(script, true);
     HealthReport report = checker.checkHealth();
@@ -164,5 +171,174 @@ public class TestNodeHealthCheckChore {
       return this.stop;
     }
 
+  }
+
+  /**
+   * Test Health Check
+   */
+  @Test(timeout=60000)
+  public void testHealthCheckWithNoOnlineRegions() throws Exception {
+    HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+    Configuration conf = TEST_UTIL.getConfiguration();
+    conf.setBoolean("hbase.assignment.usezk", true);
+    try {
+      TEST_UTIL.startMiniCluster(1);
+      String table = "testHealthCheck";
+      MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
+      HBaseAdmin admin = TEST_UTIL.getHBaseAdmin();
+      HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(table));
+      desc.addFamily(new HColumnDescriptor("cf"));
+      admin.createTable(desc, Bytes.toBytes("A"), Bytes.toBytes("Z"), 10);
+      TEST_UTIL.waitUntilAllRegionsAssigned(TableName.valueOf(table));
+      mini.startRegionServer();
+
+      HealthCheck hc = new HealthCheck(conf);
+
+      int i = 0;
+      while (i < 2) {
+        String serverName = mini.getRegionServer(i++).getServerName().getServerName();
+        String[] args = {"3","0.8","3","20000",serverName};
+        hc.initialize(args);
+        assertTrue(hc.probeLocalHost());
+      }
+    } catch (Exception e) {
+      // TODO: handle exception
+    } finally {
+      TEST_UTIL.shutdownMiniCluster();
+    }
+  }
+
+  @Test(timeout=60000)
+  public void testHealthCheckSelectRegions() {
+    HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+    Configuration conf = TEST_UTIL.getConfiguration();
+    conf.setBoolean("hbase.assignment.usezk", true);
+    try {
+      TEST_UTIL.startMiniCluster(1);
+      String table = "testHealthCheck";
+      MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
+      HBaseAdmin admin = TEST_UTIL.getHBaseAdmin();
+      HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(table));
+      desc.addFamily(new HColumnDescriptor("cf"));
+      admin.createTable(desc, Bytes.toBytes("A"), Bytes.toBytes("Z"), 10);
+      TEST_UTIL.waitUntilAllRegionsAssigned(TableName.valueOf(table));
+      mini.startRegionServer();
+      HealthCheck hc = new HealthCheck(conf);
+
+      int i = 0;
+      while (i < 2) {
+        String serverName = mini.getRegionServer(i++).getServerName().getServerName();
+        String[] args = {"3","0.8","3","20000",serverName};
+        hc.initialize(args);
+        List<byte[]> list = hc.getOnlineRegions();
+        if (list != null && !list.isEmpty()) {
+          int actualRegionSize = list.size();
+          assertTrue(actualRegionSize >= 10);
+          hc.setSampledRegionCount(3);
+          assertEquals(hc.selectProbeRegions(list).size(), 3);
+          hc.setSampledRegionCount(-1);
+          assertEquals(hc.selectProbeRegions(list).size(), 0);
+          hc.setSampledRegionCount(2000);
+          //should be 0 due to #EHB-416
+          assertEquals(0,hc.selectProbeRegions(list).size());
+         }
+      }
+    } catch (Exception e) {
+      // TODO: handle exception
+    } finally {
+      try {
+        TEST_UTIL.shutdownMiniCluster();
+      } catch (Exception e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+      }
+    }
+  }
+
+  @Test(timeout=60000)
+  public void testHealthCheckWithRSKilledBeforeInit() {
+    HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+    Configuration conf = TEST_UTIL.getConfiguration();
+    conf.setBoolean("hbase.assignment.usezk", true);
+    try {
+      TEST_UTIL.startMiniCluster(1);
+      String table = "testHealthCheck";
+      MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
+      HBaseAdmin admin = TEST_UTIL.getHBaseAdmin();
+      HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(table));
+      desc.addFamily(new HColumnDescriptor("cf"));
+      admin.createTable(desc, Bytes.toBytes("A"), Bytes.toBytes("Z"), 10);
+      TEST_UTIL.waitUntilAllRegionsAssigned(TableName.valueOf(table));
+      HealthCheck hc1 = new HealthCheck(conf);
+
+      String serverName = mini.getRegionServer(0).getServerName().getServerName();
+      String[] args = {"3","0.8","3","10000",serverName};
+      hc1.initialize(args);
+      assertTrue(hc1.probeLocalHost());
+
+      //killed all rs and probe it
+      mini.abortRegionServer(0);
+      mini.waitForRegionServerToStop(mini.getRegionServer(0).getServerName(), 10000);
+
+      HealthCheck hc2 = new HealthCheck(conf);
+      hc2.initialize(args);
+      hc2.probeLocalHost();
+
+    } catch (NullPointerException | IllegalArgumentException e) {
+      assertTrue(true);
+    } catch (Exception e) {
+      // TODO: handle exception
+    }finally {
+      try {
+        TEST_UTIL.shutdownMiniCluster();
+      } catch (Exception e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+      }
+    }
+  }
+
+  @Test(timeout=60000)
+  public void testHealthCheckWithRSKilledAfterInit() {
+    HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+    Configuration conf = TEST_UTIL.getConfiguration();
+    conf.setBoolean("hbase.assignment.usezk", true);
+    try {
+      TEST_UTIL.startMiniCluster(1);
+      String table = "testHealthCheck";
+      MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
+      HBaseAdmin admin = TEST_UTIL.getHBaseAdmin();
+      HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(table));
+      desc.addFamily(new HColumnDescriptor("cf"));
+      admin.createTable(desc, Bytes.toBytes("A"), Bytes.toBytes("Z"), 10);
+      TEST_UTIL.waitUntilAllRegionsAssigned(TableName.valueOf(table));
+      HealthCheck hc1 = new HealthCheck(conf);
+
+      String serverName = mini.getRegionServer(0).getServerName().getServerName();
+      String[] args = {"3","0.8","3","10000",serverName};
+      hc1.initialize(args);
+      assertTrue(hc1.probeLocalHost());
+
+      HealthCheck hc2 = new HealthCheck(conf);
+      hc2.initialize(args);
+
+      //killed all rs and probe it
+      mini.abortRegionServer(0);
+      mini.waitForRegionServerToStop(mini.getRegionServer(0).getServerName(), 10000);
+
+      boolean succeed = hc2.probeLocalHost();
+
+      assertEquals(succeed, false);
+    } catch (NullPointerException | IllegalArgumentException e) {
+      assertTrue(true);
+    } catch (Exception e) {
+    } finally {
+      try {
+        TEST_UTIL.shutdownMiniCluster();
+      } catch (Exception e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+      }
+    }
   }
 }

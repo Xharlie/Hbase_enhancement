@@ -2130,6 +2130,549 @@ public final class FilterProtos {
     // @@protoc_insertion_point(class_scope:ColumnPrefixFilter)
   }
 
+  public interface ColumnPrefixCountGetFilterOrBuilder
+      extends com.google.protobuf.MessageOrBuilder {
+
+    // required bytes prefix = 1;
+    /**
+     * <code>required bytes prefix = 1;</code>
+     */
+    boolean hasPrefix();
+    /**
+     * <code>required bytes prefix = 1;</code>
+     */
+    com.google.protobuf.ByteString getPrefix();
+
+    // required int32 limit = 2;
+    /**
+     * <code>required int32 limit = 2;</code>
+     */
+    boolean hasLimit();
+    /**
+     * <code>required int32 limit = 2;</code>
+     */
+    int getLimit();
+  }
+  /**
+   * Protobuf type {@code ColumnPrefixCountGetFilter}
+   */
+  public static final class ColumnPrefixCountGetFilter extends
+      com.google.protobuf.GeneratedMessage
+      implements ColumnPrefixCountGetFilterOrBuilder {
+    // Use ColumnPrefixCountGetFilter.newBuilder() to construct.
+    private ColumnPrefixCountGetFilter(com.google.protobuf.GeneratedMessage.Builder<?> builder) {
+      super(builder);
+      this.unknownFields = builder.getUnknownFields();
+    }
+    private ColumnPrefixCountGetFilter(boolean noInit) { this.unknownFields = com.google.protobuf.UnknownFieldSet.getDefaultInstance(); }
+
+    private static final ColumnPrefixCountGetFilter defaultInstance;
+    public static ColumnPrefixCountGetFilter getDefaultInstance() {
+      return defaultInstance;
+    }
+
+    public ColumnPrefixCountGetFilter getDefaultInstanceForType() {
+      return defaultInstance;
+    }
+
+    private final com.google.protobuf.UnknownFieldSet unknownFields;
+    @java.lang.Override
+    public final com.google.protobuf.UnknownFieldSet
+        getUnknownFields() {
+      return this.unknownFields;
+    }
+    private ColumnPrefixCountGetFilter(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      initFields();
+      int mutable_bitField0_ = 0;
+      com.google.protobuf.UnknownFieldSet.Builder unknownFields =
+          com.google.protobuf.UnknownFieldSet.newBuilder();
+      try {
+        boolean done = false;
+        while (!done) {
+          int tag = input.readTag();
+          switch (tag) {
+            case 0:
+              done = true;
+              break;
+            default: {
+              if (!parseUnknownField(input, unknownFields,
+                                     extensionRegistry, tag)) {
+                done = true;
+              }
+              break;
+            }
+            case 10: {
+              bitField0_ |= 0x00000001;
+              prefix_ = input.readBytes();
+              break;
+            }
+            case 16: {
+              bitField0_ |= 0x00000002;
+              limit_ = input.readInt32();
+              break;
+            }
+          }
+        }
+      } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+        throw e.setUnfinishedMessage(this);
+      } catch (java.io.IOException e) {
+        throw new com.google.protobuf.InvalidProtocolBufferException(
+            e.getMessage()).setUnfinishedMessage(this);
+      } finally {
+        this.unknownFields = unknownFields.build();
+        makeExtensionsImmutable();
+      }
+    }
+    public static final com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return org.apache.hadoop.hbase.protobuf.generated.FilterProtos.internal_static_ColumnPrefixCountGetFilter_descriptor;
+    }
+
+    protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return org.apache.hadoop.hbase.protobuf.generated.FilterProtos.internal_static_ColumnPrefixCountGetFilter_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter.class, org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter.Builder.class);
+    }
+
+    public static com.google.protobuf.Parser<ColumnPrefixCountGetFilter> PARSER =
+        new com.google.protobuf.AbstractParser<ColumnPrefixCountGetFilter>() {
+      public ColumnPrefixCountGetFilter parsePartialFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return new ColumnPrefixCountGetFilter(input, extensionRegistry);
+      }
+    };
+
+    @java.lang.Override
+    public com.google.protobuf.Parser<ColumnPrefixCountGetFilter> getParserForType() {
+      return PARSER;
+    }
+
+    private int bitField0_;
+    // required bytes prefix = 1;
+    public static final int PREFIX_FIELD_NUMBER = 1;
+    private com.google.protobuf.ByteString prefix_;
+    /**
+     * <code>required bytes prefix = 1;</code>
+     */
+    public boolean hasPrefix() {
+      return ((bitField0_ & 0x00000001) == 0x00000001);
+    }
+    /**
+     * <code>required bytes prefix = 1;</code>
+     */
+    public com.google.protobuf.ByteString getPrefix() {
+      return prefix_;
+    }
+
+    // required int32 limit = 2;
+    public static final int LIMIT_FIELD_NUMBER = 2;
+    private int limit_;
+    /**
+     * <code>required int32 limit = 2;</code>
+     */
+    public boolean hasLimit() {
+      return ((bitField0_ & 0x00000002) == 0x00000002);
+    }
+    /**
+     * <code>required int32 limit = 2;</code>
+     */
+    public int getLimit() {
+      return limit_;
+    }
+
+    private void initFields() {
+      prefix_ = com.google.protobuf.ByteString.EMPTY;
+      limit_ = 0;
+    }
+    private byte memoizedIsInitialized = -1;
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized != -1) return isInitialized == 1;
+
+      if (!hasPrefix()) {
+        memoizedIsInitialized = 0;
+        return false;
+      }
+      if (!hasLimit()) {
+        memoizedIsInitialized = 0;
+        return false;
+      }
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    public void writeTo(com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      getSerializedSize();
+      if (((bitField0_ & 0x00000001) == 0x00000001)) {
+        output.writeBytes(1, prefix_);
+      }
+      if (((bitField0_ & 0x00000002) == 0x00000002)) {
+        output.writeInt32(2, limit_);
+      }
+      getUnknownFields().writeTo(output);
+    }
+
+    private int memoizedSerializedSize = -1;
+    public int getSerializedSize() {
+      int size = memoizedSerializedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      if (((bitField0_ & 0x00000001) == 0x00000001)) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeBytesSize(1, prefix_);
+      }
+      if (((bitField0_ & 0x00000002) == 0x00000002)) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeInt32Size(2, limit_);
+      }
+      size += getUnknownFields().getSerializedSize();
+      memoizedSerializedSize = size;
+      return size;
+    }
+
+    private static final long serialVersionUID = 0L;
+    @java.lang.Override
+    protected java.lang.Object writeReplace()
+        throws java.io.ObjectStreamException {
+      return super.writeReplace();
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter)) {
+        return super.equals(obj);
+      }
+      org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter other = (org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter) obj;
+
+      boolean result = true;
+      result = result && (hasPrefix() == other.hasPrefix());
+      if (hasPrefix()) {
+        result = result && getPrefix()
+            .equals(other.getPrefix());
+      }
+      result = result && (hasLimit() == other.hasLimit());
+      if (hasLimit()) {
+        result = result && (getLimit()
+            == other.getLimit());
+      }
+      result = result &&
+          getUnknownFields().equals(other.getUnknownFields());
+      return result;
+    }
+
+    private int memoizedHashCode = 0;
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptorForType().hashCode();
+      if (hasPrefix()) {
+        hash = (37 * hash) + PREFIX_FIELD_NUMBER;
+        hash = (53 * hash) + getPrefix().hashCode();
+      }
+      if (hasLimit()) {
+        hash = (37 * hash) + LIMIT_FIELD_NUMBER;
+        hash = (53 * hash) + getLimit();
+      }
+      hash = (29 * hash) + getUnknownFields().hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseFrom(
+        com.google.protobuf.ByteString data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseFrom(
+        com.google.protobuf.ByteString data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseFrom(byte[] data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseFrom(
+        byte[] data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return PARSER.parseFrom(input);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return PARSER.parseFrom(input, extensionRegistry);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return PARSER.parseDelimitedFrom(input);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseDelimitedFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return PARSER.parseDelimitedFrom(input, extensionRegistry);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseFrom(
+        com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return PARSER.parseFrom(input);
+    }
+    public static org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parseFrom(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return PARSER.parseFrom(input, extensionRegistry);
+    }
+
+    public static Builder newBuilder() { return Builder.create(); }
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder(org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter prototype) {
+      return newBuilder().mergeFrom(prototype);
+    }
+    public Builder toBuilder() { return newBuilder(this); }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * Protobuf type {@code ColumnPrefixCountGetFilter}
+     */
+    public static final class Builder extends
+        com.google.protobuf.GeneratedMessage.Builder<Builder>
+       implements org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilterOrBuilder {
+      public static final com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return org.apache.hadoop.hbase.protobuf.generated.FilterProtos.internal_static_ColumnPrefixCountGetFilter_descriptor;
+      }
+
+      protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return org.apache.hadoop.hbase.protobuf.generated.FilterProtos.internal_static_ColumnPrefixCountGetFilter_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter.class, org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter.Builder.class);
+      }
+
+      // Construct using org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter.newBuilder()
+      private Builder() {
+        maybeForceBuilderInitialization();
+      }
+
+      private Builder(
+          com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+        super(parent);
+        maybeForceBuilderInitialization();
+      }
+      private void maybeForceBuilderInitialization() {
+        if (com.google.protobuf.GeneratedMessage.alwaysUseFieldBuilders) {
+        }
+      }
+      private static Builder create() {
+        return new Builder();
+      }
+
+      public Builder clear() {
+        super.clear();
+        prefix_ = com.google.protobuf.ByteString.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000001);
+        limit_ = 0;
+        bitField0_ = (bitField0_ & ~0x00000002);
+        return this;
+      }
+
+      public Builder clone() {
+        return create().mergeFrom(buildPartial());
+      }
+
+      public com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return org.apache.hadoop.hbase.protobuf.generated.FilterProtos.internal_static_ColumnPrefixCountGetFilter_descriptor;
+      }
+
+      public org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter getDefaultInstanceForType() {
+        return org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter.getDefaultInstance();
+      }
+
+      public org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter build() {
+        org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      public org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter buildPartial() {
+        org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter result = new org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter(this);
+        int from_bitField0_ = bitField0_;
+        int to_bitField0_ = 0;
+        if (((from_bitField0_ & 0x00000001) == 0x00000001)) {
+          to_bitField0_ |= 0x00000001;
+        }
+        result.prefix_ = prefix_;
+        if (((from_bitField0_ & 0x00000002) == 0x00000002)) {
+          to_bitField0_ |= 0x00000002;
+        }
+        result.limit_ = limit_;
+        result.bitField0_ = to_bitField0_;
+        onBuilt();
+        return result;
+      }
+
+      public Builder mergeFrom(com.google.protobuf.Message other) {
+        if (other instanceof org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter) {
+          return mergeFrom((org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter other) {
+        if (other == org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter.getDefaultInstance()) return this;
+        if (other.hasPrefix()) {
+          setPrefix(other.getPrefix());
+        }
+        if (other.hasLimit()) {
+          setLimit(other.getLimit());
+        }
+        this.mergeUnknownFields(other.getUnknownFields());
+        return this;
+      }
+
+      public final boolean isInitialized() {
+        if (!hasPrefix()) {
+          
+          return false;
+        }
+        if (!hasLimit()) {
+          
+          return false;
+        }
+        return true;
+      }
+
+      public Builder mergeFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter parsedMessage = null;
+        try {
+          parsedMessage = PARSER.parsePartialFrom(input, extensionRegistry);
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          parsedMessage = (org.apache.hadoop.hbase.protobuf.generated.FilterProtos.ColumnPrefixCountGetFilter) e.getUnfinishedMessage();
+          throw e;
+        } finally {
+          if (parsedMessage != null) {
+            mergeFrom(parsedMessage);
+          }
+        }
+        return this;
+      }
+      private int bitField0_;
+
+      // required bytes prefix = 1;
+      private com.google.protobuf.ByteString prefix_ = com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>required bytes prefix = 1;</code>
+       */
+      public boolean hasPrefix() {
+        return ((bitField0_ & 0x00000001) == 0x00000001);
+      }
+      /**
+       * <code>required bytes prefix = 1;</code>
+       */
+      public com.google.protobuf.ByteString getPrefix() {
+        return prefix_;
+      }
+      /**
+       * <code>required bytes prefix = 1;</code>
+       */
+      public Builder setPrefix(com.google.protobuf.ByteString value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  bitField0_ |= 0x00000001;
+        prefix_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>required bytes prefix = 1;</code>
+       */
+      public Builder clearPrefix() {
+        bitField0_ = (bitField0_ & ~0x00000001);
+        prefix_ = getDefaultInstance().getPrefix();
+        onChanged();
+        return this;
+      }
+
+      // required int32 limit = 2;
+      private int limit_ ;
+      /**
+       * <code>required int32 limit = 2;</code>
+       */
+      public boolean hasLimit() {
+        return ((bitField0_ & 0x00000002) == 0x00000002);
+      }
+      /**
+       * <code>required int32 limit = 2;</code>
+       */
+      public int getLimit() {
+        return limit_;
+      }
+      /**
+       * <code>required int32 limit = 2;</code>
+       */
+      public Builder setLimit(int value) {
+        bitField0_ |= 0x00000002;
+        limit_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>required int32 limit = 2;</code>
+       */
+      public Builder clearLimit() {
+        bitField0_ = (bitField0_ & ~0x00000002);
+        limit_ = 0;
+        onChanged();
+        return this;
+      }
+
+      // @@protoc_insertion_point(builder_scope:ColumnPrefixCountGetFilter)
+    }
+
+    static {
+      defaultInstance = new ColumnPrefixCountGetFilter(true);
+      defaultInstance.initFields();
+    }
+
+    // @@protoc_insertion_point(class_scope:ColumnPrefixCountGetFilter)
+  }
+
   public interface ColumnRangeFilterOrBuilder
       extends com.google.protobuf.MessageOrBuilder {
 
@@ -17321,6 +17864,11 @@ public final class FilterProtos {
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_ColumnPrefixFilter_fieldAccessorTable;
   private static com.google.protobuf.Descriptors.Descriptor
+    internal_static_ColumnPrefixCountGetFilter_descriptor;
+  private static
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_ColumnPrefixCountGetFilter_fieldAccessorTable;
+  private static com.google.protobuf.Descriptors.Descriptor
     internal_static_ColumnRangeFilter_descriptor;
   private static
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
@@ -17465,52 +18013,53 @@ public final class FilterProtos {
       "\022\r\n\005limit\030\001 \002(\005\"N\n\026ColumnPaginationFilte" +
       "r\022\r\n\005limit\030\001 \002(\005\022\016\n\006offset\030\002 \001(\005\022\025\n\rcolu" +
       "mn_offset\030\003 \001(\014\"$\n\022ColumnPrefixFilter\022\016\n" +
-      "\006prefix\030\001 \002(\014\"w\n\021ColumnRangeFilter\022\022\n\nmi" +
-      "n_column\030\001 \001(\014\022\034\n\024min_column_inclusive\030\002" +
-      " \001(\010\022\022\n\nmax_column\030\003 \001(\014\022\034\n\024max_column_i" +
-      "nclusive\030\004 \001(\010\"R\n\rCompareFilter\022 \n\ncompa",
-      "re_op\030\001 \002(\0162\014.CompareType\022\037\n\ncomparator\030" +
-      "\002 \001(\0132\013.Comparator\"\217\001\n\025DependentColumnFi" +
-      "lter\022&\n\016compare_filter\030\001 \002(\0132\016.CompareFi" +
-      "lter\022\025\n\rcolumn_family\030\002 \001(\014\022\030\n\020column_qu" +
-      "alifier\030\003 \001(\014\022\035\n\025drop_dependent_column\030\004" +
-      " \001(\010\"6\n\014FamilyFilter\022&\n\016compare_filter\030\001" +
-      " \002(\0132\016.CompareFilter\"\200\001\n\nFilterList\022&\n\010o" +
-      "perator\030\001 \002(\0162\024.FilterList.Operator\022\030\n\007f" +
-      "ilters\030\002 \003(\0132\007.Filter\"0\n\010Operator\022\021\n\rMUS" +
-      "T_PASS_ALL\020\001\022\021\n\rMUST_PASS_ONE\020\002\"(\n\rFilte",
-      "rWrapper\022\027\n\006filter\030\001 \002(\0132\007.Filter\"\024\n\022Fir" +
-      "stKeyOnlyFilter\";\n%FirstKeyValueMatching" +
-      "QualifiersFilter\022\022\n\nqualifiers\030\001 \003(\014\":\n\016" +
-      "FuzzyRowFilter\022(\n\017fuzzy_keys_data\030\001 \003(\0132" +
-      "\017.BytesBytesPair\"+\n\023InclusiveStopFilter\022" +
-      "\024\n\014stop_row_key\030\001 \001(\014\"#\n\rKeyOnlyFilter\022\022" +
-      "\n\nlen_as_val\030\001 \002(\010\"5\n\032MultipleColumnPref" +
-      "ixFilter\022\027\n\017sorted_prefixes\030\001 \003(\014\"\037\n\nPag" +
-      "eFilter\022\021\n\tpage_size\030\001 \002(\003\"\036\n\014PrefixFilt" +
-      "er\022\016\n\006prefix\030\001 \001(\014\"9\n\017QualifierFilter\022&\n",
-      "\016compare_filter\030\001 \002(\0132\016.CompareFilter\"!\n" +
-      "\017RandomRowFilter\022\016\n\006chance\030\001 \002(\002\"3\n\tRowF" +
-      "ilter\022&\n\016compare_filter\030\001 \002(\0132\016.CompareF" +
-      "ilter\"^\n\036SingleColumnValueExcludeFilter\022" +
-      "<\n\032single_column_value_filter\030\001 \002(\0132\030.Si" +
-      "ngleColumnValueFilter\"\305\001\n\027SingleColumnVa" +
-      "lueFilter\022\025\n\rcolumn_family\030\001 \001(\014\022\030\n\020colu" +
-      "mn_qualifier\030\002 \001(\014\022 \n\ncompare_op\030\003 \002(\0162\014" +
-      ".CompareType\022\037\n\ncomparator\030\004 \002(\0132\013.Compa" +
-      "rator\022\031\n\021filter_if_missing\030\005 \001(\010\022\033\n\023late",
-      "st_version_only\030\006 \001(\010\"%\n\nSkipFilter\022\027\n\006f" +
-      "ilter\030\001 \002(\0132\007.Filter\"*\n\020TimestampsFilter" +
-      "\022\026\n\ntimestamps\030\001 \003(\003B\002\020\001\"5\n\013ValueFilter\022" +
-      "&\n\016compare_filter\030\001 \002(\0132\016.CompareFilter\"" +
-      "+\n\020WhileMatchFilter\022\027\n\006filter\030\001 \002(\0132\007.Fi" +
-      "lter\"\021\n\017FilterAllFilter\"h\n\010RowRange\022\021\n\ts" +
-      "tart_row\030\001 \001(\014\022\033\n\023start_row_inclusive\030\002 " +
-      "\001(\010\022\020\n\010stop_row\030\003 \001(\014\022\032\n\022stop_row_inclus" +
-      "ive\030\004 \001(\010\"8\n\023MultiRowRangeFilter\022!\n\016row_" +
-      "range_list\030\001 \003(\0132\t.RowRangeBB\n*org.apach",
-      "e.hadoop.hbase.protobuf.generatedB\014Filte" +
-      "rProtosH\001\210\001\001\240\001\001"
+      "\006prefix\030\001 \002(\014\";\n\032ColumnPrefixCountGetFil" +
+      "ter\022\016\n\006prefix\030\001 \002(\014\022\r\n\005limit\030\002 \002(\005\"w\n\021Co" +
+      "lumnRangeFilter\022\022\n\nmin_column\030\001 \001(\014\022\034\n\024m" +
+      "in_column_inclusive\030\002 \001(\010\022\022\n\nmax_column\030",
+      "\003 \001(\014\022\034\n\024max_column_inclusive\030\004 \001(\010\"R\n\rC" +
+      "ompareFilter\022 \n\ncompare_op\030\001 \002(\0162\014.Compa" +
+      "reType\022\037\n\ncomparator\030\002 \001(\0132\013.Comparator\"" +
+      "\217\001\n\025DependentColumnFilter\022&\n\016compare_fil" +
+      "ter\030\001 \002(\0132\016.CompareFilter\022\025\n\rcolumn_fami" +
+      "ly\030\002 \001(\014\022\030\n\020column_qualifier\030\003 \001(\014\022\035\n\025dr" +
+      "op_dependent_column\030\004 \001(\010\"6\n\014FamilyFilte" +
+      "r\022&\n\016compare_filter\030\001 \002(\0132\016.CompareFilte" +
+      "r\"\200\001\n\nFilterList\022&\n\010operator\030\001 \002(\0162\024.Fil" +
+      "terList.Operator\022\030\n\007filters\030\002 \003(\0132\007.Filt",
+      "er\"0\n\010Operator\022\021\n\rMUST_PASS_ALL\020\001\022\021\n\rMUS" +
+      "T_PASS_ONE\020\002\"(\n\rFilterWrapper\022\027\n\006filter\030" +
+      "\001 \002(\0132\007.Filter\"\024\n\022FirstKeyOnlyFilter\";\n%" +
+      "FirstKeyValueMatchingQualifiersFilter\022\022\n" +
+      "\nqualifiers\030\001 \003(\014\":\n\016FuzzyRowFilter\022(\n\017f" +
+      "uzzy_keys_data\030\001 \003(\0132\017.BytesBytesPair\"+\n" +
+      "\023InclusiveStopFilter\022\024\n\014stop_row_key\030\001 \001" +
+      "(\014\"#\n\rKeyOnlyFilter\022\022\n\nlen_as_val\030\001 \002(\010\"" +
+      "5\n\032MultipleColumnPrefixFilter\022\027\n\017sorted_" +
+      "prefixes\030\001 \003(\014\"\037\n\nPageFilter\022\021\n\tpage_siz",
+      "e\030\001 \002(\003\"\036\n\014PrefixFilter\022\016\n\006prefix\030\001 \001(\014\"" +
+      "9\n\017QualifierFilter\022&\n\016compare_filter\030\001 \002" +
+      "(\0132\016.CompareFilter\"!\n\017RandomRowFilter\022\016\n" +
+      "\006chance\030\001 \002(\002\"3\n\tRowFilter\022&\n\016compare_fi" +
+      "lter\030\001 \002(\0132\016.CompareFilter\"^\n\036SingleColu" +
+      "mnValueExcludeFilter\022<\n\032single_column_va" +
+      "lue_filter\030\001 \002(\0132\030.SingleColumnValueFilt" +
+      "er\"\305\001\n\027SingleColumnValueFilter\022\025\n\rcolumn" +
+      "_family\030\001 \001(\014\022\030\n\020column_qualifier\030\002 \001(\014\022" +
+      " \n\ncompare_op\030\003 \002(\0162\014.CompareType\022\037\n\ncom",
+      "parator\030\004 \002(\0132\013.Comparator\022\031\n\021filter_if_" +
+      "missing\030\005 \001(\010\022\033\n\023latest_version_only\030\006 \001" +
+      "(\010\"%\n\nSkipFilter\022\027\n\006filter\030\001 \002(\0132\007.Filte" +
+      "r\"*\n\020TimestampsFilter\022\026\n\ntimestamps\030\001 \003(" +
+      "\003B\002\020\001\"5\n\013ValueFilter\022&\n\016compare_filter\030\001" +
+      " \002(\0132\016.CompareFilter\"+\n\020WhileMatchFilter" +
+      "\022\027\n\006filter\030\001 \002(\0132\007.Filter\"\021\n\017FilterAllFi" +
+      "lter\"h\n\010RowRange\022\021\n\tstart_row\030\001 \001(\014\022\033\n\023s" +
+      "tart_row_inclusive\030\002 \001(\010\022\020\n\010stop_row\030\003 \001" +
+      "(\014\022\032\n\022stop_row_inclusive\030\004 \001(\010\"8\n\023MultiR",
+      "owRangeFilter\022!\n\016row_range_list\030\001 \003(\0132\t." +
+      "RowRangeBB\n*org.apache.hadoop.hbase.prot" +
+      "obuf.generatedB\014FilterProtosH\001\210\001\001\240\001\001"
     };
     com.google.protobuf.Descriptors.FileDescriptor.InternalDescriptorAssigner assigner =
       new com.google.protobuf.Descriptors.FileDescriptor.InternalDescriptorAssigner() {
@@ -17541,158 +18090,164 @@ public final class FilterProtos {
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_ColumnPrefixFilter_descriptor,
               new java.lang.String[] { "Prefix", });
-          internal_static_ColumnRangeFilter_descriptor =
+          internal_static_ColumnPrefixCountGetFilter_descriptor =
             getDescriptor().getMessageTypes().get(4);
+          internal_static_ColumnPrefixCountGetFilter_fieldAccessorTable = new
+            com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+              internal_static_ColumnPrefixCountGetFilter_descriptor,
+              new java.lang.String[] { "Prefix", "Limit", });
+          internal_static_ColumnRangeFilter_descriptor =
+            getDescriptor().getMessageTypes().get(5);
           internal_static_ColumnRangeFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_ColumnRangeFilter_descriptor,
               new java.lang.String[] { "MinColumn", "MinColumnInclusive", "MaxColumn", "MaxColumnInclusive", });
           internal_static_CompareFilter_descriptor =
-            getDescriptor().getMessageTypes().get(5);
+            getDescriptor().getMessageTypes().get(6);
           internal_static_CompareFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_CompareFilter_descriptor,
               new java.lang.String[] { "CompareOp", "Comparator", });
           internal_static_DependentColumnFilter_descriptor =
-            getDescriptor().getMessageTypes().get(6);
+            getDescriptor().getMessageTypes().get(7);
           internal_static_DependentColumnFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_DependentColumnFilter_descriptor,
               new java.lang.String[] { "CompareFilter", "ColumnFamily", "ColumnQualifier", "DropDependentColumn", });
           internal_static_FamilyFilter_descriptor =
-            getDescriptor().getMessageTypes().get(7);
+            getDescriptor().getMessageTypes().get(8);
           internal_static_FamilyFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_FamilyFilter_descriptor,
               new java.lang.String[] { "CompareFilter", });
           internal_static_FilterList_descriptor =
-            getDescriptor().getMessageTypes().get(8);
+            getDescriptor().getMessageTypes().get(9);
           internal_static_FilterList_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_FilterList_descriptor,
               new java.lang.String[] { "Operator", "Filters", });
           internal_static_FilterWrapper_descriptor =
-            getDescriptor().getMessageTypes().get(9);
+            getDescriptor().getMessageTypes().get(10);
           internal_static_FilterWrapper_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_FilterWrapper_descriptor,
               new java.lang.String[] { "Filter", });
           internal_static_FirstKeyOnlyFilter_descriptor =
-            getDescriptor().getMessageTypes().get(10);
+            getDescriptor().getMessageTypes().get(11);
           internal_static_FirstKeyOnlyFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_FirstKeyOnlyFilter_descriptor,
               new java.lang.String[] { });
           internal_static_FirstKeyValueMatchingQualifiersFilter_descriptor =
-            getDescriptor().getMessageTypes().get(11);
+            getDescriptor().getMessageTypes().get(12);
           internal_static_FirstKeyValueMatchingQualifiersFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_FirstKeyValueMatchingQualifiersFilter_descriptor,
               new java.lang.String[] { "Qualifiers", });
           internal_static_FuzzyRowFilter_descriptor =
-            getDescriptor().getMessageTypes().get(12);
+            getDescriptor().getMessageTypes().get(13);
           internal_static_FuzzyRowFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_FuzzyRowFilter_descriptor,
               new java.lang.String[] { "FuzzyKeysData", });
           internal_static_InclusiveStopFilter_descriptor =
-            getDescriptor().getMessageTypes().get(13);
+            getDescriptor().getMessageTypes().get(14);
           internal_static_InclusiveStopFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_InclusiveStopFilter_descriptor,
               new java.lang.String[] { "StopRowKey", });
           internal_static_KeyOnlyFilter_descriptor =
-            getDescriptor().getMessageTypes().get(14);
+            getDescriptor().getMessageTypes().get(15);
           internal_static_KeyOnlyFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_KeyOnlyFilter_descriptor,
               new java.lang.String[] { "LenAsVal", });
           internal_static_MultipleColumnPrefixFilter_descriptor =
-            getDescriptor().getMessageTypes().get(15);
+            getDescriptor().getMessageTypes().get(16);
           internal_static_MultipleColumnPrefixFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_MultipleColumnPrefixFilter_descriptor,
               new java.lang.String[] { "SortedPrefixes", });
           internal_static_PageFilter_descriptor =
-            getDescriptor().getMessageTypes().get(16);
+            getDescriptor().getMessageTypes().get(17);
           internal_static_PageFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_PageFilter_descriptor,
               new java.lang.String[] { "PageSize", });
           internal_static_PrefixFilter_descriptor =
-            getDescriptor().getMessageTypes().get(17);
+            getDescriptor().getMessageTypes().get(18);
           internal_static_PrefixFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_PrefixFilter_descriptor,
               new java.lang.String[] { "Prefix", });
           internal_static_QualifierFilter_descriptor =
-            getDescriptor().getMessageTypes().get(18);
+            getDescriptor().getMessageTypes().get(19);
           internal_static_QualifierFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_QualifierFilter_descriptor,
               new java.lang.String[] { "CompareFilter", });
           internal_static_RandomRowFilter_descriptor =
-            getDescriptor().getMessageTypes().get(19);
+            getDescriptor().getMessageTypes().get(20);
           internal_static_RandomRowFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_RandomRowFilter_descriptor,
               new java.lang.String[] { "Chance", });
           internal_static_RowFilter_descriptor =
-            getDescriptor().getMessageTypes().get(20);
+            getDescriptor().getMessageTypes().get(21);
           internal_static_RowFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_RowFilter_descriptor,
               new java.lang.String[] { "CompareFilter", });
           internal_static_SingleColumnValueExcludeFilter_descriptor =
-            getDescriptor().getMessageTypes().get(21);
+            getDescriptor().getMessageTypes().get(22);
           internal_static_SingleColumnValueExcludeFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_SingleColumnValueExcludeFilter_descriptor,
               new java.lang.String[] { "SingleColumnValueFilter", });
           internal_static_SingleColumnValueFilter_descriptor =
-            getDescriptor().getMessageTypes().get(22);
+            getDescriptor().getMessageTypes().get(23);
           internal_static_SingleColumnValueFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_SingleColumnValueFilter_descriptor,
               new java.lang.String[] { "ColumnFamily", "ColumnQualifier", "CompareOp", "Comparator", "FilterIfMissing", "LatestVersionOnly", });
           internal_static_SkipFilter_descriptor =
-            getDescriptor().getMessageTypes().get(23);
+            getDescriptor().getMessageTypes().get(24);
           internal_static_SkipFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_SkipFilter_descriptor,
               new java.lang.String[] { "Filter", });
           internal_static_TimestampsFilter_descriptor =
-            getDescriptor().getMessageTypes().get(24);
+            getDescriptor().getMessageTypes().get(25);
           internal_static_TimestampsFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_TimestampsFilter_descriptor,
               new java.lang.String[] { "Timestamps", });
           internal_static_ValueFilter_descriptor =
-            getDescriptor().getMessageTypes().get(25);
+            getDescriptor().getMessageTypes().get(26);
           internal_static_ValueFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_ValueFilter_descriptor,
               new java.lang.String[] { "CompareFilter", });
           internal_static_WhileMatchFilter_descriptor =
-            getDescriptor().getMessageTypes().get(26);
+            getDescriptor().getMessageTypes().get(27);
           internal_static_WhileMatchFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_WhileMatchFilter_descriptor,
               new java.lang.String[] { "Filter", });
           internal_static_FilterAllFilter_descriptor =
-            getDescriptor().getMessageTypes().get(27);
+            getDescriptor().getMessageTypes().get(28);
           internal_static_FilterAllFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_FilterAllFilter_descriptor,
               new java.lang.String[] { });
           internal_static_RowRange_descriptor =
-            getDescriptor().getMessageTypes().get(28);
+            getDescriptor().getMessageTypes().get(29);
           internal_static_RowRange_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_RowRange_descriptor,
               new java.lang.String[] { "StartRow", "StartRowInclusive", "StopRow", "StopRowInclusive", });
           internal_static_MultiRowRangeFilter_descriptor =
-            getDescriptor().getMessageTypes().get(29);
+            getDescriptor().getMessageTypes().get(30);
           internal_static_MultiRowRangeFilter_fieldAccessorTable = new
             com.google.protobuf.GeneratedMessage.FieldAccessorTable(
               internal_static_MultiRowRangeFilter_descriptor,

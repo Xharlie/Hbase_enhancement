@@ -1,0 +1,37 @@
+[
+    {
+        "column":"uri:promotion_status",
+        "trigger":{
+            "operator":"SNE",
+            "value":"${self}"
+        },
+        "action":{
+            "column":"history:cp_trigger_promotion",
+            "value":"coprocessor"
+        }
+    },
+    
+    {
+        "column":"uri:promotion_js_status",
+        "trigger":{
+            "operator":"SNE",
+            "value":"${self}"
+        },
+        "action":{
+            "column":"history:cp_trigger_promotion",
+            "value":"coprocessor"
+        }
+    },
+    
+    {
+        "column":"parser:promotion_*",
+        "trigger":{
+            "operator":"SNE",
+            "value":"${self}"
+        },
+        "action":{
+            "column":"history:cp_trigger_promotion",
+            "value":"coprocessor"
+        }
+    }
+]

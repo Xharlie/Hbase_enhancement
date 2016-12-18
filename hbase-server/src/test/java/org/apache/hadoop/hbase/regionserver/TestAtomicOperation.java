@@ -79,7 +79,7 @@ public class TestAtomicOperation {
   static final Log LOG = LogFactory.getLog(TestAtomicOperation.class);
   @Rule public TestName name = new TestName();
 
-  Region region = null;
+  HRegion region = null;
   private HBaseTestingUtility TEST_UTIL = HBaseTestingUtility.createLocalHTU();
 
   // Test names
@@ -133,17 +133,54 @@ public class TestAtomicOperation {
     assertEquals(0, Bytes.compareTo(Bytes.toBytes(v2+v1), result.getValue(fam1, qual2)));
   }
 
+  @Test
+  public void testAppendWithNonExistingFamily() throws IOException {
+    initHRegion(tableName, name.getMethodName(), fam1);
+    final String v1 = "Value";
+    final Append a = new Append(row);
+    a.add(fam1, qual1, Bytes.toBytes(v1));
+    a.add(fam2, qual2, Bytes.toBytes(v1));
+    Result result = null;
+    try {
+      result = region.append(a, HConstants.NO_NONCE, HConstants.NO_NONCE);
+      fail("Append operation should fail with NoSuchColumnFamilyException.");
+    } catch (NoSuchColumnFamilyException e) {
+      assertEquals(null, result);
+    } catch (Exception e) {
+      fail("Append operation should fail with NoSuchColumnFamilyException.");
+    }
+  }
+
+  @Test
+  public void testIncrementWithNonExistingFamily() throws IOException {
+    initHRegion(tableName, name.getMethodName(), fam1);
+    final Increment inc = new Increment(row);
+    inc.addColumn(fam1, qual1, 1);
+    inc.addColumn(fam2, qual2, 1);
+    inc.setDurability(Durability.ASYNC_WAL);
+    try {
+      region.increment(inc, HConstants.NO_NONCE, HConstants.NO_NONCE);
+    } catch (NoSuchColumnFamilyException e) {
+      final Get g = new Get(row);
+      final Result result = region.get(g);
+      assertEquals(null, result.getValue(fam1, qual1));
+      assertEquals(null, result.getValue(fam2, qual2));
+    } catch (Exception e) {
+      fail("Increment operation should fail with NoSuchColumnFamilyException.");
+    }
+  }
+
   /**
    * Test multi-threaded increments.
    */
   @Test
   public void testIncrementMultiThreads() throws IOException {
-
     LOG.info("Starting test testIncrementMultiThreads");
     // run a with mixed column families (1 and 3 versions)
     initHRegion(tableName, name.getMethodName(), new int[] {1,3}, fam1, fam2);
 
-    // create 100 threads, each will increment by its own quantity
+    // Create 100 threads, each will increment by its own quantity. All 100 threads update the
+    // same row over two column families.
     int numThreads = 100;
     int incrementsPerThread = 1000;
     Incrementer[] all = new Incrementer[numThreads];
@@ -167,6 +204,7 @@ public class TestAtomicOperation {
       } catch (InterruptedException e) {
       }
     }
+
     assertICV(row, fam1, qual1, expectedTotal);
     assertICV(row, fam1, qual2, expectedTotal*2);
     assertICV(row, fam2, qual3, expectedTotal*3);
@@ -211,17 +249,18 @@ public class TestAtomicOperation {
   }
 
   /**
-   * A thread that makes a few increment calls
+   * A thread that makes increment calls always on the same row, this.row against two column
+   * families on this row.
    */
   public static class Incrementer extends Thread {
 
-    private final Region region;
+    private final HRegion region;
     private final int numIncrements;
     private final int amount;
 
 
-    public Incrementer(Region region,
-        int threadNumber, int amount, int numIncrements) {
+    public Incrementer(HRegion region, int threadNumber, int amount, int numIncrements) {
+      super("Incrementer." + threadNumber);
       this.region = region;
       this.numIncrements = numIncrements;
       this.amount = amount;
@@ -237,13 +276,13 @@ public class TestAtomicOperation {
           inc.addColumn(fam1, qual2, amount*2);
           inc.addColumn(fam2, qual3, amount*3);
           inc.setDurability(Durability.ASYNC_WAL);
-          region.increment(inc, HConstants.NO_NONCE, HConstants.NO_NONCE);
-
-          // verify: Make sure we only see completed increments
-          Get g = new Get(row);
-          Result result = region.get(g);
-          assertEquals(Bytes.toLong(result.getValue(fam1, qual1))*2, Bytes.toLong(result.getValue(fam1, qual2))); 
-          assertEquals(Bytes.toLong(result.getValue(fam1, qual1))*3, Bytes.toLong(result.getValue(fam2, qual3)));
+          Result result = region.increment(inc);
+          assertEquals(Bytes.toLong(result.getValue(fam1, qual1))*2,
+             Bytes.toLong(result.getValue(fam1, qual2)));
+          long fam1Increment = Bytes.toLong(result.getValue(fam1, qual1))*3;
+          long fam2Increment = Bytes.toLong(result.getValue(fam2, qual3));
+          assertEquals("fam1=" + fam1Increment + ", fam2=" + fam2Increment,
+            fam1Increment, fam2Increment);
         } catch (IOException e) {
           e.printStackTrace();
         }
@@ -469,7 +508,7 @@ public class TestAtomicOperation {
                 ;
               rs.close();
               if (r.size() != 1) {
-                LOG.debug(r);
+                LOG.debug("Result size: " + r.size() + "; details: " + r);
                 failures.incrementAndGet();
                 fail();
               }
@@ -499,13 +538,13 @@ public class TestAtomicOperation {
   }
 
   public static class AtomicOperation extends Thread {
-    protected final Region region;
+    protected final HRegion region;
     protected final int numOps;
     protected final AtomicLong timeStamps;
     protected final AtomicInteger failures;
     protected final Random r = new Random();
 
-    public AtomicOperation(Region region, int numOps, AtomicLong timeStamps,
+    public AtomicOperation(HRegion region, int numOps, AtomicLong timeStamps,
         AtomicInteger failures) {
       this.region = region;
       this.numOps = numOps;
@@ -568,8 +607,8 @@ public class TestAtomicOperation {
   }
 
   private class PutThread extends TestThread {
-    private Region region;
-    PutThread(TestContext ctx, Region region) {
+    private HRegion region;
+    PutThread(TestContext ctx, HRegion region) {
       super(ctx);
       this.region = region;
     }
@@ -585,8 +624,8 @@ public class TestAtomicOperation {
   }
 
   private class CheckAndPutThread extends TestThread {
-    private Region region;
-    CheckAndPutThread(TestContext ctx, Region region) {
+    private HRegion region;
+    CheckAndPutThread(TestContext ctx, HRegion region) {
       super(ctx);
       this.region = region;
    }
@@ -614,30 +653,31 @@ public class TestAtomicOperation {
     }
 
     @Override
-    public RowLock getRowLockInternal(final byte[] row, boolean waitForLock) throws IOException {
+    public RowLock getRowLock(final byte[] row, boolean readLock) throws IOException {
       if (testStep == TestStep.CHECKANDPUT_STARTED) {
         latch.countDown();
       }
-      return new WrappedRowLock(super.getRowLockInternal(row, waitForLock));
+      return new WrappedRowLock(super.getRowLock(row, readLock));
     }
     
-    public class WrappedRowLock extends RowLockImpl {
+    public class WrappedRowLock implements RowLock {
+      private final RowLock rowLock;
 
       private WrappedRowLock(RowLock rowLock) {
-        setContext(((RowLockImpl)rowLock).getContext());
+        this.rowLock = rowLock;
       }
 
       @Override
       public void release() {
         if (testStep == TestStep.INIT) {
-          super.release();
+          this.rowLock.release();
           return;
         }
 
         if (testStep == TestStep.PUT_STARTED) {
           try {
             testStep = TestStep.PUT_COMPLETED;
-            super.release();
+            this.rowLock.release();
             // put has been written to the memstore and the row lock has been released, but the
             // MVCC has not been advanced.  Prior to fixing HBASE-7051, the following order of
             // operations would cause the non-atomicity to show up:
@@ -655,7 +695,7 @@ public class TestAtomicOperation {
           }
         }
         else if (testStep == TestStep.CHECKANDPUT_STARTED) {
-          super.release();
+          this.rowLock.release();
         }
       }
     }

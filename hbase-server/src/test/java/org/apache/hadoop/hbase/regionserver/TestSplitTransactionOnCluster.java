@@ -1002,9 +1002,9 @@ public class TestSplitTransactionOnCluster {
           tableName);
       assertEquals("The specified table should be present.", true, tableExists);
       final HRegion region = findSplittableRegion(oldRegions);
+      assertTrue("not able to find a splittable region", region != null);
       regionServerIndex = cluster.getServerWith(region.getRegionInfo().getRegionName());
       regionServer = cluster.getRegionServer(regionServerIndex);
-      assertTrue("not able to find a splittable region", region != null);
       String node = ZKAssign.getNodeName(regionServer.getZooKeeper(),
           region.getRegionInfo().getEncodedName());
       regionServer.getZooKeeper().sync(node);
@@ -1324,7 +1324,7 @@ public class TestSplitTransactionOnCluster {
       assertNotNull(observer);
       observer.latch.await();
       observer.postSplit.await();
-      LOG.info("Waiting for region to come out of RIT");
+      LOG.info("Waiting for region to come out of RIT: " + actualRegion);
       TESTING_UTIL.waitFor(60000, 1000, new Waiter.Predicate<Exception>() {
         @Override
         public boolean evaluate() throws Exception {
@@ -1335,7 +1335,9 @@ public class TestSplitTransactionOnCluster {
       });
       regions = TESTING_UTIL.getHBaseAdmin().getTableRegions(tableName);
       assertTrue(regions.size() == 1);
-      assertTrue(admin.balancer());
+      RegionStates regionStates = cluster.getMaster().getAssignmentManager().getRegionStates();
+      Map<String, RegionState> rit = regionStates.getRegionsInTransition();
+      assertTrue(rit.size() == 0);
     } finally {
       table.close();
       connection.close();

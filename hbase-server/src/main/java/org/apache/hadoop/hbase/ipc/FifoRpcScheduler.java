@@ -24,7 +24,7 @@ import java.io.IOException;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import org.apache.hadoop.hbase.ipc.CallRunner;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A very simple {@code }RpcScheduler} that serves incoming requests in order.
@@ -35,6 +35,7 @@ public class FifoRpcScheduler extends RpcScheduler {
 
   private final int handlerCount;
   private final int maxQueueLength;
+  private final AtomicInteger queueSize = new AtomicInteger(0);
   private ThreadPoolExecutor executor;
 
   public FifoRpcScheduler(Configuration conf, int handlerCount) {
@@ -66,13 +67,22 @@ public class FifoRpcScheduler extends RpcScheduler {
   }
 
   @Override
-  public void dispatch(final CallRunner task) throws IOException, InterruptedException {
+  public boolean dispatch(final CallRunner task) throws IOException, InterruptedException {
+    // Executors provide no offer, so make our own.
+    int queued = queueSize.getAndIncrement();
+    if (maxQueueLength > 0 && queued >= maxQueueLength) {
+      queueSize.decrementAndGet();
+      return false;
+    }
     executor.submit(new Runnable() {
       @Override
       public void run() {
+        task.setStatus(RpcServer.getStatus());
         task.run();
+        queueSize.decrementAndGet();
       }
     });
+    return true;
   }
 
   @Override

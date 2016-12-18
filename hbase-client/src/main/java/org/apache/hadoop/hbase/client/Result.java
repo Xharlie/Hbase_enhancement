@@ -828,6 +828,51 @@ public class Result implements CellScannable, CellScanner {
   }
 
   /**
+   * for pre-0.94 users
+   * @deprecated
+   */
+  public long getWritableSize() {
+    if (isEmpty()) return Bytes.SIZEOF_INT; // int size = 0
+
+    long size = Bytes.SIZEOF_INT; // totalLen
+
+    for (Cell kv : cells) {
+      if (kv instanceof KeyValue) {
+        size += ((KeyValue) kv).getLength();
+        size += Bytes.SIZEOF_INT; // kv.getLength
+      }
+    }
+
+    return size;
+  }
+
+  /**
+   * for pre-0.94 users
+   * @deprecated
+   */
+  public static long getWriteArraySize(Result[] results) {
+    long size = Bytes.SIZEOF_BYTE; // RESULT_VERSION
+    if (results == null || results.length == 0) {
+      size += Bytes.SIZEOF_INT;
+      return size;
+    }
+
+    size += Bytes.SIZEOF_INT; // results.length
+    size += Bytes.SIZEOF_INT; // bufLen
+    for (Result result : results) {
+      size += Bytes.SIZEOF_INT; // either 0 or result.size()
+      if (result == null || result.isEmpty()) continue;
+
+      for (KeyValue kv : result.raw()) {
+        size += Bytes.SIZEOF_INT; // kv.getLength();
+        size += kv.getLength();
+      }
+    }
+
+    return size;
+  }
+
+  /**
    * Does a deep comparison of two Results, down to the byte arrays.
    * @param res1 first result to compare
    * @param res2 second result to compare

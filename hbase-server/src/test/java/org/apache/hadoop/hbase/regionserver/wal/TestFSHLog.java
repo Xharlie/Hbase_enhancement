@@ -25,6 +25,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -58,6 +59,7 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
 import org.apache.hadoop.hbase.coprocessor.SampleRegionWALObserver;
 import org.apache.hadoop.hbase.regionserver.HRegion;
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdge;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -154,14 +156,16 @@ public class TestFSHLog {
   }
 
   protected void addEdits(WAL log, HRegionInfo hri, HTableDescriptor htd, int times,
-      AtomicLong sequenceId) throws IOException {
+      MultiVersionConsistencyControl mvcc) throws IOException {
     final byte[] row = Bytes.toBytes("row");
     for (int i = 0; i < times; i++) {
       long timestamp = System.currentTimeMillis();
       WALEdit cols = new WALEdit();
       cols.add(new KeyValue(row, row, row, timestamp, row));
-      log.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), htd.getTableName(), timestamp),
-        cols, sequenceId, true, null);
+      WALKey key = new WALKey(hri.getEncodedNameAsBytes(), htd.getTableName(),
+        WALKey.NO_SEQUENCE_ID, timestamp, WALKey.EMPTY_UUIDS, HConstants.NO_NONCE,
+        HConstants.NO_NONCE, mvcc);
+      log.append(htd, hri, key, cols, true);
     }
     log.sync();
   }
@@ -254,15 +258,13 @@ public class TestFSHLog {
         new HRegionInfo(t1.getTableName(), HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW);
     HRegionInfo hri2 =
         new HRegionInfo(t2.getTableName(), HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW);
-    // variables to mock region sequenceIds
-    final AtomicLong sequenceId1 = new AtomicLong(1);
-    final AtomicLong sequenceId2 = new AtomicLong(1);
     // add edits and roll the wal
+    MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
     try {
-      addEdits(wal, hri1, t1, 2, sequenceId1);
+      addEdits(wal, hri1, t1, 2, mvcc);
       wal.rollWriter();
       // add some more edits and roll the wal. This would reach the log number threshold
-      addEdits(wal, hri1, t1, 2, sequenceId1);
+      addEdits(wal, hri1, t1, 2, mvcc);
       wal.rollWriter();
       // with above rollWriter call, the max logs limit is reached.
       assertTrue(wal.getNumRolledLogFiles() == 2);
@@ -273,7 +275,7 @@ public class TestFSHLog {
       assertEquals(1, regionsToFlush.length);
       assertEquals(hri1.getEncodedNameAsBytes(), regionsToFlush[0]);
       // insert edits in second region
-      addEdits(wal, hri2, t2, 2, sequenceId2);
+      addEdits(wal, hri2, t2, 2, mvcc);
       // get the regions to flush, it should still read region1.
       regionsToFlush = wal.findRegionsToForceFlush();
       assertEquals(regionsToFlush.length, 1);
@@ -290,12 +292,12 @@ public class TestFSHLog {
       // no wal should remain now.
       assertEquals(0, wal.getNumRolledLogFiles());
       // add edits both to region 1 and region 2, and roll.
-      addEdits(wal, hri1, t1, 2, sequenceId1);
-      addEdits(wal, hri2, t2, 2, sequenceId2);
+      addEdits(wal, hri1, t1, 2, mvcc);
+      addEdits(wal, hri2, t2, 2, mvcc);
       wal.rollWriter();
       // add edits and roll the writer, to reach the max logs limit.
       assertEquals(1, wal.getNumRolledLogFiles());
-      addEdits(wal, hri1, t1, 2, sequenceId1);
+      addEdits(wal, hri1, t1, 2, mvcc);
       wal.rollWriter();
       // it should return two regions to flush, as the oldest wal file has entries
       // for both regions.
@@ -307,7 +309,7 @@ public class TestFSHLog {
       wal.rollWriter(true);
       assertEquals(0, wal.getNumRolledLogFiles());
       // Add an edit to region1, and roll the wal.
-      addEdits(wal, hri1, t1, 2, sequenceId1);
+      addEdits(wal, hri1, t1, 2, mvcc);
       // tests partial flush: roll on a partial flush, and ensure that wal is not archived.
       wal.startCacheFlush(hri1.getEncodedNameAsBytes(), t1.getFamiliesKeys());
       wal.rollWriter();
@@ -447,22 +449,50 @@ public class TestFSHLog {
       for (int i = 0; i < countPerFamily; i++) {
         final HRegionInfo info = region.getRegionInfo();
         final WALKey logkey = new WALKey(info.getEncodedNameAsBytes(), tableName,
-            System.currentTimeMillis(), clusterIds, -1, -1);
-        wal.append(htd, info, logkey, edits, region.getSequenceId(), true, null);
+            System.currentTimeMillis(), clusterIds, -1, -1, region.getMVCC());
+        wal.append(htd, info, logkey, edits, true);
       }
       region.flush(true);
       // FlushResult.flushSequenceId is not visible here so go get the current sequence id.
-      long currentSequenceId = region.getSequenceId().get();
+      long currentSequenceId = region.getReadpoint(null);
       // Now release the appends
       goslow.setValue(false);
       synchronized (goslow) {
         goslow.notifyAll();
       }
-      assertTrue(currentSequenceId >= region.getSequenceId().get());
+      assertTrue(currentSequenceId >= region.getReadpoint(null));
     } finally {
       region.close(true);
       wal.close();
     }
   }
 
+  @Test
+  public void testSyncRunnerIndexOverflow() throws IOException, NoSuchFieldException,
+      SecurityException, IllegalArgumentException, IllegalAccessException {
+    final String name = "testSyncRunnerIndexOverflow";
+    FSHLog log =
+        new FSHLog(fs, FSUtils.getRootDir(conf), name, HConstants.HREGION_OLDLOGDIR_NAME, conf,
+            null, true, null, null);
+    try {
+      Field ringBufferEventHandlerField = FSHLog.class.getDeclaredField("ringBufferEventHandler");
+      ringBufferEventHandlerField.setAccessible(true);
+      FSHLog.RingBufferEventHandler ringBufferEventHandler =
+          (FSHLog.RingBufferEventHandler) ringBufferEventHandlerField.get(log);
+      Field syncRunnerIndexField =
+          FSHLog.RingBufferEventHandler.class.getDeclaredField("syncRunnerIndex");
+      syncRunnerIndexField.setAccessible(true);
+      syncRunnerIndexField.set(ringBufferEventHandler, Integer.MAX_VALUE - 1);
+      HTableDescriptor htd =
+          new HTableDescriptor(TableName.valueOf("t1")).addFamily(new HColumnDescriptor("row"));
+      HRegionInfo hri =
+          new HRegionInfo(htd.getTableName(), HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW);
+      MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
+      for (int i = 0; i < 10; i++) {
+        addEdits(log, hri, htd, 1, mvcc);
+      }
+    } finally {
+      log.close();
+    }
+  }
 }

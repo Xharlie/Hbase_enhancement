@@ -52,8 +52,10 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
+import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hbase.ClusterId;
@@ -1035,22 +1037,21 @@ public abstract class FSUtils {
    * @param length length of the portion
    * @return The HDFS blocks distribution
    */
-  static public HDFSBlocksDistribution computeHDFSBlocksDistribution(
-    final FileSystem fs, FileStatus status, long start, long length)
-    throws IOException {
+  static public HDFSBlocksDistribution computeHDFSBlocksDistribution(final FileSystem fs,
+      FileStatus status, long start, long length) throws IOException {
+    return getHDFSBlocksDistribution(fs.getFileBlockLocations(status, start, length));
+  }
+
+  static public HDFSBlocksDistribution getHDFSBlocksDistribution(BlockLocation[] blockLocations)
+      throws IOException {
     HDFSBlocksDistribution blocksDistribution = new HDFSBlocksDistribution();
-    BlockLocation [] blockLocations =
-      fs.getFileBlockLocations(status, start, length);
-    for(BlockLocation bl : blockLocations) {
-      String [] hosts = bl.getHosts();
+    for (BlockLocation bl : blockLocations) {
+      String[] hosts = bl.getHosts();
       long len = bl.getLength();
       blocksDistribution.addHostsAndBlockWeight(hosts, len);
     }
-
     return blocksDistribution;
   }
-
-
 
   /**
    * Runs through the hbase rootdir and checks all stores have only
@@ -1739,6 +1740,34 @@ public abstract class FSUtils {
    */
   public static FileStatus[] listStatus(final FileSystem fs, final Path dir) throws IOException {
     return listStatus(fs, dir, null);
+  }
+
+  /**
+   * Calls fs.listLocatedStatus() and treats FileNotFoundException as non-fatal
+   *
+   * @param fs file system
+   * @param dir directory
+   * @return null if dir is empty or doesn't exist, otherwise LocatedFileStatus list
+   */
+  public static List<LocatedFileStatus> listLocatedStatus(final FileSystem fs, final Path dir)
+      throws IOException {
+    List<LocatedFileStatus> status = null;
+    try {
+      RemoteIterator<LocatedFileStatus> iter = fs.listLocatedStatus(dir);
+      while (iter.hasNext()) {
+        if (status == null) {
+          status = new ArrayList<LocatedFileStatus>();
+        }
+        status.add(iter.next());
+      }
+    } catch (FileNotFoundException fnfe) {
+      // if directory doesn't exist, return null
+      if (LOG.isTraceEnabled()) {
+        LOG.trace(dir + " doesn't exist");
+      }
+    }
+    if (status == null || status.size() < 1) return null;
+    return status;
   }
 
   /**

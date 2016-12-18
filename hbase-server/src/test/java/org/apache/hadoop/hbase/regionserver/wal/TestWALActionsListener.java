@@ -101,7 +101,7 @@ public class TestWALActionsListener {
       htd.addFamily(new HColumnDescriptor(b));
 
       final long txid = wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(),
-          TableName.valueOf(b), 0), edit, sequenceId, true, null);
+          TableName.valueOf(b), 0), edit, true);
       wal.sync(txid);
       if (i == 10) {
         wal.registerWALActionsListener(laterobserver);

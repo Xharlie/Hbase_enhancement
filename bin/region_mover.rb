@@ -166,6 +166,11 @@ def getHostPortFromServerName(serverName)
   return serverName.split(',')[0..1]
 end
 
+# Return the hostname out of a servername (all up to first ',')
+def getHostnameFromServerName(serverName)
+  return serverName.split(',')[0]
+end
+
 # Return array of servernames where servername is hostname+port+startcode
 # comma-delimited
 def getServers(admin)
@@ -198,7 +203,7 @@ end
 def stripExcludes(servers, excludefile)
   excludes = readExcludes(excludefile)
   servers =  servers.find_all{|server|
-      !excludes.contains(getHostPortFromServerName(server).join(":"))
+      !excludes.contains(getHostnameFromServerName(server))
   }
   # return updated servers list
   return servers
@@ -238,6 +243,9 @@ def getConfiguration()
   # Make a config that retries at short intervals many times
   config.setInt("hbase.client.pause", 500)
   config.setInt("hbase.client.retries.number", 100)
+  # Set longer timeout for region scanner
+  config.setInt("hbase.rpc.timeout", 300000)
+  config.setInt("hbase.client.operation.timeout", 300000)
   return config
 end
 

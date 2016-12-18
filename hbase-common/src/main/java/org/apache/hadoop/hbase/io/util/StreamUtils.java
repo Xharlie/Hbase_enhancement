@@ -18,12 +18,14 @@
 
 package org.apache.hadoop.hbase.io.util;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 
 import com.google.common.base.Preconditions;
@@ -207,5 +209,25 @@ public class StreamUtils {
       result |= (x << shift);
     }
     return result;
+  }
+
+  public static int readInt(InputStream in) throws IOException {
+    return readInt(in, new byte[Bytes.SIZEOF_INT]);
+  }
+
+  public static int readInt(InputStream in, byte[] readInBuf) throws IOException {
+    assert readInBuf.length >= Bytes.SIZEOF_INT;
+    int bytesRead = 0;
+    while (bytesRead < readInBuf.length) {
+      int n = in.read(readInBuf, bytesRead, readInBuf.length - bytesRead);
+      if (n < 0) {
+        if (bytesRead == 0) {
+          throw new EOFException();
+        }
+        throw new IOException("Failed read of int, read " + bytesRead + " bytes");
+      }
+      bytesRead += n;
+    }
+    return Bytes.toInt(readInBuf);
   }
 }

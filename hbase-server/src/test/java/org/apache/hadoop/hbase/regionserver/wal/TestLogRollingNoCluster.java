@@ -138,7 +138,7 @@ public class TestLogRollingNoCluster {
           final FSTableDescriptors fts = new FSTableDescriptors(TEST_UTIL.getConfiguration());
           final HTableDescriptor htd = fts.get(TableName.META_TABLE_NAME);
           final long txid = wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(),
-              TableName.META_TABLE_NAME, now), edit, sequenceId, true, null);
+              TableName.META_TABLE_NAME, now), edit, true);
           wal.sync(txid);
         }
         String msg = getName() + " finished";

@@ -91,6 +91,51 @@ public class MetricsRegionServerWrapperStub implements MetricsRegionServerWrappe
   }
 
   @Override
+  public long getRpcGetRequestsCount() {
+    return 973;
+  }
+
+  @Override
+  public long getRpcScanRequestsCount() {
+    return 440;
+  }
+
+  @Override
+  public long getRpcMultiRequestsCount() {
+    return 486;
+  }
+
+  @Override
+  public long getRpcMutateRequestsCount() {
+    return 595;
+  }
+
+  @Override
+  public long getActiveRpcHandlerCount() {
+    return 686;
+  }
+
+  @Override
+  public long getRpcTotalSlowCallsCount() {
+    return 686;
+  }
+
+  @Override
+  public long getRpcTotalCallsCount() {
+    return 686;
+  }
+
+  @Override
+  public long getRpcIncSlowCallsCount() {
+    return 686;
+  }
+
+  @Override
+  public long getRpcIncCallsCount() {
+    return 686;
+  }
+
+  @Override
   public long getCheckAndMutateChecksFailed() {
     return 401;
   }
@@ -191,10 +236,34 @@ public class MetricsRegionServerWrapperStub implements MetricsRegionServerWrappe
   }
 
   @Override
+  public double getBlockCacheMetaHitPercent() {
+    return 99;
+  }
+
+  @Override
+  public double getBlockCacheDataHitPercent() {
+    return 80;
+  }
+
+  @Override
   public int getBlockCacheHitCachingPercent() {
     return 97;
   }
 
+  @Override
+  public int getBlockCacheMetaHitCachingPercent() {
+    return 96;
+  }
+
+  @Override
+  public int getBlockCacheDataHitCachingPercent() {
+    return 95;
+  }
+  
+  @Override
+  public long getBlockCacheFailedInsertions() {
+    return 36;
+  }
 
   @Override
   public long getUpdatesBlockedTime() {
@@ -254,5 +323,20 @@ public class MetricsRegionServerWrapperStub implements MetricsRegionServerWrappe
   @Override
   public int getSplitQueueSize() {
     return 0;
+  }
+
+  @Override
+  public long getMultiGetRequestCount() {
+    return 234;
+  }
+
+  @Override
+  public long getPutRequestCount() {
+    return 345;
+  }
+
+  @Override
+  public long getScanCachingRequestCount() {
+    return 966;
   }
 }

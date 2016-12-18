@@ -77,12 +77,18 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
   @Override
   public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching,
       boolean repeat, boolean updateCacheMetrics) {
+    return getBlock(cacheKey, caching, repeat, updateCacheMetrics, null);
+  }
+
+  @Override
+  public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching,
+      boolean repeat, boolean updateCacheMetrics, BlockType blockType) {
     // TODO: is there a hole here, or just awkwardness since in the lruCache getBlock
     // we end up calling l2Cache.getBlock.
     if (lruCache.containsBlock(cacheKey)) {
-      return lruCache.getBlock(cacheKey, caching, repeat, updateCacheMetrics);
+      return lruCache.getBlock(cacheKey, caching, repeat, updateCacheMetrics, blockType);
     }
-    Cacheable result = l2Cache.getBlock(cacheKey, caching, repeat, updateCacheMetrics);
+    Cacheable result = l2Cache.getBlock(cacheKey, caching, repeat, updateCacheMetrics, blockType);
 
     return result;
   }

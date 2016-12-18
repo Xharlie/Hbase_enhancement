@@ -1,0 +1,127 @@
+[
+    {
+        "column": "parser:has_goods",
+        "actions": [
+            {
+                "target": "trend:${column}"
+            }
+        ]
+    },
+    
+    {
+        "column": "image:js_has_goods",
+        "actions": [
+            {
+                "target": "trend:${column}"
+            }
+        ]
+    },
+
+    {
+        "column": "image:js_has_goods_*",
+        "actions": [
+            {
+                "target": "trend:${column}"
+            }
+        ]
+    },
+
+    {
+        "column": "image:js_price_district_name",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+    
+    {
+        "column": "page_info:is_master_selection",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+    
+    {
+        "column": "page_info:dedup_mark",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+    
+    {
+        "column": "page_info:parser_ok",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+    
+    {
+        "column": "page_info:page_type",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+    
+    {
+        "column": "page_info:page_class",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+    
+    {
+        "column": "page_info:is_deleted",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+
+    {
+        "column": "page_info:app_name",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+
+    {
+        "column": "history:busy_time",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+    
+    {
+        "column": "history:crawl_status",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    },
+    
+    {
+        "column": "algorithm:categoryp",
+        "actions": [
+            {
+                "target": "uri:${qualifier}"
+            }
+        ]
+    }
+]

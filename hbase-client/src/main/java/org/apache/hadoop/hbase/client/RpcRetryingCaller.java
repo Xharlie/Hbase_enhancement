@@ -31,6 +31,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.exceptions.ClientExceptionsUtil;
 import org.apache.hadoop.hbase.exceptions.PreemptiveFastFailException;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.ExceptionUtil;
@@ -62,6 +63,7 @@ public class RpcRetryingCaller<T> {
   private final int startLogErrorsCnt;
 
   private final long pause;
+  private long specialPause = -1L;
   private final int retries;
   private final AtomicBoolean cancelled = new AtomicBoolean(false);
   private final RetryingCallerInterceptor interceptor;
@@ -149,7 +151,9 @@ public class RpcRetryingCaller<T> {
         // If the server is dead, we need to wait a little before retrying, to give
         //  a chance to the regions to be
         // tries hasn't been bumped up yet so we use "tries + 1" to get right pause time
-        expectedSleep = callable.sleep(pause, tries + 1);
+        long specialPause = this.specialPause > 0L ? this.specialPause : pause * 10L;
+        long pauseBase = ClientExceptionsUtil.isCallQueueTooBigException(t) ? specialPause : pause;
+        expectedSleep = callable.sleep(pauseBase, tries + 1);
 
         // If, after the planned sleep, there won't be enough time left, we stop now.
         long duration = singleCallDuration(expectedSleep);
@@ -248,5 +252,9 @@ public class RpcRetryingCaller<T> {
   public String toString() {
     return "RpcRetryingCaller{" + "globalStartTime=" + globalStartTime +
         ", pause=" + pause + ", retries=" + retries + '}';
+  }
+
+  public void setSpecialPause(long value) {
+    this.specialPause = value;
   }
 }

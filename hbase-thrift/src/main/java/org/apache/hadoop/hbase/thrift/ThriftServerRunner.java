@@ -33,11 +33,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.UnsupportedCallbackException;
@@ -45,22 +42,14 @@ import javax.security.sasl.AuthorizeCallback;
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslServer;
 
+import com.etao.hadoop.hbase.queue.client.*;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.OptionGroup;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HColumnDescriptor;
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.HRegionLocation;
-import org.apache.hadoop.hbase.HTableDescriptor;
-import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.ServerName;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.TableNotFoundException;
+import org.apache.hadoop.hbase.*;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Append;
@@ -83,19 +72,7 @@ import org.apache.hadoop.hbase.filter.WhileMatchFilter;
 import org.apache.hadoop.hbase.security.SecurityUtil;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.thrift.CallQueue.Call;
-import org.apache.hadoop.hbase.thrift.generated.AlreadyExists;
-import org.apache.hadoop.hbase.thrift.generated.BatchMutation;
-import org.apache.hadoop.hbase.thrift.generated.ColumnDescriptor;
-import org.apache.hadoop.hbase.thrift.generated.Hbase;
-import org.apache.hadoop.hbase.thrift.generated.IOError;
-import org.apache.hadoop.hbase.thrift.generated.IllegalArgument;
-import org.apache.hadoop.hbase.thrift.generated.Mutation;
-import org.apache.hadoop.hbase.thrift.generated.TAppend;
-import org.apache.hadoop.hbase.thrift.generated.TCell;
-import org.apache.hadoop.hbase.thrift.generated.TIncrement;
-import org.apache.hadoop.hbase.thrift.generated.TRegionInfo;
-import org.apache.hadoop.hbase.thrift.generated.TRowResult;
-import org.apache.hadoop.hbase.thrift.generated.TScan;
+import org.apache.hadoop.hbase.thrift.generated.*;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ConnectionCache;
 import org.apache.hadoop.hbase.util.Strings;
@@ -192,6 +169,11 @@ public class ThriftServerRunner implements Runnable {
 
   private final boolean securityEnabled;
   private final boolean doAsEnabled;
+
+  /**
+   * ChoreService used to schedule tasks that we want to run periodically
+   */
+  private static ChoreService choreService;
 
   /** An enum of server implementation selections */
   enum ImplType {
@@ -324,6 +306,8 @@ public class ThriftServerRunner implements Runnable {
           + " run in secure mode to support authentication");
       }
     }
+
+    this.choreService = new ChoreService("thrift-chore-service");
   }
 
   /*
@@ -351,10 +335,10 @@ public class ThriftServerRunner implements Runnable {
         return null;
       }
     });
-
   }
 
   public void shutdown() {
+    STOPPABLE.stop("Shutting down");
     if (tserver != null) {
       tserver.stop();
       tserver = null;
@@ -367,6 +351,10 @@ public class ThriftServerRunner implements Runnable {
         LOG.error("Problem encountered in shutting down HTTP server " + e.getCause());
       }
       httpServer = null;
+    }
+
+    if(null != this.choreService) {
+      this.choreService.shutdown();
     }
   }
 
@@ -436,7 +424,7 @@ public class ThriftServerRunner implements Runnable {
       protocolFactory = new TCompactProtocol.Factory();
     } else {
       LOG.debug("Using binary protocol");
-      protocolFactory = new TBinaryProtocol.Factory();
+      protocolFactory = new TBinaryProtocol.Factory(true, true);
     }
 
     final TProcessor p = new Hbase.Processor<Hbase.Iface>(handler);
@@ -606,25 +594,6 @@ public class ThriftServerRunner implements Runnable {
     return InetAddress.getByName(bindAddressStr);
   }
 
-  protected static class ResultScannerWrapper {
-
-    private final ResultScanner scanner;
-    private final boolean sortColumns;
-    public ResultScannerWrapper(ResultScanner resultScanner,
-                                boolean sortResultColumns) {
-      scanner = resultScanner;
-      sortColumns = sortResultColumns;
-   }
-
-    public ResultScanner getScanner() {
-      return scanner;
-    }
-
-    public boolean isColumnSorted() {
-      return sortColumns;
-    }
-  }
-
   /**
    * The HBaseHandler is a glue object that connects Thrift RPC calls to the
    * HBase client API primarily defined in the Admin and Table objects.
@@ -635,8 +604,22 @@ public class ThriftServerRunner implements Runnable {
 
     // nextScannerId and scannerMap are used to manage scanner state
     protected int nextScannerId = 0;
-    protected HashMap<Integer, ResultScannerWrapper> scannerMap = null;
+    protected Map<Integer, HTableScanner> scannerMap = null;
+    protected int nextMessageScannerId = 0;
+    protected Map<Integer, HQueueMessageScanner> messageScannerMap = null;
+    protected int nextPartitionScannerId = 0;
+    protected Map<Integer, HQueuePartitionScanner> partitionScannerMap = null;
+    protected int nextQueueScannerId = 0;
+    protected Map<Integer, HQueueScanner> queueScannerMap = null;
     private ThriftMetrics metrics = null;
+
+    private static ThreadLocal<Map<String, HQueue>> threadLocalQueues =
+        new ThreadLocal<Map<String, HQueue>>() {
+          @Override
+          protected Map<String, HQueue> initialValue() {
+            return new TreeMap<String, HQueue>();
+          }
+        };
 
     private final ConnectionCache connectionCache;
     IncrementCoalescer coalescer = null;
@@ -672,11 +655,33 @@ public class ThriftServerRunner implements Runnable {
     public Table getTable(final byte[] tableName) throws
         IOException {
       String table = Bytes.toString(tableName);
+      LOG.info("create table handler for [" + table + "] in " + Thread.currentThread().getName());
       return connectionCache.getTable(table);
     }
 
     public Table getTable(final ByteBuffer tableName) throws IOException {
       return getTable(getBytes(tableName));
+    }
+
+    /**
+     * Creates and returns an HQueue instance from a given queue name.
+     * @param queueName name of table
+     * @return HQueue object
+     * @throws IOException
+     * @throws IOError
+     */
+    public HQueue getQueue(final byte[] queueName) throws IOException {
+      String queue = Bytes.toString(queueName);
+      Map<String, HQueue> queues = threadLocalQueues.get();
+      if (!queues.containsKey(queue)) {
+        queues.put(queue, new HQueue(conf, queue));
+        LOG.info("create queue handler for [" + queue + "] in " + Thread.currentThread().getName());
+      }
+      return queues.get(queue);
+    }
+
+    public HQueue getQueue(final ByteBuffer queueName) throws IOException {
+      return getQueue(getBytes(queueName));
     }
 
     /**
@@ -686,10 +691,13 @@ public class ThriftServerRunner implements Runnable {
      * @param scanner
      * @return integer scanner id
      */
-    protected synchronized int addScanner(ResultScanner scanner,boolean sortColumns) {
+    protected synchronized int addScanner(HTableScanner scanner) {
       int id = nextScannerId++;
-      ResultScannerWrapper resultScannerWrapper = new ResultScannerWrapper(scanner, sortColumns);
-      scannerMap.put(id, resultScannerWrapper);
+      scannerMap.put(id, scanner);
+      if (null != metrics) {
+        metrics.setTableScannerNum(scannerMap.size());
+      }
+
       return id;
     }
 
@@ -699,7 +707,7 @@ public class ThriftServerRunner implements Runnable {
      * @param id
      * @return a Scanner, or null if ID was invalid.
      */
-    protected synchronized ResultScannerWrapper getScanner(int id) {
+    protected synchronized HTableScanner getScanner(int id) {
       return scannerMap.get(id);
     }
 
@@ -710,15 +718,147 @@ public class ThriftServerRunner implements Runnable {
      * @param id
      * @return a Scanner, or null if ID was invalid.
      */
-    protected synchronized ResultScannerWrapper removeScanner(int id) {
-      return scannerMap.remove(id);
+    protected synchronized HTableScanner removeScanner(int id) {
+      HTableScanner scanner = scannerMap.remove(id);
+      if (null != metrics) {
+        metrics.setTableScannerNum(scannerMap.size());
+      }
+
+      return scanner;
+    }
+
+    /**
+     * Assigns a unique ID to the scanner and adds the mapping to an internal hash-map.
+     * @param scanner
+     * @return integer scanner id
+     */
+    protected synchronized int addMessageScanner(HQueueMessageScanner scanner) {
+      int id = nextMessageScannerId++;
+      messageScannerMap.put(id, scanner);
+      if (null != metrics) {
+        metrics.setMessageScannerNum(messageScannerMap.size());
+      }
+
+      return id;
+    }
+
+    /**
+     * Returns the scanner associated with the specified ID.
+     * @param id
+     * @return a Scanner, or null if ID was invalid.
+     */
+    protected synchronized HQueueMessageScanner getMessageScanner(int id) {
+      return messageScannerMap.get(id);
+    }
+
+    /**
+     * Removes the scanner associated with the specified ID from the internal id->scanner hash-map.
+     * @param id
+     * @return a Scanner, or null if ID was invalid.
+     */
+    protected synchronized HQueueMessageScanner removeMessageScanner(int id) {
+      HQueueMessageScanner scanner = messageScannerMap.remove(id);
+      if (null != metrics) {
+        metrics.setMessageScannerNum(messageScannerMap.size());
+      }
+
+      return scanner;
+    }
+
+    /**
+     * Assigns a unique ID to the scanner and adds the mapping to an internal hash-map.
+     * @param scanner
+     * @return integer scanner id
+     */
+    protected synchronized int addPartitionScanner(HQueuePartitionScanner scanner) {
+      int id = nextPartitionScannerId++;
+      partitionScannerMap.put(id, scanner);
+      if (null != metrics) {
+        metrics.setPartitionScannerNum(partitionScannerMap.size());
+      }
+
+      return id;
+    }
+
+    /**
+     * Returns the scanner associated with the specified ID.
+     * @param id
+     * @return a Scanner, or null if ID was invalid.
+     */
+    protected synchronized HQueuePartitionScanner getPartitionScanner(int id) {
+      return partitionScannerMap.get(id);
+    }
+
+    /**
+     * Removes the scanner associated with the specified ID from the internal id->scanner hash-map.
+     * @param id
+     * @return a Scanner, or null if ID was invalid.
+     */
+    protected synchronized HQueuePartitionScanner removePartitionScanner(int id) {
+      HQueuePartitionScanner scanner = partitionScannerMap.remove(id);
+      if (null != metrics) {
+        metrics.setPartitionScannerNum(partitionScannerMap.size());
+      }
+
+      return scanner;
+    }
+
+    /**
+     * Assigns a unique ID to the scanner and adds the mapping to an internal hash-map.
+     * @param scanner
+     * @return integer scanner id
+     */
+    protected synchronized int addQueueScanner(HQueueScanner scanner) {
+      int id = nextQueueScannerId++;
+      queueScannerMap.put(id, scanner);
+      if (null != metrics) {
+        metrics.setQueueScannerNum(queueScannerMap.size());
+      }
+
+      return id;
+    }
+
+    /**
+     * Returns the scanner associated with the specified ID.
+     * @param id
+     * @return a Scanner, or null if ID was invalid.
+     */
+    protected synchronized HQueueScanner getQueueScanner(int id) {
+      return queueScannerMap.get(id);
+    }
+
+    /**
+     * Removes the scanner associated with the specified ID from the internal id->scanner hash-map.
+     * @param id
+     * @return a Scanner, or null if ID was invalid.
+     */
+    protected synchronized HQueueScanner removeQueueScanner(int id) {
+      HQueueScanner scanner = queueScannerMap.remove(id);
+      if (null != metrics) {
+        metrics.setQueueScannerNum(queueScannerMap.size());
+      }
+
+      return scanner;
     }
 
     protected HBaseHandler(final Configuration c,
         final UserProvider userProvider) throws IOException {
       this.conf = c;
-      scannerMap = new HashMap<Integer, ResultScannerWrapper>();
       this.coalescer = new IncrementCoalescer(this);
+
+      scannerMap = new ConcurrentHashMap<Integer, HTableScanner>();
+      messageScannerMap = new ConcurrentHashMap<Integer, HQueueMessageScanner>();
+      partitionScannerMap = new ConcurrentHashMap<Integer, HQueuePartitionScanner>();
+      queueScannerMap = new ConcurrentHashMap<Integer, HQueueScanner>();
+
+      int scannerTimeout = this.conf.getInt("hbase.thrift.scanner.cleaner.timeout", 1000 * 60 * 10);
+      int scannerCleanerInterval =
+          this.conf.getInt("hbase.thrift.scanner.cleaner.interval", 1000 * 60 * 3);
+      ScannerCleanerChore cleaner =
+          new ScannerCleanerChore("Scanner cleaner", scannerTimeout, scannerCleanerInterval, STOPPABLE);
+      if (null != choreService) {
+        choreService.scheduleChore(cleaner);
+      }
 
       int cleanInterval = conf.getInt(CLEANUP_INTERVAL, 10 * 1000);
       int maxIdleTime = conf.getInt(MAX_IDLETIME, 10 * 60 * 1000);
@@ -993,6 +1133,12 @@ public class ThriftServerRunner implements Runnable {
     }
 
     @Override
+    public List<TRowResult> getRowVers(ByteBuffer tableName, ByteBuffer row,
+        Map<ByteBuffer, ByteBuffer> attributes, int numVersions) throws IOError, TException {
+      return getRowWithColumnsVers(tableName, row, null, numVersions, attributes);
+    }
+
+    @Override
     public List<TRowResult> getRowWithColumns(ByteBuffer tableName,
                                               ByteBuffer row,
         List<ByteBuffer> columns,
@@ -1035,6 +1181,40 @@ public class ThriftServerRunner implements Runnable {
           }
         }
         get.setTimeRange(0, timestamp);
+        Result result = table.get(get);
+        return ThriftUtilities.rowResultFromHBase(result);
+      } catch (IOException e) {
+        LOG.warn(e.getMessage(), e);
+        throw new IOError(Throwables.getStackTraceAsString(e));
+      } finally{
+        closeTable(table);
+      }
+    }
+
+    public List<TRowResult> getRowWithColumnsVers(ByteBuffer tableName, ByteBuffer row,
+        List<ByteBuffer> columns, int maxVersions, Map<ByteBuffer, ByteBuffer> attributes)
+        throws IOError {
+      Table table = null;
+      try {
+        table = getTable(tableName);
+        if (columns == null) {
+          Get get = new Get(getBytes(row));
+          addAttributes(get, attributes);
+          get.setMaxVersions(maxVersions);
+          Result result = table.get(get);
+          return ThriftUtilities.rowResultFromHBase(result);
+        }
+        Get get = new Get(getBytes(row));
+        addAttributes(get, attributes);
+        for (ByteBuffer column : columns) {
+          byte[][] famAndQf = KeyValue.parseColumn(getBytes(column));
+          if (famAndQf.length == 1) {
+            get.addFamily(famAndQf[0]);
+          } else {
+            get.addColumn(famAndQf[0], famAndQf[1]);
+          }
+        }
+        get.setMaxVersions(maxVersions);
         Result result = table.get(get);
         return ThriftUtilities.rowResultFromHBase(result);
       } catch (IOException e) {
@@ -1253,7 +1433,7 @@ public class ThriftServerRunner implements Runnable {
             } else {
               delete.deleteColumns(famAndQf[0], famAndQf[1], timestamp);
             }
-            delete.setDurability(m.writeToWAL ? Durability.SYNC_WAL
+            delete.setDurability(m.writeToWAL ? Durability.USE_DEFAULT
                 : Durability.SKIP_WAL);
           } else {
             if(famAndQf.length == 1) {
@@ -1264,7 +1444,7 @@ public class ThriftServerRunner implements Runnable {
                   m.value != null ? getBytes(m.value)
                       : HConstants.EMPTY_BYTE_ARRAY);
             }
-            put.setDurability(m.writeToWAL ? Durability.SYNC_WAL : Durability.SKIP_WAL);
+            put.setDurability(m.writeToWAL ? Durability.USE_DEFAULT : Durability.SKIP_WAL);
           }
         }
         if (!delete.isEmpty())
@@ -1313,7 +1493,7 @@ public class ThriftServerRunner implements Runnable {
             } else {
               delete.deleteColumns(famAndQf[0], famAndQf[1], timestamp);
             }
-            delete.setDurability(m.writeToWAL ? Durability.SYNC_WAL
+            delete.setDurability(m.writeToWAL ? Durability.USE_DEFAULT
                 : Durability.SKIP_WAL);
           } else {
             if (famAndQf.length == 1) {
@@ -1327,7 +1507,7 @@ public class ThriftServerRunner implements Runnable {
             } else {
               throw new IllegalArgumentException("Invalid famAndQf provided.");
             }
-            put.setDurability(m.writeToWAL ? Durability.SYNC_WAL : Durability.SKIP_WAL);
+            put.setDurability(m.writeToWAL ? Durability.USE_DEFAULT : Durability.SKIP_WAL);
           }
         }
         if (!delete.isEmpty())
@@ -1386,38 +1566,41 @@ public class ThriftServerRunner implements Runnable {
     @Override
     public void scannerClose(int id) throws IOError, IllegalArgument {
       LOG.debug("scannerClose: id=" + id);
-      ResultScannerWrapper resultScannerWrapper = getScanner(id);
-      if (resultScannerWrapper == null) {
-        String message = "scanner ID is invalid";
+      HTableScanner scanner = removeScanner(id);
+      if (scanner == null) {
+        String message = "CLOSE table scanner ID is invalid";
         LOG.warn(message);
-        throw new IllegalArgument("scanner ID is invalid");
+        throw new IllegalArgument("CLOSE table scanner ID is invalid");
       }
-      resultScannerWrapper.getScanner().close();
-      removeScanner(id);
+
+      scanner.getInternalScanner().close();
     }
 
     @Override
     public List<TRowResult> scannerGetList(int id,int nbRows)
         throws IllegalArgument, IOError {
-      LOG.debug("scannerGetList: id=" + id);
-      ResultScannerWrapper resultScannerWrapper = getScanner(id);
-      if (null == resultScannerWrapper) {
-        String message = "scanner ID is invalid";
+      HTableScanner scanner = getScanner(id);
+      if (null == scanner) {
+        String message = "GET table scanner ID is invalid";
         LOG.warn(message);
-        throw new IllegalArgument("scanner ID is invalid");
+        throw new IllegalArgument("GET table scanner ID is invalid");
       }
 
       Result [] results = null;
       try {
-        results = resultScannerWrapper.getScanner().next(nbRows);
+        results = scanner.getInternalScanner().next(nbRows);
         if (null == results) {
+          scanner.getInternalScanner().close();
+          removeScanner(id);
           return new ArrayList<TRowResult>();
         }
       } catch (IOException e) {
         LOG.warn(e.getMessage(), e);
-        throw new IOError(Throwables.getStackTraceAsString(e));
+        throw new IOError(e.getMessage());
       }
-      return ThriftUtilities.rowResultFromHBase(results, resultScannerWrapper.isColumnSorted());
+
+      scanner.updateTime();
+      return ThriftUtilities.rowResultFromHBase(results, scanner.isColumnSorted());
     }
 
     @Override
@@ -1468,7 +1651,10 @@ public class ThriftServerRunner implements Runnable {
         if (tScan.isSetReversed()) {
           scan.setReversed(tScan.isReversed());
         }
-        return addScanner(table.getScanner(scan), tScan.sortColumns);
+        HTableScanner scanner =
+            new HTableScanner(table.getScanner(scan), System.currentTimeMillis(),
+                Bytes.toString(table.getTableDescriptor().getTableName().getName()), tScan.sortColumns);
+        return addScanner(scanner);
       } catch (IOException e) {
         LOG.warn(e.getMessage(), e);
         throw new IOError(Throwables.getStackTraceAsString(e));
@@ -1497,7 +1683,10 @@ public class ThriftServerRunner implements Runnable {
             }
           }
         }
-        return addScanner(table.getScanner(scan), false);
+        HTableScanner scanner =
+            new HTableScanner(table.getScanner(scan), System.currentTimeMillis(),
+                Bytes.toString(table.getTableDescriptor().getTableName().getName()), false);
+        return addScanner(scanner);
       } catch (IOException e) {
         LOG.warn(e.getMessage(), e);
         throw new IOError(Throwables.getStackTraceAsString(e));
@@ -1527,7 +1716,10 @@ public class ThriftServerRunner implements Runnable {
             }
           }
         }
-        return addScanner(table.getScanner(scan), false);
+        HTableScanner scanner =
+            new HTableScanner(table.getScanner(scan), System.currentTimeMillis(),
+                Bytes.toString(table.getTableDescriptor().getTableName().getName()), false);
+        return addScanner(scanner);
       } catch (IOException e) {
         LOG.warn(e.getMessage(), e);
         throw new IOError(Throwables.getStackTraceAsString(e));
@@ -1561,7 +1753,10 @@ public class ThriftServerRunner implements Runnable {
             }
           }
         }
-        return addScanner(table.getScanner(scan), false);
+        HTableScanner scanner =
+            new HTableScanner(table.getScanner(scan), System.currentTimeMillis(),
+                Bytes.toString(table.getTableDescriptor().getTableName().getName()), false);
+        return addScanner(scanner);
       } catch (IOException e) {
         LOG.warn(e.getMessage(), e);
         throw new IOError(Throwables.getStackTraceAsString(e));
@@ -1591,7 +1786,10 @@ public class ThriftServerRunner implements Runnable {
             }
           }
         }
-        return addScanner(table.getScanner(scan), false);
+        HTableScanner scanner =
+            new HTableScanner(table.getScanner(scan), System.currentTimeMillis(),
+                Bytes.toString(table.getTableDescriptor().getTableName().getName()), false);
+        return addScanner(scanner);
       } catch (IOException e) {
         LOG.warn(e.getMessage(), e);
         throw new IOError(Throwables.getStackTraceAsString(e));
@@ -1623,13 +1821,247 @@ public class ThriftServerRunner implements Runnable {
           }
         }
         scan.setTimeRange(0, timestamp);
-        return addScanner(table.getScanner(scan), false);
+        HTableScanner scanner =
+            new HTableScanner(table.getScanner(scan), System.currentTimeMillis(),
+                Bytes.toString(table.getTableDescriptor().getTableName().getName()), false);
+        return addScanner(scanner);
       } catch (IOException e) {
         LOG.warn(e.getMessage(), e);
         throw new IOError(Throwables.getStackTraceAsString(e));
       } finally{
         closeTable(table);
       }
+    }
+
+    @Override
+    public int scannerOpenWithTimeRange(ByteBuffer tableName, ByteBuffer startRow,
+        ByteBuffer stopRow, List<ByteBuffer> columns, long startTime, long endTime) throws IOError,
+        TException {
+      Table table = null;
+      try {
+        table = getTable(tableName);
+        Scan scan = new Scan(getBytes(startRow), getBytes(stopRow));
+        scan.setTimeRange(startTime, endTime);
+        scan.setBatch(conf.getInt("hbase.client.scanner.batch", -1));
+        if (columns != null && columns.size() != 0) {
+          for (ByteBuffer column : columns) {
+            byte[][] famQf = KeyValue.parseColumn(getBytes(column));
+            if (famQf.length == 1) {
+              scan.addFamily(famQf[0]);
+            } else {
+              scan.addColumn(famQf[0], famQf[1]);
+            }
+          }
+        }
+
+        HTableScanner scanner =
+            new HTableScanner(table.getScanner(scan), System.currentTimeMillis(),
+                Bytes.toString(table.getTableDescriptor().getTableName().getName()), false);
+        return addScanner(scanner);
+      } catch (IOException e) {
+        throw new IOError(Throwables.getStackTraceAsString(e));
+      } finally{
+        closeTable(table);
+      }
+    }
+
+    @Override
+    public int
+    messageScannerOpen(ByteBuffer queueName, short partitionID, TMessageScan messageScan)
+        throws IOError, TException {
+      try {
+        HQueue queue = getQueue(queueName);
+        TMessageID startTMessageID = messageScan.getStartMessageID();
+        TMessageID stopTMessageID = messageScan.getStopMessageID();
+        List<ByteBuffer> topics = messageScan.getTopics();
+        MessageID startMessageID =
+            new MessageID(startTMessageID.getTimestamp(), startTMessageID.getSequenceID());
+        MessageID stopMessageID =
+            new MessageID(stopTMessageID.getTimestamp(), stopTMessageID.getSequenceID());
+        com.etao.hadoop.hbase.queue.client.Scan scan =
+            new com.etao.hadoop.hbase.queue.client.Scan(startMessageID, stopMessageID);
+        if (null != topics) {
+          for (ByteBuffer topic : topics) {
+            scan.addTopic(getBytes(topic));
+          }
+        }
+
+        HQueueMessageScanner scanner =
+            new HQueueMessageScanner(queue.getScanner(partitionID, scan),
+                System.currentTimeMillis(), queue.getQueueName());
+        return addMessageScanner(scanner);
+      } catch (IOException e) {
+        throw new IOError(e.getMessage());
+      }
+    }
+
+    @Override
+    public TMessage messageScannerGet(int id) throws IOError, IllegalArgument, TException {
+      List<TMessage> tMessages = messageScannerGetList(id, 1);
+      if (tMessages.isEmpty()) {
+        return null;
+      } else {
+        return tMessages.get(0);
+      }
+    }
+
+    @Override
+    public List<TMessage> messageScannerGetList(int id, int nbMessages) throws IOError,
+        IllegalArgument, TException {
+      HQueueMessageScanner scanner = getMessageScanner(id);
+      if (null == scanner) {
+        String message = "GET message scanner ID is invalid";
+        LOG.warn(message);
+        throw new IllegalArgument("GET message scanner ID is invalid");
+      }
+
+      Message[] messages = null;
+      try {
+        messages = scanner.getInternalScanner().next(nbMessages);
+        if (null == messages) {
+          scanner.getInternalScanner().close();
+          removeMessageScanner(id);
+          return new ArrayList<TMessage>();
+        }
+      } catch (IOException e) {
+        LOG.warn(e.getMessage(), e);
+        throw new IOError(e.getMessage());
+      }
+
+      scanner.updateTime();
+      return ThriftUtilities.messageFromHBase(messages);
+    }
+
+    @Override
+    public int partitionScannerOpen(ByteBuffer queueName, short partitionID,
+        TMessageScan messageScan) throws IOError, TException {
+      try {
+        HQueue queue = getQueue(queueName);
+        TMessageID startTMessageID = messageScan.getStartMessageID();
+        TMessageID stopTMessageID = messageScan.getStopMessageID();
+        List<ByteBuffer> topics = messageScan.getTopics();
+        MessageID startMessageID =
+            new MessageID(startTMessageID.getTimestamp(), startTMessageID.getSequenceID());
+        MessageID stopMessageID =
+            new MessageID(stopTMessageID.getTimestamp(), stopTMessageID.getSequenceID());
+        com.etao.hadoop.hbase.queue.client.Scan scan =
+            new com.etao.hadoop.hbase.queue.client.Scan(startMessageID, stopMessageID);
+        if (null != topics) {
+          for (ByteBuffer topic : topics) {
+            scan.addTopic(getBytes(topic));
+          }
+        }
+
+        HQueuePartitionScanner scanner =
+            new HQueuePartitionScanner(queue.getPartitionScanner(partitionID, scan),
+                System.currentTimeMillis(), queue.getQueueName());
+        return addPartitionScanner(scanner);
+      } catch (IOException e) {
+        throw new IOError(e.getMessage());
+      }
+    }
+
+    @Override
+    public TMessage partitionScannerGet(int id) throws IOError, IllegalArgument, TException {
+      List<TMessage> tMessages = partitionScannerGetList(id, 1);
+      if (tMessages.isEmpty()) {
+        return null;
+      } else {
+        return tMessages.get(0);
+      }
+    }
+
+    @Override
+    public List<TMessage> partitionScannerGetList(int id, int nbMessages) throws IOError,
+        IllegalArgument, TException {
+      HQueuePartitionScanner scanner = getPartitionScanner(id);
+      if (null == scanner) {
+        String message = "GET partition scanner ID is invalid";
+        LOG.warn(message);
+        throw new IllegalArgument("GET partition scanner ID is invalid");
+      }
+
+      Message[] messages = null;
+      try {
+        messages = scanner.getInternalScanner().next(nbMessages);
+        if (null == messages) {
+          scanner.getInternalScanner().close();
+          removePartitionScanner(id);
+          return new ArrayList<TMessage>();
+        }
+      } catch (IOException e) {
+        LOG.warn(e.getMessage(), e);
+        throw new IOError(e.getMessage());
+      }
+
+      scanner.updateTime();
+      return ThriftUtilities.messageFromHBase(messages);
+    }
+
+    @Override
+    public int queueScannerOpen(ByteBuffer queueName, TMessageScan messageScan) throws IOError,
+        TException {
+      try {
+        HQueue queue = getQueue(queueName);
+        TMessageID startTMessageID = messageScan.getStartMessageID();
+        TMessageID stopTMessageID = messageScan.getStopMessageID();
+        List<ByteBuffer> topics = messageScan.getTopics();
+        MessageID startMessageID =
+            new MessageID(startTMessageID.getTimestamp(), startTMessageID.getSequenceID());
+        MessageID stopMessageID =
+            new MessageID(stopTMessageID.getTimestamp(), stopTMessageID.getSequenceID());
+        com.etao.hadoop.hbase.queue.client.Scan scan =
+            new com.etao.hadoop.hbase.queue.client.Scan(startMessageID, stopMessageID);
+        if (null != topics) {
+          for (ByteBuffer topic : topics) {
+            scan.addTopic(getBytes(topic));
+          }
+        }
+
+        HQueueScanner scanner =
+            new HQueueScanner(queue.getQueueScanner(scan), System.currentTimeMillis(),
+                queue.getQueueName());
+        return addQueueScanner(scanner);
+      } catch (IOException e) {
+        throw new IOError(e.getMessage());
+      }
+    }
+
+    @Override
+    public TMessage queueScannerGet(int id) throws IOError, IllegalArgument, TException {
+      List<TMessage> tMessages = queueScannerGetList(id, 1);
+      if (tMessages.isEmpty()) {
+        return null;
+      } else {
+        return tMessages.get(0);
+      }
+    }
+
+    @Override
+    public List<TMessage> queueScannerGetList(int id, int nbMessages) throws IOError,
+        IllegalArgument, TException {
+      HQueueScanner scanner = getQueueScanner(id);
+      if (null == scanner) {
+        String message = "GET queue scanner ID is invalid";
+        LOG.warn(message);
+        throw new IllegalArgument("GET queue scanner ID is invalid");
+      }
+
+      Message[] messages = null;
+      try {
+        messages = scanner.getInternalScanner().next(nbMessages);
+        if (null == messages) {
+          scanner.getInternalScanner().close();
+          removeQueueScanner(id);
+          return new ArrayList<TMessage>();
+        }
+      } catch (IOException e) {
+        LOG.warn(e.getMessage(), e);
+        throw new IOError(e.getMessage());
+      }
+
+      scanner.updateTime();
+      return ThriftUtilities.messageFromHBase(messages);
     }
 
     @Override
@@ -1810,7 +2242,7 @@ public class ThriftServerRunner implements Runnable {
         put.addImmutable(famAndQf[0], famAndQf[1], mput.value != null ? getBytes(mput.value)
             : HConstants.EMPTY_BYTE_ARRAY);
 
-        put.setDurability(mput.writeToWAL ? Durability.SYNC_WAL : Durability.SKIP_WAL);
+        put.setDurability(mput.writeToWAL ? Durability.USE_DEFAULT : Durability.SKIP_WAL);
       } catch (IllegalArgumentException e) {
         LOG.warn(e.getMessage(), e);
         throw new IllegalArgument(Throwables.getStackTraceAsString(e));
@@ -1832,9 +2264,406 @@ public class ThriftServerRunner implements Runnable {
           closeTable(table);
       }
     }
+
+    @Override
+    public void putMessageWithPid(ByteBuffer queueName, short partitionID, TMessage tMessage)
+        throws IOError, IllegalArgument, TException {
+      try {
+        HQueue queue = getQueue(queueName);
+        byte[] topic = tMessage.getTopic();
+        byte[] value = tMessage.getValue();
+        Message message = new Message(partitionID, topic, value);
+        queue.put(message);
+      } catch (IOException e) {
+        throw new IOError(e.getMessage());
+      }
+    }
+
+    @Override
+    public void putMessage(ByteBuffer queueName, TMessage tMessage) throws IOError,
+        IllegalArgument, TException {
+      try {
+        HQueue queue = getQueue(queueName);
+        byte[] topic = tMessage.getTopic();
+        byte[] value = tMessage.getValue();
+        Message message = new Message(topic, value);
+        queue.put(message);
+      } catch (IOException e) {
+        throw new IOError(e.getMessage());
+      }
+    }
+
+    @Override
+    public void
+    putMessagesWithPid(ByteBuffer queueName, short partitionID, List<TMessage> tMessages)
+        throws IOError, IllegalArgument, TException {
+      try {
+        HQueue queue = getQueue(queueName);
+        List<Message> messages = new ArrayList<Message>(tMessages.size());
+        for (TMessage tMessage : tMessages) {
+          byte[] topic = tMessage.getTopic();
+          byte[] value = tMessage.getValue();
+          Message message = new Message(partitionID, topic, value);
+          messages.add(message);
+        }
+        queue.put(messages);
+      } catch (IOException e) {
+        throw new IOError(e.getMessage());
+      }
+    }
+
+    @Override
+    public void putMessages(ByteBuffer queueName, List<TMessage> tMessages) throws IOError,
+        IllegalArgument, TException {
+      try {
+        HQueue queue = getQueue(queueName);
+        List<Message> messages = new ArrayList<Message>(tMessages.size());
+        for (TMessage tMessage : tMessages) {
+          byte[] topic = tMessage.getTopic();
+          byte[] value = tMessage.getValue();
+          Message message = new Message(topic, value);
+          messages.add(message);
+        }
+        queue.put(messages);
+      } catch (IOException e) {
+        throw new IOError(e.getMessage());
+      }
+    }
+
+    @Override
+    public void messageScannerClose(int id) throws IOError, IllegalArgument, TException {
+      HQueueMessageScanner scanner = removeMessageScanner(id);
+      if (scanner == null) {
+        String message = "CLOSE message scanner ID is invalid";
+        LOG.warn(message);
+        throw new IllegalArgument("CLOSE message scanner ID is invalid");
+      }
+
+      scanner.getInternalScanner().close();
+    }
+
+    @Override
+    public void partitionScannerClose(int id) throws IOError, IllegalArgument, TException {
+      HQueuePartitionScanner scanner = removePartitionScanner(id);
+      if (scanner == null) {
+        String message = "CLOSE partition scanner ID is invalid";
+        LOG.warn(message);
+        throw new IllegalArgument("CLOSE partition scanner ID is invalid");
+      }
+
+      scanner.getInternalScanner().close();
+    }
+
+    @Override
+    public void queueScannerClose(int id) throws IOError, IllegalArgument, TException {
+      HQueueScanner scanner = removeQueueScanner(id);
+      if (scanner == null) {
+        String message = "CLOSE queue scanner ID is invalid";
+        LOG.warn(message);
+        throw new IllegalArgument("CLOSE queue scanner ID is invalid");
+      }
+
+      scanner.getInternalScanner().close();
+    }
+
+    @Override
+    public List<ByteBuffer> getQueueLocations(ByteBuffer queueName) throws IOError,
+        IllegalArgument, TException {
+      List<ByteBuffer> locations = new ArrayList<ByteBuffer>();
+      try {
+        LOG.info("queue name is " + Bytes.toString(getBytes(queueName)));
+        HQueue queue = getQueue(getBytes(queueName));
+        LOG.info("beging get partitions " + Thread.currentThread().getName());
+        Map<Short, String> partitions = queue.getPartitions();
+        locations = new ArrayList<ByteBuffer>(partitions.size());
+        for (String location : partitions.values()) {
+          locations.add(ByteBuffer.wrap(Bytes.toBytes(location)));
+        }
+
+        LOG.info("end get partitions " + Thread.currentThread().getName());
+      } catch (IOException e) {
+        LOG.warn("", e);
+      }
+
+      return locations;
+    }
+
+    /**
+     * Class that's used to clean the scanners that aren't closed after the defined period of time.
+     * Only works for the new scanners
+     */
+    class ScannerCleanerChore extends ScheduledChore {
+      final int timeout;
+
+      public ScannerCleanerChore(String name, final int timeout, final int interval,
+          final Stoppable stopper) {
+        super(name, stopper, interval);
+        this.timeout = timeout;
+      }
+
+      @Override
+      protected void chore() {
+        // Iterate over all the current scanners
+        for (Map.Entry<Integer, HTableScanner> entry : scannerMap.entrySet()) {
+          HTableScanner scanner = entry.getValue();
+          // if over the timeout, clean
+          long timeSpend = System.currentTimeMillis() - scanner.getLastTimeUsed();
+          if (timeSpend > this.timeout) {
+            Integer key = entry.getKey();
+            LOG.info("We are closing a scanner that has been running for a long time (" + timeSpend
+                + " ms) on the table [" + scanner.getTableName() + "]");
+            scannerMap.remove(key);
+            // This is normally expired
+            try {
+              scanner.getInternalScanner().close();
+            } catch (Exception e) {
+              if (e instanceof UnknownScannerException) {
+                // already closed on Region Server
+              } else {
+                LOG.warn("", e);
+              }
+            }
+          }
+        }
+
+        if (null != metrics) {
+          metrics.setTableScannerNum(scannerMap.size());
+        }
+
+        for (Map.Entry<Integer, HQueueMessageScanner> entry : messageScannerMap.entrySet()) {
+          HQueueMessageScanner scanner = entry.getValue();
+          // if over the timeout, clean
+          long timeSpend = System.currentTimeMillis() - scanner.getLastTimeUsed();
+          if (timeSpend > this.timeout) {
+            Integer key = entry.getKey();
+            LOG.info("We are closing a scanner that has been running for a long time (" + timeSpend
+                + " ms) on the queue [" + scanner.getQueueName() + "]");
+            messageScannerMap.remove(key);
+            // This is normally expired
+            try {
+              scanner.getInternalScanner().close();
+            } catch (Exception e) {
+              if (e instanceof UnknownScannerException) {
+                // already closed on Region Server
+              } else {
+                LOG.warn("", e);
+              }
+            }
+          }
+        }
+
+        if (null != metrics) {
+          metrics.setMessageScannerNum(messageScannerMap.size());
+        }
+
+        for (Map.Entry<Integer, HQueuePartitionScanner> entry : partitionScannerMap.entrySet()) {
+          HQueuePartitionScanner scanner = entry.getValue();
+          // if over the timeout, clean
+          long timeSpend = System.currentTimeMillis() - scanner.getLastTimeUsed();
+          if (timeSpend > this.timeout) {
+            Integer key = entry.getKey();
+            LOG.info("We are closing a scanner that has been running for a long time (" + timeSpend
+                + " ms) on the queue [" + scanner.getQueueName() + "]");
+            partitionScannerMap.remove(key);
+            // This is normally expired
+            try {
+              scanner.getInternalScanner().close();
+            } catch (Exception e) {
+              if (e instanceof UnknownScannerException) {
+                // already closed on Region Server
+              } else {
+                LOG.warn("", e);
+              }
+            }
+          }
+        }
+
+        if (null != metrics) {
+          metrics.setPartitionScannerNum(partitionScannerMap.size());
+        }
+
+        for (Map.Entry<Integer, HQueueScanner> entry : queueScannerMap.entrySet()) {
+          HQueueScanner scanner = entry.getValue();
+          // if over the timeout, clean
+          long timeSpend = System.currentTimeMillis() - scanner.getLastTimeUsed();
+          if (timeSpend > this.timeout) {
+            Integer key = entry.getKey();
+            LOG.info("We are closing a scanner that has been running for a long time (" + timeSpend
+                + " ms) on the queue [" + scanner.getQueueName() + "]");
+            queueScannerMap.remove(key);
+            // This is normally expired
+            try {
+              scanner.getInternalScanner().close();
+            } catch (Exception e) {
+              if (e instanceof UnknownScannerException) {
+                // already closed on Region Server
+              } else {
+                LOG.warn("", e);
+              }
+            }
+          }
+        }
+
+        if (null != metrics) {
+          metrics.setQueueScannerNum(queueScannerMap.size());
+        }
+      }
+    }
+
+    /**
+     * This class is just a wrapper around ResultScanner to carry more info about it. It is meant to
+     * be recreated with the same ResultScanner over and over as the scanner progresses. We are also
+     * including the table name to give more information about the scanners that timeout.
+     */
+    class HTableScanner {
+      private final ResultScanner scanner;
+      private final boolean sortColumns;
+      private final String tableName;
+      private long lastTimeUsed;
+
+      HTableScanner(ResultScanner scanner, long lastTimeUsed, String tableName,
+          boolean sortResultColumns) {
+        this.lastTimeUsed = lastTimeUsed;
+        this.scanner = scanner;
+        this.tableName = tableName;
+        this.sortColumns = sortResultColumns;
+      }
+
+      public void updateTime() {
+        this.lastTimeUsed = System.currentTimeMillis();
+      }
+
+      public ResultScanner getInternalScanner() {
+        return scanner;
+      }
+
+      public boolean isColumnSorted() {
+        return sortColumns;
+      }
+
+      public String getTableName() {
+        return tableName;
+      }
+
+      public long getLastTimeUsed() {
+        return lastTimeUsed;
+      }
+    }
+
+    /**
+     * This class is just a wrapper around MessageScanner to carry more info about it. It is meant
+     * to be recreated with the same MessageScanner over and over as the scanner progresses. We are
+     * also including the queue name to give more information about the scanners that timeout.
+     */
+    class HQueueMessageScanner {
+      private final MessageScanner scanner;
+      private final String queueName;
+      private long lastTimeUsed;
+
+      HQueueMessageScanner(MessageScanner scanner, long lastTimeUsed, String queueName) {
+        this.lastTimeUsed = lastTimeUsed;
+        this.scanner = scanner;
+        this.queueName = queueName;
+      }
+
+      public void updateTime() {
+        this.lastTimeUsed = System.currentTimeMillis();
+      }
+
+      public MessageScanner getInternalScanner() {
+        return scanner;
+      }
+
+      public String getQueueName() {
+        return queueName;
+      }
+
+      public long getLastTimeUsed() {
+        return lastTimeUsed;
+      }
+    }
+
+    /**
+     * This class is just a wrapper around PartitionScanner to carry more info about it. It is meant
+     * to be recreated with the same PartitionScanner over and over as the scanner progresses. We
+     * are also including the queue name to give more information about the scanners that timeout.
+     */
+    class HQueuePartitionScanner {
+      private final PartitionScanner scanner;
+      private final String queueName;
+      private long lastTimeUsed;
+
+      HQueuePartitionScanner(PartitionScanner scanner, long lastTimeUsed, String queueName) {
+        this.lastTimeUsed = lastTimeUsed;
+        this.scanner = scanner;
+        this.queueName = queueName;
+      }
+
+      public void updateTime() {
+        this.lastTimeUsed = System.currentTimeMillis();
+      }
+
+      public PartitionScanner getInternalScanner() {
+        return scanner;
+      }
+
+      public String getQueueName() {
+        return queueName;
+      }
+
+      public long getLastTimeUsed() {
+        return lastTimeUsed;
+      }
+    }
+
+    /**
+     * This class is just a wrapper around QueueScanner to carry more info about it. It is meant to
+     * be recreated with the same QueueScanner over and over as the scanner progresses. We are also
+     * including the queue name to give more information about the scanners that timeout.
+     */
+    class HQueueScanner {
+      private final QueueScanner scanner;
+      private final String queueName;
+      private long lastTimeUsed;
+
+      HQueueScanner(QueueScanner scanner, long lastTimeUsed, String queueName) {
+        this.lastTimeUsed = lastTimeUsed;
+        this.scanner = scanner;
+        this.queueName = queueName;
+      }
+
+      public void updateTime() {
+        this.lastTimeUsed = System.currentTimeMillis();
+      }
+
+      public QueueScanner getInternalScanner() {
+        return scanner;
+      }
+
+      public String getQueueName() {
+        return queueName;
+      }
+
+      public long getLastTimeUsed() {
+        return lastTimeUsed;
+      }
+    }
   }
 
+  static Stoppable STOPPABLE = new Stoppable() {
+    final AtomicBoolean stop = new AtomicBoolean(false);
 
+    @Override
+    public boolean isStopped() {
+      return this.stop.get();
+    }
+
+    @Override
+    public void stop(String why) {
+      LOG.info("STOPPING BECAUSE: " + why);
+      this.stop.set(true);
+    }
+  };
 
   /**
    * Adds all the attributes into the Operation object

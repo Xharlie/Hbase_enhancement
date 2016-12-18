@@ -18,6 +18,7 @@
  */
 package org.apache.hadoop.hbase;
 
+import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -94,6 +95,10 @@ public class ChoreService implements ChoreServicer {
     this(coreThreadPoolPrefix, MIN_CORE_POOL_SIZE);
   }
 
+  public ChoreService(final String coreThreadPoolPrefix, int corePoolSize) {
+    this(coreThreadPoolPrefix, corePoolSize, null);
+  }
+
   /**
    * @param coreThreadPoolPrefix Prefix that will be applied to the Thread name of all threads
    *          spawned by this service
@@ -101,10 +106,12 @@ public class ChoreService implements ChoreServicer {
    *          to during initialization. The default size is 1, but specifying a larger size may be
    *          beneficial if you know that 1 thread will not be enough.
    */
-  public ChoreService(final String coreThreadPoolPrefix, int corePoolSize) {
+  public ChoreService(final String coreThreadPoolPrefix, int corePoolSize,
+      UncaughtExceptionHandler uncaughtExceptionHandler) {
     this.coreThreadPoolPrefix = coreThreadPoolPrefix;
     if (corePoolSize < MIN_CORE_POOL_SIZE) corePoolSize = MIN_CORE_POOL_SIZE;
-    final ThreadFactory threadFactory = new ChoreServiceThreadFactory(coreThreadPoolPrefix);
+    final ThreadFactory threadFactory =
+        new ChoreServiceThreadFactory(coreThreadPoolPrefix, uncaughtExceptionHandler);
     scheduler = new ScheduledThreadPoolExecutor(corePoolSize, threadFactory);
     scheduler.setRemoveOnCancelPolicy(true);
     scheduledChores = new HashMap<ScheduledChore, ScheduledFuture<?>>();
@@ -225,18 +232,24 @@ public class ChoreService implements ChoreServicer {
     private final String threadPrefix;
     private final static String THREAD_NAME_SUFFIX = "_ChoreService_";
     private AtomicInteger threadNumber = new AtomicInteger(1);
+    UncaughtExceptionHandler uncaughtExceptionHandler;
 
     /**
      * @param threadPrefix The prefix given to all threads created by this factory
      */
-    public ChoreServiceThreadFactory(final String threadPrefix) {
+    public ChoreServiceThreadFactory(final String threadPrefix,
+        final UncaughtExceptionHandler uncaughtExceptionHandler) {
       this.threadPrefix = threadPrefix;
+      this.uncaughtExceptionHandler = uncaughtExceptionHandler;
     }
 
     @Override
     public Thread newThread(Runnable r) {
       Thread thread =
           new Thread(r, threadPrefix + THREAD_NAME_SUFFIX + threadNumber.getAndIncrement());
+      if (this.uncaughtExceptionHandler != null) {
+        thread.setUncaughtExceptionHandler(uncaughtExceptionHandler);
+      }
       thread.setDaemon(true);
       return thread;
     }

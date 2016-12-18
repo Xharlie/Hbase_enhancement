@@ -45,7 +45,7 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
 
   private static final Log LOG = LogFactory.getLog(CleanerChore.class.getName());
 
-  private final FileSystem fs;
+  protected final FileSystem fs;
   private final Path oldFileDir;
   private final Configuration conf;
   protected List<T> cleanersChain;
@@ -209,6 +209,9 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
    * @return true iff successfully deleted all files
    */
   private boolean checkAndDeleteFiles(List<FileStatus> files) {
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Checking files for delete: " + files);
+    }
     // first check to see if the path is valid
     List<FileStatus> validFiles = Lists.newArrayListWithCapacity(files.size());
     List<FileStatus> invalidFiles = Lists.newArrayList();
@@ -246,6 +249,15 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
     }
     
     Iterable<FileStatus> filesToDelete = Iterables.concat(invalidFiles, deletableValidFiles);
+    return deleteFiles(filesToDelete) == files.size();
+  }
+
+  /**
+   * Delete the given files
+   * @param filesToDelete files to delete
+   * @return number of deleted files
+   */
+  protected int deleteFiles(Iterable<FileStatus> filesToDelete) {
     int deletedFileCount = 0;
     for (FileStatus file : filesToDelete) {
       Path filePath = file.getPath();
@@ -265,8 +277,7 @@ public abstract class CleanerChore<T extends FileCleanerDelegate> extends Schedu
         LOG.warn("Error while deleting: " + filePath, e);
       }
     }
-
-    return deletedFileCount == files.size();
+    return deletedFileCount;
   }
 
   @Override

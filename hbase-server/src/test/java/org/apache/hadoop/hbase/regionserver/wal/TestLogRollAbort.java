@@ -204,7 +204,7 @@ public class TestLogRollAbort {
         HTableDescriptor htd = new HTableDescriptor(tableName);
         htd.addFamily(new HColumnDescriptor("column"));
         log.append(htd, regioninfo, new WALKey(regioninfo.getEncodedNameAsBytes(), tableName,
-            System.currentTimeMillis()), kvs, sequenceId, true, null);
+            System.currentTimeMillis()), kvs, true);
       }
       // Send the data to HDFS datanodes and close the HDFS writer
       log.sync();

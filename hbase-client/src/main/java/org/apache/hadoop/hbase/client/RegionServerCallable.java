@@ -31,6 +31,7 @@ import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.NotServingRegionException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.exceptions.RegionMovedException;
+import org.apache.hadoop.hbase.ipc.FailedServerException;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ClientService;
 import org.apache.hadoop.hbase.util.Bytes;
 
@@ -121,6 +122,7 @@ public abstract class RegionServerCallable<T> implements RetryingCallable<T> {
     if (t instanceof SocketTimeoutException ||
         t instanceof ConnectException ||
         t instanceof RetriesExhaustedException ||
+        t instanceof FailedServerException ||
         (location != null && getConnection().isDeadServer(location.getServerName()))) {
       // if thrown these exceptions, we clear all the cache entries that
       // map to that slow/dead server; otherwise, let cache miss and ask

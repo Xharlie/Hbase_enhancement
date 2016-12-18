@@ -87,4 +87,19 @@ public class ThriftMetrics  {
     }
   }
 
+  public void setTableScannerNum(long value) {
+    source.setTableScannerNum(value);
+  }
+
+  public void setMessageScannerNum(long value) {
+    source.setMessageScannerNum(value);
+  }
+
+  public void setPartitionScannerNum(long value) {
+    source.setPartitionScannerNum(value);
+  }
+
+  public void setQueueScannerNum(long value) {
+    source.setQueueScannerNum(value);
+  }
 }

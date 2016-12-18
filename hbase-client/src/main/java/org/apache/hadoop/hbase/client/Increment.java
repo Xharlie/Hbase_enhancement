@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 
@@ -56,6 +57,13 @@ public class Increment extends Mutation implements Comparable<Row> {
   private static final String RETURN_RESULTS = "_rr_";
 
   private TimeRange tr = new TimeRange();
+
+  /**
+   * for pre-0.94 users
+   * @deprecated use {@link Increment(byte[] row)}
+   */
+  public Increment() {
+  }
 
   /**
    * Create a Increment operation for the specified row.
@@ -183,12 +191,39 @@ public class Increment extends Mutation implements Comparable<Row> {
   }
 
   /**
+   * for pre-0.94 users Method for retrieving the keys in the familyMap
+   * @return keys in the current familyMap
+   * @deprecated
+   */
+  public Set<byte[]> familySet() {
+    return this.familyMap.keySet();
+  }
+
+  /**
    * Method for retrieving the number of families to increment from
    * @return number of families
    */
   @Override
   public int numFamilies() {
     return this.familyMap.size();
+  }
+
+  /**
+   * for pre-0.94 users Method for retrieving the number of columns to increment
+   * @return number of columns across all families
+   * @deprecated
+   */
+  public int numColumns() {
+    if (!hasFamilies()) {
+      return 0;
+    }
+    
+    int num = 0;
+    for (List<Cell> family : familyMap.values()) {
+      num += family.size();
+    }
+    
+    return num;
   }
 
   /**

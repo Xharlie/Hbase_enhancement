@@ -19,45 +19,16 @@ package org.apache.hadoop.hbase.regionserver.compactions;
 
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.regionserver.RegionServerServices;
+import org.apache.hadoop.hbase.regionserver.controller.NoLimitThroughputController;
 
 /**
  * A dummy CompactionThroughputController that does nothing.
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.CONFIG)
-public class NoLimitCompactionThroughputController implements CompactionThroughputController {
+public class NoLimitCompactionThroughputController extends NoLimitThroughputController {
 
   public static final NoLimitCompactionThroughputController INSTANCE =
       new NoLimitCompactionThroughputController();
-
-  @Override
-  public void setup(RegionServerServices server) {
-  }
-
-  @Override
-  public void start(String compactionName) {
-  }
-
-  @Override
-  public long control(String compactionName, long size) throws InterruptedException {
-    return 0;
-  }
-
-  @Override
-  public void finish(String compactionName) {
-  }
-
-  private volatile boolean stopped;
-
-  @Override
-  public void stop(String why) {
-    stopped = true;
-  }
-
-  @Override
-  public boolean isStopped() {
-    return stopped;
-  }
 
   @Override
   public String toString() {

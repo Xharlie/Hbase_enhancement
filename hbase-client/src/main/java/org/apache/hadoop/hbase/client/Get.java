@@ -81,6 +81,13 @@ public class Get extends Query
     new TreeMap<byte [], NavigableSet<byte []>>(Bytes.BYTES_COMPARATOR);
 
   /**
+   * for pre-0.94 users
+   * @deprecated use {@link Get(byte[] row)}
+   */
+  public Get() {
+  }
+
+  /**
    * Create a Get operation for the specified row.
    * <p>
    * If no further operations are done, this will get the latest version of

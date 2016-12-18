@@ -127,6 +127,12 @@ public class MemcachedBlockCache implements BlockCache {
   @Override
   public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching,
                             boolean repeat, boolean updateCacheMetrics) {
+    return getBlock(cacheKey, caching, repeat, updateCacheMetrics, null);
+  }
+
+  @Override
+  public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching,
+      boolean repeat, boolean updateCacheMetrics, BlockType blockType) {
     // Assume that nothing is the block cache
     HFileBlock result = null;
 
@@ -146,12 +152,17 @@ public class MemcachedBlockCache implements BlockCache {
       if (updateCacheMetrics) {
         if (result == null) {
           cacheStats.miss(caching);
+          if (null != blockType) {
+            cacheStats.missByBlockType(blockType, caching);
+          }
         } else {
           cacheStats.hit(caching);
+          if (null != blockType) {
+            cacheStats.hitByBlockType(blockType, caching);
+          }
         }
       }
     }
-
 
     return result;
   }

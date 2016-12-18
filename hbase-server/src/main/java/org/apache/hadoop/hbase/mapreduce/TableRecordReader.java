@@ -157,4 +157,5 @@ extends RecordReader<ImmutableBytesWritable, Result> {
   public float getProgress() {
     return this.recordReaderImpl.getProgress();
   }
+
 }

@@ -35,7 +35,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -761,7 +760,7 @@ public class TestHRegionReplayEvents {
 
     // ensure all files are visible in secondary
     for (Store store : secondaryRegion.getStores()) {
-      assertTrue(store.getMaxSequenceId() <= secondaryRegion.getSequenceId().get());
+      assertTrue(store.getMaxSequenceId() <= secondaryRegion.getReadpoint(null));
     }
 
     LOG.info("-- Replaying flush commit in secondary" + commitFlushDesc);
@@ -1087,7 +1086,7 @@ public class TestHRegionReplayEvents {
       assertGet(region, family, row);
 
       // region seqId should have advanced at least to this seqId
-      assertEquals(origSeqId, region.getSequenceId().get());
+      assertEquals(origSeqId, region.getReadpoint(null));
 
       // replay an entry that is smaller than current read point
       // caution: adding an entry below current read point might cause partial dirty reads. Normal
@@ -1116,7 +1115,7 @@ public class TestHRegionReplayEvents {
     // test for region open and close
     secondaryRegion = HRegion.openHRegion(secondaryHri, htd, walSecondary, CONF, rss, null);
     verify(walSecondary, times(0)).append((HTableDescriptor)any(), (HRegionInfo)any(),
-      (WALKey)any(), (WALEdit)any(), (AtomicLong)any(), anyBoolean(), (List<Cell>) any());
+      (WALKey)any(), (WALEdit)any(), anyBoolean());
 
     // test for replay prepare flush
     putDataByReplay(secondaryRegion, 0, 10, cq, families);
@@ -1130,11 +1129,11 @@ public class TestHRegionReplayEvents {
       .build());
 
     verify(walSecondary, times(0)).append((HTableDescriptor)any(), (HRegionInfo)any(),
-      (WALKey)any(), (WALEdit)any(), (AtomicLong)any(), anyBoolean(), (List<Cell>) any());
+      (WALKey)any(), (WALEdit)any(), anyBoolean());
 
     secondaryRegion.close();
     verify(walSecondary, times(0)).append((HTableDescriptor)any(), (HRegionInfo)any(),
-      (WALKey)any(), (WALEdit)any(), (AtomicLong)any(), anyBoolean(), (List<Cell>) any());
+      (WALKey)any(), (WALEdit)any(), anyBoolean());
   }
 
   /**

@@ -326,6 +326,8 @@ Shell.load_command_group(
     catalogjanitor_enabled
     compact_rs
     trace
+    set_cluster_unavailable
+    set_cluster_available
   ],
   # TODO remove older hlog_roll command
   :aliases => {

@@ -23,12 +23,12 @@
   <parent>
     <artifactId>hbase</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>1.1.2-adp-0.1</version>
+    <version>1.1.2-adp-1.0.8.1</version>
     <relativePath>..</relativePath>
   </parent>
   <groupId>org.apache.hbase</groupId>
   <artifactId>hbase-thrift</artifactId>
-  <version>1.1.2-adp-0.1</version>
+  <version>1.1.2-adp-1.0.8.1</version>
   <name>ADP HBase - Thrift</name>
   <description>HBase Thrift Server</description>
 
@@ -215,6 +215,28 @@
 
   <dependencies>
     <!-- Intra-project dependencies -->
+    <dependency>
+      <groupId>com.etao.hbase</groupId>
+      <artifactId>hqueue-common</artifactId>
+      <version>0.7.3</version>
+      <exclusions>
+	<exclusion>
+	  <groupId>com.etao.yarn</groupId>
+	  <artifactId>yarn-apps-io</artifactId>
+	</exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>com.etao.hbase</groupId>
+      <artifactId>hqueue-client</artifactId>
+      <version>0.7.3</version>
+      <exclusions>
+	<exclusion>
+	  <groupId>com.etao.yarn</groupId>
+	  <artifactId>yarn-apps-io</artifactId>
+	</exclusion>
+      </exclusions>
+    </dependency>
     <dependency>
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-common</artifactId>

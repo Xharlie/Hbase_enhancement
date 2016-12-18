@@ -37,6 +37,7 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -51,6 +52,7 @@ import org.apache.hadoop.hbase.io.Reference;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSHDFSUtils;
 import org.apache.hadoop.hbase.util.FSUtils;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.ServerRegionReplicaUtil;
 
 /**
@@ -242,6 +244,35 @@ public class HRegionFileSystem {
         regionInfoForFs, familyName, status.getPath());
       storeFiles.add(info);
 
+    }
+    return storeFiles;
+  }
+
+  /**
+   * Returns the store files with locations available for the family. This methods performs the
+   * filtering based on the valid store files.
+   * @param familyName Column Family Name
+   * @return a set of {@link StoreFileInfo and LocatedFileStatus} for the specified family.
+   */
+  public Collection<Pair<StoreFileInfo, LocatedFileStatus>> getStoreFilesWithLocation(
+      final String familyName) throws IOException {
+    Path familyDir = getStoreDir(familyName);
+    List<LocatedFileStatus> files = FSUtils.listLocatedStatus(fs, familyDir);
+    if (files == null) {
+      LOG.debug("No StoreFiles for: " + familyDir);
+      return null;
+    }
+    ArrayList<Pair<StoreFileInfo, LocatedFileStatus>> storeFiles =
+        new ArrayList<Pair<StoreFileInfo, LocatedFileStatus>>(files.size());
+    for (LocatedFileStatus status : files) {
+      if (!StoreFileInfo.isValid(status)) {
+        LOG.warn("Invalid StoreFile: " + status.getPath());
+        continue;
+      }
+      StoreFileInfo info =
+          ServerRegionReplicaUtil.getStoreFileInfo(conf, fs, regionInfo, regionInfoForFs,
+            familyName, status.getPath());
+      storeFiles.add(new Pair<StoreFileInfo, LocatedFileStatus>(info, status));
     }
     return storeFiles;
   }

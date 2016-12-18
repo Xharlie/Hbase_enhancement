@@ -1,3 +1,9 @@
+This is a customized distribution of Apache HBase, used as a core service in
+Alibaba search department and an important component of Ali-Data-Platform suit.
+Lot's of optimizations have been added for search scnenarios. Most of our works
+are also contributed back to Apache HBase community which means user could also
+benifit but only in a *LATER* apache official release.
+
 Apache HBase [1] is an open-source, distributed, versioned, column-oriented
 store modeled after Google' Bigtable: A Distributed Storage System for
 Structured Data by Chang et al.[2]  Just as Bigtable leverages the distributed

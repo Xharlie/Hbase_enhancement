@@ -56,11 +56,15 @@ class HealthChecker {
    *
    * @param configuration
    */
-  public void init(String location, long timeout) {
+  public void init(String location, long timeout, Object... args) {
     this.healthCheckScript = location;
     this.scriptTimeout = timeout;
     ArrayList<String> execScript = new ArrayList<String>();
     execScript.add(healthCheckScript);
+    for (Object arg : args) {
+      execScript.add(arg.toString());
+    }
+
     this.shexec = new ShellCommandExecutor(execScript.toArray(new String[execScript.size()]), null,
         null, scriptTimeout);
     LOG.info("HealthChecker initialized with script at " + this.healthCheckScript +

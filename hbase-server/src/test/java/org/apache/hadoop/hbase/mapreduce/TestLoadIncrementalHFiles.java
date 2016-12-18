@@ -42,6 +42,7 @@ import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
+import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.io.hfile.HFileScanner;
@@ -405,6 +406,30 @@ public class TestLoadIncrementalHFiles {
         familyDesc, Bytes.toBytes("ggg"),
         bottomOut,
         topOut);
+
+    int rowCount = verifyHFile(bottomOut);
+    rowCount += verifyHFile(topOut);
+    assertEquals(1000, rowCount);
+  }
+
+  @Test public void testSplitStoreFileWithDifferentEncoding() throws IOException {
+    Path dir = util.getDataTestDirOnTestFS("testSplitHFileWithDifferentEncoding");
+    FileSystem fs = util.getTestFileSystem();
+    Path testIn = new Path(dir, "testhfile");
+    HColumnDescriptor familyDesc = new HColumnDescriptor(FAMILY);
+    // force DATA_BLOCK_ENCODING to NONE in CF description
+    familyDesc.setDataBlockEncoding(DataBlockEncoding.NONE);
+    // create HFile with DIFF encoding algorithm
+    HFileTestUtil.createHFileWithDataBlockEncoding(util.getConfiguration(), fs, testIn,
+        DataBlockEncoding.DIFF, FAMILY, QUALIFIER,
+        Bytes.toBytes("aaa"), Bytes.toBytes("zzz"), 1000);
+
+    Path bottomOut = new Path(dir, "bottom.out");
+    Path topOut = new Path(dir, "top.out");
+
+    LoadIncrementalHFiles
+        .splitStoreFile(util.getConfiguration(), testIn, familyDesc, Bytes.toBytes("ggg"),
+            bottomOut, topOut);
 
     int rowCount = verifyHFile(bottomOut);
     rowCount += verifyHFile(topOut);

@@ -62,6 +62,7 @@ import org.apache.hadoop.hbase.TableNotEnabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.UnknownRegionException;
 import org.apache.hadoop.hbase.ZooKeeperConnectionException;
+import org.apache.hadoop.hbase.ClusterNotAvailableException;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.client.MetaScanner.MetaScannerVisitor;
@@ -165,6 +166,8 @@ import org.apache.zookeeper.KeeperException;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.ServiceException;
+
+import org.apache.hadoop.hbase.HConstants;
 
 /**
  * HBaseAdmin is no longer a client API. It is marked InterfaceAudience.Private indicating that
@@ -4004,6 +4007,46 @@ public class HBaseAdmin implements Admin {
     for (ServerName server : this.getClusterStatus().getServers()) {
       updateConfiguration(server);
     }
+  }
+
+  public String setClusterUnavailable() throws IOException, KeeperException {
+    if (!conf.getBoolean(HConstants.HBASE_CLIENT_CLUSTER_AVAILABILITY, HConstants.DEFAULT_USE_CLUSTER_AVAILABILITY)){
+      return "this command is invalid, since hbase.client.cluster.availability set as 'false'";
+    }
+    ConnectionManager.HConnectionImplementation connection =
+            (ConnectionManager.HConnectionImplementation)this.connection;
+    connection.checkAndStartClusterAvailabilityTracker();
+    try {
+      connection.checkIfClusterAvailable();
+      connection.clusterAvailabilityTracker.setClusterUnavailable();
+    } catch (ClusterNotAvailableException e){
+      return "Invalid operation, Cluster is already unavailable...";
+    }
+    try {
+      connection.checkIfClusterAvailable();
+    } catch (ClusterNotAvailableException e){
+      return "Operation succeeded, Cluster is unavailable now...";
+    } finally {
+      connection.stopClusterAvailabilityTracker();
+    }
+    return "Sorry, operation unsuccessful...";
+  }
+
+  public String setClusterAvailable() throws IOException, KeeperException {
+    if (!conf.getBoolean(HConstants.HBASE_CLIENT_CLUSTER_AVAILABILITY, HConstants.DEFAULT_USE_CLUSTER_AVAILABILITY)){
+      return "this command is invalid, since hbase.client.cluster.availability set as 'false'";
+    }
+    ConnectionManager.HConnectionImplementation connection =
+            (ConnectionManager.HConnectionImplementation)this.connection;
+    connection.checkAndStartClusterAvailabilityTracker();
+    try {
+      connection.checkIfClusterAvailable();
+      return "Cluster is already available";
+    } catch (ClusterNotAvailableException e){
+      connection.clusterAvailabilityTracker.setClusterAvailable();
+    }
+    connection.stopClusterAvailabilityTracker();
+    return "Succeed to set cluster to available";
   }
 
   @Override

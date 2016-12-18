@@ -46,10 +46,8 @@ public class TestMultiVersionConsistencyControl extends TestCase {
     public boolean failed = false;
 
     public void run() {
-      AtomicLong startPoint = new AtomicLong();
       while (!finished.get()) {
-        MultiVersionConsistencyControl.WriteEntry e = 
-            mvcc.beginMemstoreInsertWithSeqNum(startPoint.incrementAndGet());
+        MultiVersionConsistencyControl.WriteEntry e = mvcc.beginMemstoreInsert();
         // System.out.println("Begin write: " + e.getWriteNumber());
         // 10 usec - 500usec (including 0)
         int sleepTime = rnd.nextInt(500);
@@ -128,7 +126,5 @@ public class TestMultiVersionConsistencyControl extends TestCase {
     for (int i = 0; i < n; ++i) {
       assertTrue(statuses[i].get());
     }
-
   }
-
 }

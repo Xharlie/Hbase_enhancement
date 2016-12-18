@@ -73,6 +73,25 @@ public interface Region extends ConfigurationObserver {
 
   ///////////////////////////////////////////////////////////////////////////
   // Region state
+  /**
+   * @return start key for region
+   * @deprecated use HRegionInfo.getStartKey()
+   */
+  @Deprecated
+  byte[] getStartKey();
+
+  /**
+   * @return end key for region
+   * @deprecated use HRegionInfo.getEndKey()
+   */
+  @Deprecated
+  byte[] getEndKey();
+
+  /**
+   * @return Region name as a String for use in logging, etc.
+   * @deprecated use HRegionInfo.getRegionNameAsString()
+   */
+  String getRegionNameAsString();
 
   /** @return region information for this region */
   HRegionInfo getRegionInfo();
@@ -300,6 +319,8 @@ public interface Region extends ConfigurationObserver {
    */
   OperationStatus[] batchMutate(Mutation[] mutations, long nonceGroup, long nonce)
       throws IOException;
+  
+  OperationStatus[] batchMutate(Mutation[] mutations) throws IOException;
 
   /**
    * Replay a batch of mutations.

@@ -26,6 +26,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.BindException;
@@ -60,6 +61,7 @@ import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.junit.After;
 import org.junit.AfterClass;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Rule;
@@ -67,6 +69,7 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 // imports for things that haven't moved from regionserver.wal yet.
 import org.apache.hadoop.hbase.regionserver.wal.HLogKey;
 import org.apache.hadoop.hbase.regionserver.wal.SequenceFileLogReader;
@@ -165,6 +168,7 @@ public class TestWALFactory {
   public void testSplit() throws IOException {
     final TableName tableName = TableName.valueOf(currentTest.getMethodName());
     final byte [] rowName = tableName.getName();
+    final MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl(1);
     final Path logdir = new Path(hbaseDir,
         DefaultWALProvider.getWALDirectoryName(currentTest.getMethodName()));
     Path oldLogDir = new Path(hbaseDir, HConstants.HREGION_OLDLOGDIR_NAME);
@@ -182,7 +186,6 @@ public class TestWALFactory {
     htd.addFamily(new HColumnDescriptor("column"));
 
     // Add edits for three regions.
-    final AtomicLong sequenceId = new AtomicLong(1);
     for (int ii = 0; ii < howmany; ii++) {
       for (int i = 0; i < howmany; i++) {
         final WAL log =
@@ -195,11 +198,13 @@ public class TestWALFactory {
           edit.add(new KeyValue(rowName, family, qualifier,
               System.currentTimeMillis(), column));
           LOG.info("Region " + i + ": " + edit);
-          log.append(htd, infos[i], new WALKey(infos[i].getEncodedNameAsBytes(), tableName,
-              System.currentTimeMillis()), edit, sequenceId, true, null);
+          WALKey walKey =  new WALKey(infos[i].getEncodedNameAsBytes(), tableName,
+              System.currentTimeMillis(), mvcc);
+          log.append(htd, infos[i], walKey, edit, true);
+          walKey.getWriteEntry();
         }
         log.sync();
-        log.rollWriter();
+        log.rollWriter(true);
       }
     }
     wals.shutdown();
@@ -214,6 +219,7 @@ public class TestWALFactory {
   @Test
   public void Broken_testSync() throws Exception {
     TableName tableName = TableName.valueOf(currentTest.getMethodName());
+    MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl(1);
     // First verify that using streams all works.
     Path p = new Path(dir, currentTest.getMethodName() + ".fsdos");
     FSDataOutputStream out = fs.create(p);
@@ -238,7 +244,6 @@ public class TestWALFactory {
     out.close();
     in.close();
 
-    final AtomicLong sequenceId = new AtomicLong(1);
     final int total = 20;
     WAL.Reader reader = null;
 
@@ -253,7 +258,7 @@ public class TestWALFactory {
         WALEdit kvs = new WALEdit();
         kvs.add(new KeyValue(Bytes.toBytes(i), tableName.getName(), tableName.getName()));
         wal.append(htd, info, new WALKey(info.getEncodedNameAsBytes(), tableName,
-            System.currentTimeMillis()), kvs, sequenceId, true, null);
+            System.currentTimeMillis(), mvcc), kvs, true);
       }
       // Now call sync and try reading.  Opening a Reader before you sync just
       // gives you EOFE.
@@ -272,7 +277,7 @@ public class TestWALFactory {
         WALEdit kvs = new WALEdit();
         kvs.add(new KeyValue(Bytes.toBytes(i), tableName.getName(), tableName.getName()));
         wal.append(htd, info, new WALKey(info.getEncodedNameAsBytes(), tableName,
-            System.currentTimeMillis()), kvs, sequenceId, true, null);
+            System.currentTimeMillis(), mvcc), kvs, true);
       }
       wal.sync();
       reader = wals.createReader(fs, walPath);
@@ -294,7 +299,7 @@ public class TestWALFactory {
         WALEdit kvs = new WALEdit();
         kvs.add(new KeyValue(Bytes.toBytes(i), tableName.getName(), value));
         wal.append(htd, info, new WALKey(info.getEncodedNameAsBytes(), tableName,
-            System.currentTimeMillis()), kvs, sequenceId, true, null);
+            System.currentTimeMillis(), mvcc), kvs, true);
       }
       // Now I should have written out lots of blocks.  Sync then read.
       wal.sync();
@@ -364,7 +369,6 @@ public class TestWALFactory {
 
     final WAL wal =
         wals.getWAL(regioninfo.getEncodedNameAsBytes(), regioninfo.getTable().getNamespace());
-    final AtomicLong sequenceId = new AtomicLong(1);
     final int total = 20;
 
     HTableDescriptor htd = new HTableDescriptor();
@@ -374,7 +378,7 @@ public class TestWALFactory {
       WALEdit kvs = new WALEdit();
       kvs.add(new KeyValue(Bytes.toBytes(i), tableName.getName(), tableName.getName()));
       wal.append(htd, regioninfo, new WALKey(regioninfo.getEncodedNameAsBytes(), tableName,
-          System.currentTimeMillis()), kvs, sequenceId, true, null);
+          System.currentTimeMillis()), kvs, true);
     }
     // Now call sync to send the data to HDFS datanodes
     wal.sync();
@@ -487,7 +491,7 @@ public class TestWALFactory {
     final byte [] row = Bytes.toBytes("row");
     WAL.Reader reader = null;
     try {
-      final AtomicLong sequenceId = new AtomicLong(1);
+      final MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl(1);
 
       // Write columns named 1, 2, 3, etc. and then values of single byte
       // 1, 2, 3...
@@ -503,8 +507,9 @@ public class TestWALFactory {
       final WAL log = wals.getWAL(info.getEncodedNameAsBytes(), info.getTable().getNamespace());
 
       final long txid = log.append(htd, info,
-        new WALKey(info.getEncodedNameAsBytes(), htd.getTableName(), System.currentTimeMillis()),
-        cols, sequenceId, true, null);
+        new WALKey(info.getEncodedNameAsBytes(), htd.getTableName(), System.currentTimeMillis(),
+          mvcc),
+        cols, true);
       log.sync(txid);
       log.startCacheFlush(info.getEncodedNameAsBytes(), htd.getFamiliesKeys());
       log.completeCacheFlush(info.getEncodedNameAsBytes());
@@ -544,7 +549,7 @@ public class TestWALFactory {
             "column"));
     final byte [] row = Bytes.toBytes("row");
     WAL.Reader reader = null;
-    final AtomicLong sequenceId = new AtomicLong(1);
+    final MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl(1);
     try {
       // Write columns named 1, 2, 3, etc. and then values of single byte
       // 1, 2, 3...
@@ -559,8 +564,9 @@ public class TestWALFactory {
           HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW);
       final WAL log = wals.getWAL(hri.getEncodedNameAsBytes(), hri.getTable().getNamespace());
       final long txid = log.append(htd, hri,
-        new WALKey(hri.getEncodedNameAsBytes(), htd.getTableName(), System.currentTimeMillis()),
-        cols, sequenceId, true, null);
+        new WALKey(hri.getEncodedNameAsBytes(), htd.getTableName(), System.currentTimeMillis(),
+          mvcc),
+        cols, true);
       log.sync(txid);
       log.startCacheFlush(hri.getEncodedNameAsBytes(), htd.getFamiliesKeys());
       log.completeCacheFlush(hri.getEncodedNameAsBytes());
@@ -598,7 +604,7 @@ public class TestWALFactory {
         TableName.valueOf("tablename");
     final byte [] row = Bytes.toBytes("row");
     final DumbWALActionsListener visitor = new DumbWALActionsListener();
-    final AtomicLong sequenceId = new AtomicLong(1);
+    final MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl(1);
     long timestamp = System.currentTimeMillis();
     HTableDescriptor htd = new HTableDescriptor();
     htd.addFamily(new HColumnDescriptor("column"));
@@ -613,7 +619,7 @@ public class TestWALFactory {
           Bytes.toBytes(Integer.toString(i)),
           timestamp, new byte[]{(byte) (i + '0')}));
       log.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), tableName,
-          System.currentTimeMillis()), cols, sequenceId, true, null);
+          System.currentTimeMillis(), mvcc), cols, true);
     }
     log.sync();
     assertEquals(COL_COUNT, visitor.increments);
@@ -623,7 +629,7 @@ public class TestWALFactory {
         Bytes.toBytes(Integer.toString(11)),
         timestamp, new byte[]{(byte) (11 + '0')}));
     log.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), tableName,
-        System.currentTimeMillis()), cols, sequenceId, true, null);
+        System.currentTimeMillis(), mvcc), cols, true);
     log.sync();
     assertEquals(COL_COUNT, visitor.increments);
   }
@@ -703,6 +709,19 @@ public class TestWALFactory {
       if (reader != null) {
         reader.close();
       }
+    }
+  }
+
+  @Test
+  public void testWALDirCleaning() throws Exception {
+    // generate a wal so the wal dir won't be empty before closed
+    wals.getMetaWAL(null);
+    wals.close();
+    try {
+      fs.listStatus(wals.getWALDirectory());
+      Assert.fail("WAL directory not cleaned after WALFactory close");
+    } catch (FileNotFoundException e) {
+      // expected since the whole dir should be removed after WALFactory close
     }
   }
 

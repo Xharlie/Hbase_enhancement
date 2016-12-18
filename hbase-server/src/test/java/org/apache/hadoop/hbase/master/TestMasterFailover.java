@@ -1432,7 +1432,7 @@ public class TestMasterFailover {
 
     // Set a dummy server to check if master reassigns meta on restart
     MetaTableLocator.setMetaLocation(activeMaster.getZooKeeper(),
-      ServerName.valueOf("dummyserver.example.org", 1234, -1L), State.OPEN);
+      ServerName.valueOf("localhost", 1234, -1L), State.OPEN);
 
     log("Aborting master");
     activeMaster.stop("test-kill");

@@ -32,6 +32,7 @@ import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.io.Writable;
@@ -53,7 +54,7 @@ import com.google.common.annotations.VisibleForTesting;
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.REPLICATION)
 @Deprecated
 public class HLogKey extends WALKey implements Writable {
-  public static final Log LOG = LogFactory.getLog(HLogKey.class);
+  private static final Log LOG = LogFactory.getLog(HLogKey.class);
 
   public HLogKey() {
     super();
@@ -73,6 +74,13 @@ public class HLogKey extends WALKey implements Writable {
     super(encodedRegionName, tablename, now);
   }
 
+  public HLogKey(final byte[] encodedRegionName,
+                 final TableName tablename,
+                 final long now,
+                 final MultiVersionConsistencyControl mvcc) {
+    super(encodedRegionName, tablename, now, mvcc);
+  }
+
   /**
    * Create the log key for writing to somewhere.
    * We maintain the tablename mainly for debugging purposes.
@@ -86,9 +94,16 @@ public class HLogKey extends WALKey implements Writable {
    * @param now Time at which this edit was written.
    * @param clusterIds the clusters that have consumed the change(used in Replication)
    */
-  public HLogKey(final byte [] encodedRegionName, final TableName tablename,
-      long logSeqNum, final long now, List<UUID> clusterIds, long nonceGroup, long nonce) {
-    super(encodedRegionName, tablename, logSeqNum, now, clusterIds, nonceGroup, nonce);
+  public HLogKey(
+      final byte[] encodedRegionName,
+      final TableName tablename,
+      long logSeqNum,
+      final long now,
+      List<UUID> clusterIds,
+      long nonceGroup,
+      long nonce,
+      MultiVersionConsistencyControl mvcc) {
+    super(encodedRegionName, tablename, logSeqNum, now, clusterIds, nonceGroup, nonce, mvcc);
   }
 
   /**
@@ -104,9 +119,14 @@ public class HLogKey extends WALKey implements Writable {
    * @param nonceGroup
    * @param nonce
    */
-  public HLogKey(final byte [] encodedRegionName, final TableName tablename,
-      final long now, List<UUID> clusterIds, long nonceGroup, long nonce) {
-    super(encodedRegionName, tablename, now, clusterIds, nonceGroup, nonce);
+  public HLogKey(final byte[] encodedRegionName,
+                 final TableName tablename,
+                 final long now,
+                 List<UUID> clusterIds,
+                 long nonceGroup,
+                 long nonce,
+                 final MultiVersionConsistencyControl mvcc) {
+    super(encodedRegionName, tablename, now, clusterIds, nonceGroup, nonce, mvcc);
   }
 
   /**
@@ -122,10 +142,13 @@ public class HLogKey extends WALKey implements Writable {
    * @param nonce
    */
   public HLogKey(final byte [] encodedRegionName, final TableName tablename, long logSeqNum,
-      long nonceGroup, long nonce) {
-    super(encodedRegionName, tablename, logSeqNum, nonceGroup, nonce);
+      long nonceGroup, long nonce, MultiVersionConsistencyControl mvcc) {
+    super(encodedRegionName, tablename, logSeqNum, nonceGroup, nonce, mvcc);
   }
 
+  /**
+   * @deprecated Don't use these Writables methods. Use PB instead.
+   */
   @Override
   @Deprecated
   public void write(DataOutput out) throws IOException {
@@ -138,7 +161,8 @@ public class HLogKey extends WALKey implements Writable {
       Compressor.writeCompressed(this.encodedRegionName, 0,
           this.encodedRegionName.length, out,
           compressionContext.regionDict);
-      Compressor.writeCompressed(this.tablename.getName(), 0, this.tablename.getName().length, out,
+      Compressor.writeCompressed(this.tablename.getName(), 0,
+          this.tablename.getName().length, out,
           compressionContext.tableDict);
     }
     out.writeLong(this.logSeqNum);
@@ -204,6 +228,7 @@ public class HLogKey extends WALKey implements Writable {
         in.readByte();
       } catch(EOFException e) {
         // Means it's a very old key, just continue
+        if (LOG.isTraceEnabled()) LOG.trace(e);
       }
     }
     try {

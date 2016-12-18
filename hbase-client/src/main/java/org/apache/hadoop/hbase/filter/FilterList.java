@@ -82,6 +82,14 @@ final public class FilterList extends Filter {
   private Cell transformedKV = null;
 
   /**
+   * For pre-0.94 users Default constructor, filters nothing. Required though for RPC
+   * deserialization.
+   */
+  public FilterList() {
+    super();
+  }
+
+  /**
    * Constructor that takes a set of {@link Filter}s. The default operator
    * MUST_PASS_ALL is assumed.
    *

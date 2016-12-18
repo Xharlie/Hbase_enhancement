@@ -113,6 +113,51 @@ public interface MetricsRegionServerWrapper {
   long getWriteRequestsCount();
 
   /**
+   * Get the number of rpc get requests to this region server.
+   */
+  long getRpcGetRequestsCount();
+
+  /**
+   * Get the number of rpc scan requests to this region server.
+   */
+  long getRpcScanRequestsCount();
+
+  /**
+   * Get the number of rpc multi requests to this region server.
+   */
+  long getRpcMultiRequestsCount();
+
+  /**
+   * Get the number of rpc mutate requests to this region server.
+   */
+  long getRpcMutateRequestsCount();
+
+  /**
+   * Get the number of active rpc handlers.
+   */
+  long getActiveRpcHandlerCount();
+
+  /**
+   * Get the number of slow rpc calls to this region server.
+   */
+  long getRpcTotalSlowCallsCount();
+
+  /**
+   * Get the number of rpc calls to this region server.
+   */
+  long getRpcTotalCallsCount();
+
+  /**
+   * Get the incremental number of slow rpc calls to this region server.
+   */
+  long getRpcIncSlowCallsCount();
+
+  /**
+   * Get the incremental number of rpc calls to this region server.
+   */
+  long getRpcIncCallsCount();
+
+  /**
    * Get the number of CAS operations that failed.
    */
   long getCheckAndMutateChecksFailed();
@@ -213,9 +258,34 @@ public interface MetricsRegionServerWrapper {
   double getBlockCacheHitPercent();
 
   /**
+   * Get the percent of all requests on meta that hit the block cache.
+   */
+  double getBlockCacheMetaHitPercent();
+
+  /**
+   * Get the percent of all requests on data that hit the block cache.
+   */
+  double getBlockCacheDataHitPercent();
+
+  /**
    * Get the percent of requests with the block cache turned on that hit the block cache.
    */
   int getBlockCacheHitCachingPercent();
+
+  /**
+   * Get the percent of requests with the block cache turned on that hit the meta block cache.
+   */
+  int getBlockCacheMetaHitCachingPercent();
+
+  /**
+   * Get the percent of requests with the block cache turned on that hit the data block cache.
+   */
+  int getBlockCacheDataHitCachingPercent();
+
+  /**
+   * Number of cache insertions that failed.
+   */
+  long getBlockCacheFailedInsertions();
 
   /**
    * Force a re-computation of the metrics.
@@ -261,4 +331,19 @@ public interface MetricsRegionServerWrapper {
    * @return Count of requests blocked because the memstore size is larger than blockingMemStoreSize
    */
   public long getBlockedRequestsCount();
+
+  /**
+   * @return Count of get included in multi requests to this region server
+   */
+  public long getMultiGetRequestCount();
+
+  /**
+   * @return Count of put requests to this region server
+   */
+  public long getPutRequestCount();
+
+  /**
+   * @return Count of scan requests counting caching to this region server
+   */
+  long getScanCachingRequestCount();
 }

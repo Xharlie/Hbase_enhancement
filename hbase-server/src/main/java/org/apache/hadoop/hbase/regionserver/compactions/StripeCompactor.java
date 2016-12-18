@@ -37,6 +37,7 @@ import org.apache.hadoop.hbase.regionserver.StoreFileScanner;
 import org.apache.hadoop.hbase.regionserver.StoreScanner;
 import org.apache.hadoop.hbase.regionserver.StripeMultiFileWriter;
 import org.apache.hadoop.hbase.regionserver.StoreFile.Writer;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.util.Bytes;
 
 /**
@@ -52,7 +53,7 @@ public class StripeCompactor extends Compactor {
 
   public List<Path> compact(CompactionRequest request, List<byte[]> targetBoundaries,
       byte[] majorRangeFromRow, byte[] majorRangeToRow,
-      CompactionThroughputController throughputController) throws IOException {
+      ThroughputController throughputController) throws IOException {
     if (LOG.isDebugEnabled()) {
       StringBuilder sb = new StringBuilder();
       sb.append("Executing compaction with " + targetBoundaries.size() + " boundaries:");
@@ -69,7 +70,7 @@ public class StripeCompactor extends Compactor {
 
   public List<Path> compact(CompactionRequest request, int targetCount, long targetSize,
       byte[] left, byte[] right, byte[] majorRangeFromRow, byte[] majorRangeToRow,
-      CompactionThroughputController throughputController) throws IOException {
+      ThroughputController throughputController) throws IOException {
     if (LOG.isDebugEnabled()) {
       LOG.debug("Executing compaction with " + targetSize
           + " target file size, no more than " + targetCount + " files, in ["
@@ -81,15 +82,16 @@ public class StripeCompactor extends Compactor {
       throughputController);
   }
 
-  private List<Path> compactInternal(StripeMultiFileWriter mw, CompactionRequest request,
+  private List<Path> compactInternal(StripeMultiFileWriter mw, final CompactionRequest request,
       byte[] majorRangeFromRow, byte[] majorRangeToRow,
-      CompactionThroughputController throughputController) throws IOException {
+      ThroughputController throughputController) throws IOException {
     final Collection<StoreFile> filesToCompact = request.getFiles();
     final FileDetails fd = getFileDetails(filesToCompact, request.isMajor());
     this.progress = new CompactionProgress(fd.maxKeyCount);
 
     long smallestReadPoint = getSmallestReadPoint();
-    List<StoreFileScanner> scanners = createFileScanners(filesToCompact, smallestReadPoint);
+    List<StoreFileScanner> scanners = createFileScanners(filesToCompact,
+        smallestReadPoint, store.throttleCompaction(request.getSize()));
 
     boolean finished = false;
     InternalScanner scanner = null;
@@ -124,7 +126,8 @@ public class StripeCompactor extends Compactor {
         @Override
         public Writer createWriter() throws IOException {
           return store.createWriterInTmp(
-              fd.maxKeyCount, compression, true, needMvcc, fd.maxTagsLength > 0);
+              fd.maxKeyCount, compression, true, needMvcc, fd.maxTagsLength > 0,
+              store.throttleCompaction(request.getSize()));
         }
       };
 

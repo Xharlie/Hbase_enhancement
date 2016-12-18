@@ -32,6 +32,7 @@ public class RpcRetryingCallerFactory {
   public static final String CUSTOM_CALLER_CONF_KEY = "hbase.rpc.callerfactory.class";
   protected final Configuration conf;
   private final long pause;
+  private final long specialPause;
   private final int retries;
   private final RetryingCallerInterceptor interceptor;
   private final int startLogErrorsCnt;
@@ -46,6 +47,8 @@ public class RpcRetryingCallerFactory {
     this.conf = conf;
     pause = conf.getLong(HConstants.HBASE_CLIENT_PAUSE,
         HConstants.DEFAULT_HBASE_CLIENT_PAUSE);
+    specialPause = conf.getLong(HConstants.HBASE_CLIENT_PAUSE_SPECIAL_CASE,
+        HConstants.DEFAULT_HBASE_CLIENT_PAUSE_SPECIAL_CASE);
     retries = conf.getInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER,
         HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER);
     startLogErrorsCnt = conf.getInt(AsyncProcess.START_LOG_ERRORS_AFTER_COUNT_KEY,
@@ -67,6 +70,8 @@ public class RpcRetryingCallerFactory {
     //  is cheap as it does not require parsing a complex structure.
     RpcRetryingCaller<T> caller = new RpcRetryingCaller<T>(pause, retries, interceptor,
         startLogErrorsCnt);
+    // TODO Now use a trick to avoid changing constructor
+    caller.setSpecialPause(specialPause);
 
     // wrap it with stats, if we are tracking them
     if (enableBackPressure && this.stats != null) {

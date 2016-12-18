@@ -46,6 +46,11 @@ message ColumnPrefixFilter {
   required bytes prefix = 1;
 }
 
+message ColumnPrefixCountGetFilter {
+  required bytes prefix = 1;
+  required int32 limit = 2;
+}
+
 message ColumnRangeFilter {
   optional bytes min_column = 1;
   optional bool min_column_inclusive = 2;

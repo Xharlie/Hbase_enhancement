@@ -153,6 +153,7 @@ public class HFileWriterV2 extends AbstractHFileWriter {
     if (!fsBlockWriter.isWriting() || fsBlockWriter.blockSizeWritten() == 0)
       return;
 
+    long startTimeNs = System.nanoTime();
     // Update the first data block offset for scanning.
     if (firstDataBlockOffset == -1) {
       firstDataBlockOffset = outputStream.getPos();
@@ -167,6 +168,7 @@ public class HFileWriterV2 extends AbstractHFileWriter {
     dataBlockIndexWriter.addEntry(CellUtil.getCellKeySerializedAsKeyValueKey(indexEntry),
       lastDataBlockOffset, onDiskSize);
     totalUncompressedBytes += fsBlockWriter.getUncompressedSizeWithHeader();
+    this.hfileMetrics.updateFsWriteTime(System.nanoTime() - startTimeNs);
     if (cacheConf.shouldCacheDataOnWrite()) {
       doCacheOnWrite(lastDataBlockOffset);
     }

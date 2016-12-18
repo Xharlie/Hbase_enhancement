@@ -41,6 +41,11 @@ public class MetricsThriftServerSourceImpl extends BaseSourceImpl implements
 
   private MutableGaugeLong callQueueLenGauge;
 
+  private MutableGaugeLong tableScannerNumGauge;
+  private MutableGaugeLong messageScannerNumGauge;
+  private MutableGaugeLong partitionScannerNumGauge;
+  private MutableGaugeLong queueScannerNumGauge;
+
   public MetricsThriftServerSourceImpl(String metricsName,
                                        String metricsDescription,
                                        String metricsContext,
@@ -58,6 +63,10 @@ public class MetricsThriftServerSourceImpl extends BaseSourceImpl implements
     thriftSlowCallStat = getMetricsRegistry().newHistogram(SLOW_THRIFT_CALL_KEY);
     callQueueLenGauge = getMetricsRegistry().getLongGauge(CALL_QUEUE_LEN_KEY, 0);
 
+    tableScannerNumGauge = getMetricsRegistry().getLongGauge(TABLE_SCANNER_NUM_KEY, 0);
+    messageScannerNumGauge = getMetricsRegistry().getLongGauge(MESSAGE_SCANNER_NUM_KEY, 0);
+    partitionScannerNumGauge = getMetricsRegistry().getLongGauge(PARTITION_SCANNER_NUM_KEY, 0);
+    queueScannerNumGauge = getMetricsRegistry().getLongGauge(QUEUE_SCANNER_NUM_KEY, 0);
   }
 
   @Override
@@ -96,4 +105,23 @@ public class MetricsThriftServerSourceImpl extends BaseSourceImpl implements
     thriftSlowCallStat.add(time);
   }
 
+  @Override
+  public void setTableScannerNum(long value) {
+    tableScannerNumGauge.set(value);
+  }
+
+  @Override
+  public void setMessageScannerNum(long value) {
+    messageScannerNumGauge.set(value);
+  }
+
+  @Override
+  public void setPartitionScannerNum(long value) {
+    partitionScannerNumGauge.set(value);
+  }
+
+  @Override
+  public void setQueueScannerNum(long value) {
+    queueScannerNumGauge.set(value);
+  }
 }

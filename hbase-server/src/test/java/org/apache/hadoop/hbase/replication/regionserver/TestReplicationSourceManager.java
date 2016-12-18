@@ -212,7 +212,7 @@ public class TestReplicationSourceManager {
       }
       LOG.info(i);
       final long txid = wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), test,
-          System.currentTimeMillis()), edit, sequenceId, true ,null);
+          System.currentTimeMillis()), edit, true);
       wal.sync(txid);
     }
 
@@ -225,7 +225,7 @@ public class TestReplicationSourceManager {
 
     for (int i = 0; i < 3; i++) {
       wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), test,
-          System.currentTimeMillis()), edit, sequenceId, true, null);
+          System.currentTimeMillis()), edit, true);
     }
     wal.sync();
 
@@ -241,7 +241,7 @@ public class TestReplicationSourceManager {
         "1", 0, false, false);
 
     wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), test,
-        System.currentTimeMillis()), edit, sequenceId, true, null);
+        System.currentTimeMillis()), edit, true);
     wal.sync();
 
     assertEquals(1, manager.getWALs().size());

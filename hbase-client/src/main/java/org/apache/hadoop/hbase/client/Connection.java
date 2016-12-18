@@ -134,7 +134,7 @@ public interface Connection extends Abortable, Closeable {
    * @param params details on how to instantiate the {@code BufferedMutator}.
    * @return a {@link BufferedMutator} for the supplied tableName.
    */
-  public BufferedMutator getBufferedMutator(BufferedMutatorParams params) throws IOException;
+  public BufferedMutator getBufferedMutator(BufferedMutatorParams params);
 
   /**
    * Retrieve a RegionLocator implementation to inspect region information on a table. The returned

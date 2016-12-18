@@ -180,6 +180,8 @@ public class TestCacheOnWrite {
     // default
     blockcaches.add(new CacheConfig(conf).getBlockCache());
 
+    //set LruBlockCache.LRU_HARD_CAPACITY_LIMIT_FACTOR_CONFIG_NAME to 2.0f due to HBASE-16287
+    TEST_UTIL.getConfiguration().setFloat(LruBlockCache.LRU_HARD_CAPACITY_LIMIT_FACTOR_CONFIG_NAME, 2.0f);
     // memory
     BlockCache lru = new LruBlockCache(128 * 1024 * 1024, 64 * 1024, TEST_UTIL.getConfiguration());
     blockcaches.add(lru);
@@ -252,7 +254,8 @@ public class TestCacheOnWrite {
     cacheConf =
         new CacheConfig(blockCache, true, true, cowType.shouldBeCached(BlockType.DATA),
         cowType.shouldBeCached(BlockType.LEAF_INDEX),
-        cowType.shouldBeCached(BlockType.BLOOM_CHUNK), false, cacheCompressedData, false, false);
+        cowType.shouldBeCached(BlockType.BLOOM_CHUNK), false, cacheCompressedData,
+            false, false, false);
   }
 
   @After

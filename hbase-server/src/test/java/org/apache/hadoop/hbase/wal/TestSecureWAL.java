@@ -100,7 +100,7 @@ public class TestSecureWAL {
       WALEdit kvs = new WALEdit();
       kvs.add(new KeyValue(row, family, Bytes.toBytes(i), value));
       wal.append(htd, regioninfo, new WALKey(regioninfo.getEncodedNameAsBytes(), tableName,
-          System.currentTimeMillis()), kvs, sequenceId, true, null);
+          System.currentTimeMillis()), kvs, true);
     }
     wal.sync();
     final Path walPath = DefaultWALProvider.getCurrentFileName(wal);

@@ -35,11 +35,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -51,6 +51,7 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.KVComparator;
+import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
 import org.apache.hadoop.hbase.io.compress.Compression;
@@ -177,6 +178,17 @@ public class HFile {
    * The number of bytes per checksum.
    */
   public static final int DEFAULT_BYTES_PER_CHECKSUM = 16 * 1024;
+
+  // For measuring latency of "sequential" reads and writes
+  private static final AtomicInteger readOps = new AtomicInteger();
+  private static final AtomicLong readTimeNano = new AtomicLong();
+  private static final AtomicInteger writeOps = new AtomicInteger();
+  private static final AtomicLong writeTimeNano = new AtomicLong();
+
+  // For measuring latency of pread
+  private static final AtomicInteger preadOps = new AtomicInteger();
+  private static final AtomicLong preadTimeNano = new AtomicLong();
+
   // TODO: This define is done in three places.  Fix.
   public static final ChecksumType DEFAULT_CHECKSUM_TYPE = ChecksumType.CRC32;
 
@@ -185,6 +197,32 @@ public class HFile {
 
   // for test purpose
   public static final AtomicLong dataBlockReadCnt = new AtomicLong(0);
+
+  // number of sequential reads
+  public static final int getReadOps() {
+    return readOps.getAndSet(0);
+  }
+
+  public static final long getReadTimeMs() {
+    return readTimeNano.getAndSet(0) / 1000000;
+  }
+
+  // number of positional reads
+  public static final int getPreadOps() {
+    return preadOps.getAndSet(0);
+  }
+
+  public static final long getPreadTimeMs() {
+    return preadTimeNano.getAndSet(0) / 1000000;
+  }
+
+  public static final int getWriteOps() {
+    return writeOps.getAndSet(0);
+  }
+
+  public static final long getWriteTimeMs() {
+    return writeTimeNano.getAndSet(0) / 1000000;
+  }
 
   /**
    * Number of checksum verification failures. It also
@@ -250,6 +288,7 @@ public class HFile {
     protected KVComparator comparator = KeyValue.COMPARATOR;
     protected InetSocketAddress[] favoredNodes;
     private HFileContext fileContext;
+    protected boolean shouldDropBehind = false;
 
     WriterFactory(Configuration conf, CacheConfig cacheConf) {
       this.conf = conf;
@@ -287,6 +326,12 @@ public class HFile {
       return this;
     }
 
+    public WriterFactory withShouldDropCacheBehind(boolean shouldDropBehind) {
+      this.shouldDropBehind = shouldDropBehind;
+      return this;
+    }
+
+
     public Writer create() throws IOException {
       if ((path != null ? 1 : 0) + (ostream != null ? 1 : 0) != 1) {
         throw new AssertionError("Please specify exactly one of " +
@@ -294,6 +339,11 @@ public class HFile {
       }
       if (path != null) {
         ostream = AbstractHFileWriter.createOutputStream(conf, fs, path, favoredNodes);
+        try {
+          ostream.setDropBehind(shouldDropBehind && cacheConf.shouldDropBehindCompaction());
+        } catch (UnsupportedOperationException uoe) {
+          LOG.debug("Unable to set drop behind on " + path, uoe);
+        }
       }
       return createWriter(fs, path, ostream,
                    comparator, fileContext);

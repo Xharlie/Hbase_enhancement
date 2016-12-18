@@ -32,6 +32,7 @@ import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandlerImpl;
 import org.apache.hadoop.hbase.ipc.RpcServer.Call;
 import org.apache.hadoop.hbase.protobuf.RequestConverter;
 import org.apache.hadoop.hbase.protobuf.generated.RPCProtos;
@@ -88,6 +89,7 @@ public class TestSimpleRpcScheduler {
     scheduler.init(CONTEXT);
     scheduler.start();
     CallRunner task = createMockTask();
+    task.setStatus(new MonitoredRPCHandlerImpl());
     scheduler.dispatch(task);
     verify(task, timeout(1000)).run();
     scheduler.stop();
@@ -122,6 +124,7 @@ public class TestSimpleRpcScheduler {
       }
     };
     for (CallRunner task : tasks) {
+      task.setStatus(new MonitoredRPCHandlerImpl());
       doAnswer(answerToRun).when(task).run();
     }
 
@@ -250,11 +253,12 @@ public class TestSimpleRpcScheduler {
 
       CallRunner putCallTask = mock(CallRunner.class);
       RpcServer.Call putCall = mock(RpcServer.Call.class);
-      putCall.param = RequestConverter.buildMutateRequest(
+      Message putParam = RequestConverter.buildMutateRequest(
           Bytes.toBytes("abc"), new Put(Bytes.toBytes("row")));
       RequestHeader putHead = RequestHeader.newBuilder().setMethodName("mutate").build();
       when(putCallTask.getCall()).thenReturn(putCall);
       when(putCall.getHeader()).thenReturn(putHead);
+      when(putCall.getParam()).thenReturn(putParam);
 
       CallRunner getCallTask = mock(CallRunner.class);
       RpcServer.Call getCall = mock(RpcServer.Call.class);
@@ -264,10 +268,11 @@ public class TestSimpleRpcScheduler {
 
       CallRunner scanCallTask = mock(CallRunner.class);
       RpcServer.Call scanCall = mock(RpcServer.Call.class);
-      scanCall.param = ScanRequest.newBuilder().setScannerId(1).build();
+      Message scanParam = ScanRequest.newBuilder().setScannerId(1).build();
       RequestHeader scanHead = RequestHeader.newBuilder().setMethodName("scan").build();
       when(scanCallTask.getCall()).thenReturn(scanCall);
       when(scanCall.getHeader()).thenReturn(scanHead);
+      when(scanCall.getParam()).thenReturn(scanParam);
 
       ArrayList<Integer> work = new ArrayList<Integer>();
       doAnswerTaskExecution(putCallTask, work, 1, 1000);
@@ -302,6 +307,7 @@ public class TestSimpleRpcScheduler {
 
   private void doAnswerTaskExecution(final CallRunner callTask,
       final ArrayList<Integer> results, final int value, final int sleepInterval) {
+    callTask.setStatus(new MonitoredRPCHandlerImpl());
     doAnswer(new Answer<Object>() {
       @Override
       public Object answer(InvocationOnMock invocation) {

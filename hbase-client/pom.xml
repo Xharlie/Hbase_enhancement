@@ -24,13 +24,13 @@
   <parent>
     <artifactId>hbase</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>1.1.2-adp-0.1</version>
+    <version>1.1.2-adp-1.0.8.1</version>
     <relativePath>..</relativePath>
   </parent>
 
   <groupId>org.apache.hbase</groupId>
   <artifactId>hbase-client</artifactId>
-  <version>1.1.2-adp-0.1</version>
+  <version>1.1.2-adp-1.0.8.1</version>
   <name>ADP HBase - Client</name>
   <description>Client of HBase</description>
 

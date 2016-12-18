@@ -111,8 +111,7 @@ abstract class ConnectionAdapter implements ClusterConnection {
   }
 
   @Override
-  public BufferedMutator getBufferedMutator(BufferedMutatorParams params)
-      throws IOException {
+  public BufferedMutator getBufferedMutator(BufferedMutatorParams params) {
     return wrappedConnection.getBufferedMutator(params);
   }
 
@@ -464,5 +463,10 @@ abstract class ConnectionAdapter implements ClusterConnection {
   @Override
   public ClientBackoffPolicy getBackoffPolicy() {
     return wrappedConnection.getBackoffPolicy();
+  }
+
+  @Override
+  public boolean supportsCellBlock() {
+    return wrappedConnection.supportsCellBlock();
   }
 }

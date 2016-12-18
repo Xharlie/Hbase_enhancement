@@ -81,7 +81,7 @@ import org.apache.hadoop.hbase.regionserver.compactions.CompactionProgress;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
 import org.apache.hadoop.hbase.regionserver.compactions.DefaultCompactor;
 import org.apache.hadoop.hbase.regionserver.compactions.OffPeakHours;
-import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputController;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.regionserver.wal.WALUtil;
 import org.apache.hadoop.hbase.security.EncryptionUtil;
 import org.apache.hadoop.hbase.security.User;
@@ -254,7 +254,7 @@ public class HStore implements Store {
     long ttl = determineTTLFromFamily(family);
     // Why not just pass a HColumnDescriptor in here altogether?  Even if have
     // to clone it?
-    scanInfo = new ScanInfo(family, ttl, timeToPurgeDeletes, this.comparator);
+    scanInfo = new ScanInfo(conf, family, ttl, timeToPurgeDeletes, this.comparator);
     String className = conf.get(MEMSTORE_CLASS_NAME, DefaultMemStore.class.getName());
     this.memstore = ReflectionUtils.instantiateWithCustomCtor(className, new Class[] {
         Configuration.class, KeyValue.KVComparator.class }, new Object[] { conf, this.comparator });
@@ -652,7 +652,7 @@ public class HStore implements Store {
     // readers might pick it up. This assumes that the store is not getting any writes (otherwise
     // in-flight transactions might be made visible)
     if (!toBeAddedFiles.isEmpty()) {
-      region.getMVCC().advanceMemstoreReadPointIfNeeded(this.getMaxSequenceId());
+      region.getMVCC().advanceTo(this.getMaxSequenceId());
     }
 
     // notify scanners, close file readers, and recompute store size
@@ -897,7 +897,7 @@ public class HStore implements Store {
 
   /**
    * Snapshot this stores memstore. Call before running
-   * {@link #flushCache(long, MemStoreSnapshot, MonitoredTask)}
+   * {@link #flushCache(long, MemStoreSnapshot, MonitoredTask, ThroughputController)}
    *  so it has some work to do.
    */
   void snapshot() {
@@ -915,11 +915,12 @@ public class HStore implements Store {
    * @param logCacheFlushId flush sequence number
    * @param snapshot
    * @param status
+   * @param throughputController
    * @return The path name of the tmp file to which the store was flushed
    * @throws IOException
    */
   protected List<Path> flushCache(final long logCacheFlushId, MemStoreSnapshot snapshot,
-      MonitoredTask status) throws IOException {
+      MonitoredTask status, ThroughputController throughputController) throws IOException {
     // If an exception happens flushing, we let it out without clearing
     // the memstore snapshot.  The old snapshot will be returned when we say
     // 'snapshot', the next time flush comes around.
@@ -929,7 +930,8 @@ public class HStore implements Store {
     IOException lastException = null;
     for (int i = 0; i < flushRetriesNumber; i++) {
       try {
-        List<Path> pathNames = flusher.flushSnapshot(snapshot, logCacheFlushId, status);
+        List<Path> pathNames =
+            flusher.flushSnapshot(snapshot, logCacheFlushId, status, throughputController);
         Path lastPathName = null;
         try {
           for (Path pathName : pathNames) {
@@ -989,6 +991,15 @@ public class HStore implements Store {
     return sf;
   }
 
+  @Override
+  public StoreFile.Writer createWriterInTmp(long maxKeyCount, Compression.Algorithm compression,
+                                            boolean isCompaction, boolean includeMVCCReadpoint,
+                                            boolean includesTag)
+      throws IOException {
+    return createWriterInTmp(maxKeyCount, compression, isCompaction, includeMVCCReadpoint,
+        includesTag, false);
+  }
+
   /*
    * @param maxKeyCount
    * @param compression Compression algorithm to use
@@ -999,7 +1010,8 @@ public class HStore implements Store {
    */
   @Override
   public StoreFile.Writer createWriterInTmp(long maxKeyCount, Compression.Algorithm compression,
-      boolean isCompaction, boolean includeMVCCReadpoint, boolean includesTag)
+      boolean isCompaction, boolean includeMVCCReadpoint, boolean includesTag,
+      boolean shouldDropBehind)
   throws IOException {
     final CacheConfig writerCacheConf;
     if (isCompaction) {
@@ -1025,6 +1037,7 @@ public class HStore implements Store {
             .withMaxKeyCount(maxKeyCount)
             .withFavoredNodes(favoredNodes)
             .withFileContext(hFileContext)
+            .withShouldDropCacheBehind(shouldDropBehind)
             .build();
     return w;
   }
@@ -1126,9 +1139,8 @@ public class HStore implements Store {
     // TODO this used to get the store files in descending order,
     // but now we get them in ascending order, which I think is
     // actually more correct, since memstore get put at the end.
-    List<StoreFileScanner> sfScanners = StoreFileScanner
-      .getScannersForStoreFiles(storeFilesToScan, cacheBlocks, usePread, isCompaction, matcher,
-        readPt);
+    List<StoreFileScanner> sfScanners = StoreFileScanner.getScannersForStoreFiles(storeFilesToScan,
+        cacheBlocks, usePread, isCompaction, false, matcher, readPt);
     List<KeyValueScanner> scanners =
       new ArrayList<KeyValueScanner>(sfScanners.size()+1);
     scanners.addAll(sfScanners);
@@ -1197,10 +1209,10 @@ public class HStore implements Store {
    */
   @Override
   public List<StoreFile> compact(CompactionContext compaction,
-      CompactionThroughputController throughputController) throws IOException {
+      ThroughputController throughputController) throws IOException {
     assert compaction != null;
     List<StoreFile> sfs = null;
-    CompactionRequest cr = compaction.getRequest();;
+    CompactionRequest cr = compaction.getRequest();
     try {
       // Do all sanity checking in here if we have a valid CompactionRequest
       // because we need to clean up after it on the way out in a finally
@@ -1299,8 +1311,8 @@ public class HStore implements Store {
     HRegionInfo info = this.region.getRegionInfo();
     CompactionDescriptor compactionDescriptor = ProtobufUtil.toCompactionDescriptor(info,
         family.getName(), inputPaths, outputPaths, fs.getStoreDir(getFamily().getNameAsString()));
-    WALUtil.writeCompactionMarker(region.getWAL(), this.region.getTableDesc(),
-        this.region.getRegionInfo(), compactionDescriptor, this.region.getSequenceId());
+    WALUtil.writeCompactionMarker(this.region.getWAL(), this.region.getTableDesc(),
+      this.region.getRegionInfo(), compactionDescriptor, this.region.getMVCC());
   }
 
   @VisibleForTesting
@@ -2070,7 +2082,11 @@ public class HStore implements Store {
   public long getTotalStaticIndexSize() {
     long size = 0;
     for (StoreFile s : this.storeEngine.getStoreFileManager().getStorefiles()) {
-      size += s.getReader().getUncompressedDataIndexSize();
+      StoreFile.Reader r = s.getReader();
+      if (r == null) {
+        continue;
+      }
+      size += r.getUncompressedDataIndexSize();
     }
     return size;
   }
@@ -2080,6 +2096,9 @@ public class HStore implements Store {
     long size = 0;
     for (StoreFile s : this.storeEngine.getStoreFileManager().getStorefiles()) {
       StoreFile.Reader r = s.getReader();
+      if (r == null) {
+        continue;
+      }
       size += r.getTotalBloomSize();
     }
     return size;
@@ -2175,7 +2194,7 @@ public class HStore implements Store {
     return new StoreFlusherImpl(cacheFlushId);
   }
 
-  private class StoreFlusherImpl implements StoreFlushContext {
+  private final class StoreFlusherImpl implements StoreFlushContext {
 
     private long cacheFlushSeqNum;
     private MemStoreSnapshot snapshot;
@@ -2202,7 +2221,10 @@ public class HStore implements Store {
 
     @Override
     public void flushCache(MonitoredTask status) throws IOException {
-      tempFiles = HStore.this.flushCache(cacheFlushSeqNum, snapshot, status);
+      RegionServerServices rsService = region.getRegionServerServices();
+      ThroughputController throughputController =
+          rsService == null ? null : rsService.getFlushThroughputController();
+      tempFiles = HStore.this.flushCache(cacheFlushSeqNum, snapshot, status, throughputController);
     }
 
     @Override

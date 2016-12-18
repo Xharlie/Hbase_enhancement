@@ -37,10 +37,10 @@ import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionContext;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
-import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputController;
 import org.apache.hadoop.hbase.regionserver.compactions.NoLimitCompactionThroughputController;
 import org.apache.hadoop.hbase.regionserver.compactions.StripeCompactionPolicy;
 import org.apache.hadoop.hbase.regionserver.compactions.StripeCompactor;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -75,7 +75,7 @@ public class TestStripeStoreEngine {
     when(
       mockCompactor.compact(any(CompactionRequest.class), anyInt(), anyLong(), any(byte[].class),
         any(byte[].class), any(byte[].class), any(byte[].class),
-        any(CompactionThroughputController.class))).thenReturn(new ArrayList<Path>());
+        any(ThroughputController.class))).thenReturn(new ArrayList<Path>());
 
     // Produce 3 L0 files.
     StoreFile sf = createFile();

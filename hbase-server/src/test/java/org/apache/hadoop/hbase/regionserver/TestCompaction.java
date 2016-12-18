@@ -58,10 +58,10 @@ import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.io.hfile.HFileScanner;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionContext;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
+import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputControllerFactory;
 import org.apache.hadoop.hbase.regionserver.compactions.DefaultCompactor;
 import org.apache.hadoop.hbase.regionserver.compactions.NoLimitCompactionThroughputController;
-import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputController;
-import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputControllerFactory;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
@@ -201,7 +201,7 @@ public class TestCompaction {
       for (Store hstore: this.r.stores.values()) {
         HStore store = (HStore)hstore;
         ScanInfo old = store.getScanInfo();
-        ScanInfo si = new ScanInfo(old.getFamily(),
+        ScanInfo si = new ScanInfo(old.getConfiguration(), old.getFamily(),
             old.getMinVersions(), old.getMaxVersions(), ttl,
             old.getKeepDeletedCells(), 0, old.getComparator());
         store.setScanInfo(si);
@@ -369,7 +369,7 @@ public class TestCompaction {
       }
 
       @Override
-      public List<Path> compact(CompactionThroughputController throughputController)
+      public List<Path> compact(ThroughputController throughputController)
           throws IOException {
         finishCompaction(this.selectedFiles);
         return new ArrayList<Path>();
@@ -421,7 +421,7 @@ public class TestCompaction {
       }
 
       @Override
-      public List<Path> compact(CompactionThroughputController throughputController)
+      public List<Path> compact(ThroughputController throughputController)
           throws IOException {
         try {
           isInCompact = true;
@@ -503,10 +503,10 @@ public class TestCompaction {
     HRegion r = mock(HRegion.class);
     when(
       r.compact(any(CompactionContext.class), any(Store.class),
-        any(CompactionThroughputController.class))).then(new Answer<Boolean>() {
+        any(ThroughputController.class))).then(new Answer<Boolean>() {
       public Boolean answer(InvocationOnMock invocation) throws Throwable {
         invocation.getArgumentAt(0, CompactionContext.class).compact(
-          invocation.getArgumentAt(2, CompactionThroughputController.class));
+          invocation.getArgumentAt(2, ThroughputController.class));
         return true;
       }
     });

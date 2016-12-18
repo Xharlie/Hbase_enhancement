@@ -42,8 +42,8 @@ import org.apache.hadoop.hbase.conf.ConfigurationManager;
 import org.apache.hadoop.hbase.conf.PropagatingConfigurationObserver;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionContext;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
-import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputController;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputControllerFactory;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.util.StringUtils;
@@ -88,7 +88,7 @@ public class CompactSplitThread implements CompactionRequestor, PropagatingConfi
   private final ThreadPoolExecutor splits;
   private final ThreadPoolExecutor mergePool;
 
-  private volatile CompactionThroughputController compactionThroughputController;
+  private volatile ThroughputController compactionThroughputController;
 
   /**
    * Splitting should not take place if the total number of regions exceed this.
@@ -597,8 +597,13 @@ public class CompactSplitThread implements CompactionRequestor, PropagatingConfi
       LOG.info("Changing the value of " + LARGE_COMPACTION_THREADS +
               " from " + this.longCompactions.getCorePoolSize() + " to " +
               largeThreads);
-      this.longCompactions.setMaximumPoolSize(largeThreads);
-      this.longCompactions.setCorePoolSize(largeThreads);
+      if(this.longCompactions.getCorePoolSize() < largeThreads) {
+        this.longCompactions.setMaximumPoolSize(largeThreads);
+        this.longCompactions.setCorePoolSize(largeThreads);
+      } else {
+        this.longCompactions.setCorePoolSize(largeThreads);
+        this.longCompactions.setMaximumPoolSize(largeThreads);
+      }
     }
 
     int smallThreads = newConf.getInt(SMALL_COMPACTION_THREADS,
@@ -607,8 +612,13 @@ public class CompactSplitThread implements CompactionRequestor, PropagatingConfi
       LOG.info("Changing the value of " + SMALL_COMPACTION_THREADS +
                 " from " + this.shortCompactions.getCorePoolSize() + " to " +
                 smallThreads);
-      this.shortCompactions.setMaximumPoolSize(smallThreads);
-      this.shortCompactions.setCorePoolSize(smallThreads);
+      if(this.shortCompactions.getCorePoolSize() < smallThreads) {
+        this.shortCompactions.setMaximumPoolSize(smallThreads);
+        this.shortCompactions.setCorePoolSize(smallThreads);
+      } else {
+        this.shortCompactions.setCorePoolSize(smallThreads);
+        this.shortCompactions.setMaximumPoolSize(smallThreads);
+      }
     }
 
     int splitThreads = newConf.getInt(SPLIT_THREADS,
@@ -617,8 +627,13 @@ public class CompactSplitThread implements CompactionRequestor, PropagatingConfi
       LOG.info("Changing the value of " + SPLIT_THREADS +
                 " from " + this.splits.getCorePoolSize() + " to " +
                 splitThreads);
-      this.splits.setMaximumPoolSize(smallThreads);
-      this.splits.setCorePoolSize(smallThreads);
+      if(this.splits.getCorePoolSize() < splitThreads) {
+        this.splits.setMaximumPoolSize(splitThreads);
+        this.splits.setCorePoolSize(splitThreads);
+      } else {
+        this.splits.setCorePoolSize(splitThreads);
+        this.splits.setMaximumPoolSize(splitThreads);
+      }
     }
 
     int mergeThreads = newConf.getInt(MERGE_THREADS,
@@ -627,11 +642,16 @@ public class CompactSplitThread implements CompactionRequestor, PropagatingConfi
       LOG.info("Changing the value of " + MERGE_THREADS +
                 " from " + this.mergePool.getCorePoolSize() + " to " +
                 mergeThreads);
-      this.mergePool.setMaximumPoolSize(smallThreads);
-      this.mergePool.setCorePoolSize(smallThreads);
+      if(this.mergePool.getCorePoolSize() < mergeThreads) {
+        this.mergePool.setMaximumPoolSize(mergeThreads);
+        this.mergePool.setCorePoolSize(mergeThreads);
+      } else {
+        this.mergePool.setCorePoolSize(mergeThreads);
+        this.mergePool.setMaximumPoolSize(mergeThreads);
+      }
     }
 
-    CompactionThroughputController old = this.compactionThroughputController;
+    ThroughputController old = this.compactionThroughputController;
     if (old != null) {
       old.stop("configuration change");
     }
@@ -647,8 +667,16 @@ public class CompactSplitThread implements CompactionRequestor, PropagatingConfi
     return this.shortCompactions.getCorePoolSize();
   }
 
-  public int getLargeCompactionThreadNum() {
+  protected int getLargeCompactionThreadNum() {
     return this.longCompactions.getCorePoolSize();
+  }
+
+  protected int getSplitThreadNum() {
+    return this.splits.getCorePoolSize();
+  }
+
+  protected int getMergeThreadNum() {
+    return this.mergePool.getCorePoolSize();
   }
 
   /**
@@ -668,7 +696,7 @@ public class CompactSplitThread implements CompactionRequestor, PropagatingConfi
   }
 
   @VisibleForTesting
-  public CompactionThroughputController getCompactionThroughputController() {
+  public ThroughputController getCompactionThroughputController() {
     return compactionThroughputController;
   }
 

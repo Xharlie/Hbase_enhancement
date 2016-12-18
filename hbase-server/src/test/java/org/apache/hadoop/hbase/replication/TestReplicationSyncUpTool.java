@@ -88,6 +88,18 @@ public class TestReplicationSyncUpTool extends TestReplicationBase {
     fam = new HColumnDescriptor(noRepfamName);
     t2_syncupTarget.addFamily(fam);
 
+    setTableDescriptor(t1_syncupSource);
+    setTableDescriptor(t1_syncupTarget);
+    setTableDescriptor(t2_syncupSource);
+    setTableDescriptor(t2_syncupTarget);
+  }
+
+  /**
+   * Method to set table descriptor, mainly for hqueue testing
+   * @param tableDescriptor The table descriptor to set
+   */
+  protected void setTableDescriptor(HTableDescriptor tableDescriptor) {
+    // do nothing here
   }
 
   /**

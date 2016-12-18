@@ -21,9 +21,11 @@ package org.apache.hadoop.hbase.ipc;
 
 public interface MetricsHBaseServerWrapper {
   long getTotalQueueSize();
+  long getResponseQueueSize();
   int getGeneralQueueLength();
   int getReplicationQueueLength();
   int getPriorityQueueLength();
   int getNumOpenConnections();
   int getActiveRpcHandlerCount();
+  int getResponseQueueLength();
 }

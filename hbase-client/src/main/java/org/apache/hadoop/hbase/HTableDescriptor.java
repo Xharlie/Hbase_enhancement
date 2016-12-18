@@ -628,6 +628,25 @@ public class HTableDescriptor implements WritableComparable<HTableDescriptor> {
   }
 
   /**
+   * This is used to allowing the log edits syncing to the file system. Everytime
+   * an edit is sent to the server it is first sync'd to the file system by the
+   * log writer. This sync is an expensive operation and thus can be deferred so
+   * that the edits are kept in memory until the background async writer-sync-notifier
+   * threads do the sync and not explicitly flushed for every edit.
+   * <p>
+   * NOTE:- This option might result in data loss if the region server crashes
+   * before these pending edits in memory are flushed onto the filesystem.
+   * </p>
+   *
+   * @param isAsyncLogFlush
+   */
+  @Deprecated
+  public HTableDescriptor setDeferredLogFlush(final boolean isAsyncLogFlush) {
+    this.setDurability(isAsyncLogFlush ? Durability.ASYNC_WAL : DEFAULT_DURABLITY);
+    return this;
+  }
+
+  /**
    * Sets the {@link Durability} setting for the table. This defaults to Durability.USE_DEFAULT.
    * @param durability enum value
    */

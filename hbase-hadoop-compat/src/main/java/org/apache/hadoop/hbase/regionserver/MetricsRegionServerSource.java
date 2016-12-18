@@ -19,11 +19,12 @@
 package org.apache.hadoop.hbase.regionserver;
 
 import org.apache.hadoop.hbase.metrics.BaseSource;
+import org.apache.hadoop.hbase.metrics.JvmPauseMonitorSource;
 
 /**
  * Interface for classes that expose metrics about the regionserver.
  */
-public interface MetricsRegionServerSource extends BaseSource {
+public interface MetricsRegionServerSource extends BaseSource, JvmPauseMonitorSource {
 
   /**
    * The name of the metrics
@@ -92,7 +93,12 @@ public interface MetricsRegionServerSource extends BaseSource {
    *
    * @param scanSize size of the scan
    */
-  void updateScannerNext(long scanSize);
+  void updateScanSize(long scanSize);
+
+  /**
+   * Update the scan time.
+   * */
+  void updateScanTime(long t);
 
   /**
    * Increment the number of slow Puts that have happened.
@@ -165,6 +171,38 @@ public interface MetricsRegionServerSource extends BaseSource {
   String WRITE_REQUEST_COUNT = "writeRequestCount";
   String WRITE_REQUEST_COUNT_DESC =
       "Number of mutation requests this region server has answered.";
+  String PUT_REQUEST_COUNT = "putRequestCount";
+  String PUT_REQUEST_COUNT_DESC =
+      "Number of put requests this region server has answered.";
+  String MULTI_GET_REQUEST_COUNT = "multiGetRequestCount";
+  String MULTI_GET_REQUEST_COUNT_DESC =
+      "Number of get requests through multi call this region server has answered.";
+  String SCAN_CACHING_REQUEST_COUNT = "scanCachingRequestCount";
+  String SCAN_CACHING_REQUEST_COUNT_DESC =
+      "Number of scan requests (counting caching in) this region server has answered.";
+  String RPC_GET_REQUEST_COUNT = "rpcGetRequestCount";
+  String RPC_GET_REQUEST_COUNT_DESC =
+      "Number of rpc get requests this region server has answered.";
+  String RPC_SCAN_REQUEST_COUNT = "rpcScanRequestCount";
+  String RPC_SCAN_REQUEST_COUNT_DESC =
+      "Number of rpc scan requests this region server has answered.";
+  String RPC_MULTI_REQUEST_COUNT = "rpcMultiRequestCount";
+  String RPC_MULTI_REQUEST_COUNT_DESC =
+      "Number of rpc multi requests this region server has answered.";
+  String RPC_MUTATE_REQUEST_COUNT = "rpcMutateRequestCount";
+  String RPC_MUTATE_REQUEST_COUNT_DESC =
+      "Number of rpc mutation requests this region server has answered.";
+  String ACTIVE_RPC_HANDLER_COUNT = "activeRpcHandlerCount";
+  String ACTIVE_RPC_HANDLER_COUNT_DESC = "Number of active rpc handlers on this region server.";
+  String RPC_TOTAL_SLOW_CALLS = "totalSlowCalls";
+  String RPC_TOTAL_SLOW_CALLS_DESC = "Number of slow rpc calls this region server has answered.";
+  String RPC_TOTAL_CALLS = "totalCalls";
+  String RPC_TOTAL_CALLS_DESC = "Number of rpc calls this region server has answered.";
+  String RPC_INC_SLOW_CALLS = "incrementalSlowCalls";
+  String RPC_INC_SLOW_CALLS_DESC =
+      "Incremental number of slow rpc calls this region server has answered.";
+  String RPC_INC_CALLS = "incrementalCalls";
+  String RPC_INC_CALLS_DESC = "Incremental number of rpc calls this region server has answered.";
   String CHECK_MUTATE_FAILED_COUNT = "checkMutateFailedCount";
   String CHECK_MUTATE_FAILED_COUNT_DESC =
       "Number of Check and Mutate calls that failed the checks.";
@@ -216,9 +254,24 @@ public interface MetricsRegionServerSource extends BaseSource {
   String BLOCK_CACHE_HIT_PERCENT = "blockCacheCountHitPercent";
   String BLOCK_CACHE_HIT_PERCENT_DESC =
       "Percent of block cache requests that are hits";
+  String BLOCK_CACHE_META_HIT_PERCENT = "blockCacheMetaHitPercent";
+  String BLOCK_CACHE_META_HIT_PERCENT_DESC =
+      "Percent of block cache requests on meta that are hits";
+  String BLOCK_CACHE_DATA_HIT_PERCENT = "blockCacheDataHitPercent";
+  String BLOCK_CACHE_DATA_HIT_PERCENT_DESC =
+      "Percent of block cache requests on data that are hits";
   String BLOCK_CACHE_EXPRESS_HIT_PERCENT = "blockCacheExpressHitPercent";
   String BLOCK_CACHE_EXPRESS_HIT_PERCENT_DESC =
       "The percent of the time that requests with the cache turned on hit the cache.";
+  String BLOCK_CACHE_EXPRESS_META_HIT_PERCENT = "blockCacheExpressMetaHitPercent";
+  String BLOCK_CACHE_EXPRESS_META_HIT_PERCENT_DESC =
+      "The percent of the time that requests with the cache turned on hit the meta cache.";
+  String BLOCK_CACHE_EXPRESS_DATA_HIT_PERCENT = "blockCacheExpressDataHitPercent";
+  String BLOCK_CACHE_EXPRESS_DATA_HIT_PERCENT_DESC =
+      "The percent of the time that requests with the cache turned on hit the data cache.";
+  String BLOCK_CACHE_FAILED_INSERTION_COUNT = "blockCacheFailedInsertionCount";
+  String BLOCK_CACHE_FAILED_INSERTION_COUNT_DESC = "Number of times that a block cache "
+      + "insertion failed. Usually due to size restrictions.";
   String RS_START_TIME_NAME = "regionServerStartTime";
   String ZOOKEEPER_QUORUM_NAME = "zookeeperQuorum";
   String SERVER_NAME_NAME = "serverName";
@@ -236,7 +289,9 @@ public interface MetricsRegionServerSource extends BaseSource {
   String MUTATE_KEY = "mutate";
   String APPEND_KEY = "append";
   String REPLAY_KEY = "replay";
-  String SCAN_NEXT_KEY = "scanNext";
+  String SCAN_SIZE_KEY = "scanSize";
+  String SCAN_TIME_KEY = "scanTime";
+
   String SLOW_MUTATE_KEY = "slowPutCount";
   String SLOW_GET_KEY = "slowGetCount";
   String SLOW_DELETE_KEY = "slowDeleteCount";

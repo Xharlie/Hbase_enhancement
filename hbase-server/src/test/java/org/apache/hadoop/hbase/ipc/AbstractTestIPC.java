@@ -124,7 +124,7 @@ public abstract class AbstractTestIPC {
    * Instance of server. We actually don't do anything speical in here so could just use
    * HBaseRpcServer directly.
    */
-  static class TestRpcServer extends RpcServer {
+  static class TestRpcServer extends SimpleRpcServer {
 
     TestRpcServer() throws IOException {
       this(new FifoRpcScheduler(CONF, 1));

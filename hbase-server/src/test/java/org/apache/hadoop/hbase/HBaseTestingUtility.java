@@ -75,8 +75,10 @@ import org.apache.hadoop.hbase.io.compress.Compression.Algorithm;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.ChecksumUtil;
 import org.apache.hadoop.hbase.io.hfile.HFile;
+import org.apache.hadoop.hbase.ipc.NettyRpcServer;
 import org.apache.hadoop.hbase.ipc.RpcServerInterface;
 import org.apache.hadoop.hbase.ipc.ServerNotRunningYetException;
+import org.apache.hadoop.hbase.ipc.SimpleRpcServer;
 import org.apache.hadoop.hbase.mapreduce.MapreduceTestingShim;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.RegionStates;
@@ -211,6 +213,12 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
       Arrays.asList(new Object[][] {
           { new Boolean(false) },
           { new Boolean(true) }
+      });
+
+  public static final List<Object[]> RPCSERVER_PARAMETERIZED =
+      Arrays.asList(new Object[][] {
+          { SimpleRpcServer.class.getName() },
+          { NettyRpcServer.class.getName() }
       });
 
   /** This is for unit tests parameterized with a single boolean. */
@@ -2016,6 +2024,24 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
       htd.addFamily(hcd);
     }
     htd.setDurability(durability);
+    HRegionInfo info = new HRegionInfo(htd.getTableName(), startKey, stopKey, false);
+    return createLocalHRegion(info, htd, wal);
+  }
+
+  public HRegion createLocalHQueueRegion(byte[] tableName, byte[] startKey, byte[] stopKey,
+      String callingMethod, Configuration conf, boolean isReadOnly, Durability durability, WAL wal,
+      byte[]... families) throws IOException {
+    HTableDescriptor htd = new HTableDescriptor(TableName.valueOf(tableName));
+    htd.setReadOnly(isReadOnly);
+    for (byte[] family : families) {
+      HColumnDescriptor hcd = new HColumnDescriptor(family);
+      // Set default to be three versions.
+      hcd.setMaxVersions(Integer.MAX_VALUE);
+      htd.addFamily(hcd);
+    }
+    htd.setDurability(durability);
+    htd.setValue("coprocessor$1",
+      "|com.etao.hadoop.hbase.queue.coprocessor.HQueueCoprocessor|1073741823|");
     HRegionInfo info = new HRegionInfo(htd.getTableName(), startKey, stopKey, false);
     return createLocalHRegion(info, htd, wal);
   }

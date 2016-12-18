@@ -20,6 +20,7 @@ package org.apache.hadoop.hbase.client;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -517,7 +518,7 @@ public class HTablePool implements Closeable {
     }
 
     @Override
-    public void flushCommits() throws IOException {
+    public void flushCommits() throws RetriesExhaustedException, InterruptedIOException {
       checkState();
       table.flushCommits();
     }

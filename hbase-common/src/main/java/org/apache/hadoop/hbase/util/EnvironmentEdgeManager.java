@@ -74,4 +74,13 @@ public class EnvironmentEdgeManager {
   public static long currentTime() {
     return getDelegate().currentTime();
   }
+
+  /**
+   * Defers to the delegate and calls the
+   * @return current time in millis according to the delegate.
+   * @deprecated use currentTime() instead
+   */
+  public static long currentTimeMillis() {
+    return currentTime();
+  }
 }

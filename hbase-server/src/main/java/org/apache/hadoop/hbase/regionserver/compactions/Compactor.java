@@ -45,6 +45,7 @@ import org.apache.hadoop.hbase.regionserver.Store;
 import org.apache.hadoop.hbase.regionserver.StoreFile;
 import org.apache.hadoop.hbase.regionserver.StoreFileScanner;
 import org.apache.hadoop.hbase.regionserver.StoreScanner;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.util.StringUtils.TraditionalBinaryPrefix;
@@ -185,8 +186,14 @@ public abstract class Compactor {
    * @return Scanners.
    */
   protected List<StoreFileScanner> createFileScanners(
-      final Collection<StoreFile> filesToCompact, long smallestReadPoint) throws IOException {
-    return StoreFileScanner.getScannersForStoreFiles(filesToCompact, false, false, true,
+      final Collection<StoreFile> filesToCompact,
+      long smallestReadPoint,
+      boolean useDropBehind) throws IOException {
+    return StoreFileScanner.getScannersForStoreFiles(filesToCompact,
+        /* cache blocks = */ false,
+        /* use pread = */ false,
+        /* is compaction */ true,
+        /* use Drop Behind */ useDropBehind,
       smallestReadPoint);
   }
 
@@ -238,7 +245,7 @@ public abstract class Compactor {
       }
     }
     return store.getRegionInfo().getRegionNameAsString() + "#"
-        + store.getFamily().getNameAsString() + "#" + counter;
+        + store.getFamily().getNameAsString() + "#compaction#" + counter;
   }
   /**
    * Performs the compaction.
@@ -250,7 +257,7 @@ public abstract class Compactor {
    */
   protected boolean performCompaction(InternalScanner scanner, CellSink writer,
       long smallestReadPoint, boolean cleanSeqId,
-      CompactionThroughputController throughputController) throws IOException {
+      ThroughputController throughputController) throws IOException {
     long bytesWritten = 0;
     long bytesWrittenProgress = 0;
     // Since scanner.next() can return 'false' but still be delivering data,

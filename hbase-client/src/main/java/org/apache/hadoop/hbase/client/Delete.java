@@ -72,6 +72,13 @@ import org.apache.hadoop.hbase.util.Bytes;
 @InterfaceStability.Stable
 public class Delete extends Mutation implements Comparable<Row> {
   /**
+   * for pre-0.94 users
+   * @deprecated use {@link Delete(byte[] row)}
+   */
+  public Delete() {
+  }
+
+  /**
    * Create a Delete operation for the specified row.
    * <p>
    * If no further operations are done, this will delete everything

@@ -20,8 +20,13 @@ package org.apache.hadoop.hbase.master.handler;
 
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
+import java.util.ArrayList;
 import java.util.List;
 
+import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Iterators;
+import com.google.common.collect.Lists;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.HConstants;
@@ -87,7 +92,6 @@ public class TestEnableTableHandler {
 
     admin.enableTable(tableName);
     TEST_UTIL.waitTableEnabled(tableName);
-
     // disable once more
     admin.disableTable(tableName);
 
@@ -97,20 +101,37 @@ public class TestEnableTableHandler {
     rs.getRegionServer().stop("stop");
     cluster.waitForRegionServerToStop(rs.getRegionServer().getServerName(), 10000);
 
-    TEST_UTIL.waitUntilAllRegionsAssigned(TableName.META_TABLE_NAME);
+    LOG.debug("Now enabling table " + tableName);
 
     admin.enableTable(tableName);
     assertTrue(admin.isTableEnabled(tableName));
 
     JVMClusterUtil.RegionServerThread rs2 = cluster.startRegionServer();
-    m.getAssignmentManager().assign(admin.getTableRegions(tableName));
+    cluster.waitForRegionServerToStart(rs2.getRegionServer().getServerName().getHostname(),
+        rs2.getRegionServer().getServerName().getPort(), 60000);
+
+    List<HRegionInfo> regions = TEST_UTIL.getHBaseAdmin().getTableRegions(tableName);
+    assertEquals(1, regions.size());
+    for (HRegionInfo region : regions) {
+      TEST_UTIL.getHBaseAdmin().assign(region.getEncodedNameAsBytes());
+    }
+    LOG.debug("Waiting for table assigned " + tableName);
     TEST_UTIL.waitUntilAllRegionsAssigned(tableName);
     List<HRegionInfo> onlineRegions = admin.getOnlineRegions(
         rs2.getRegionServer().getServerName());
-    assertEquals(2, onlineRegions.size());
-    assertEquals(tableName, onlineRegions.get(1).getTable());
+    ArrayList<HRegionInfo> tableRegions = filterTableRegions(tableName, onlineRegions);
+    assertEquals(1, tableRegions.size());
   }
 
+  private ArrayList<HRegionInfo> filterTableRegions(final TableName tableName,
+      List<HRegionInfo> onlineRegions) {
+    return Lists.newArrayList(Iterables.filter(onlineRegions, new Predicate<HRegionInfo>() {
+      @Override
+      public boolean apply(HRegionInfo input) {
+        return input.getTable().equals(tableName);
+      }
+    }));
+  }
 
   @Test(timeout = 300000)
   public void testDisableTableAndRestart() throws Exception {

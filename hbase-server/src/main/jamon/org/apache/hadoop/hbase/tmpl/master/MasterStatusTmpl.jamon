@@ -399,6 +399,7 @@ AssignmentManager assignmentManager = master.getAssignmentManager();
         <%if (frags != null) %>
             <th title="Fragmentation - Will be 0% after a major compaction and fluctuate during normal usage.">Frag.</th>
         </%if>
+	<th>Query</th>
         <th>Online Regions</th>
         <th>Offline Regions</th>
         <th>Failed Regions</th>
@@ -431,6 +432,7 @@ AssignmentManager assignmentManager = master.getAssignmentManager();
         <%if (frags != null) %>
             <td align="center"><% frags.get(htDesc.getTableName().getNameAsString()) != null ? frags.get(htDesc.getTableName().getQualifierAsString()).intValue() + "%" : "n/a" %></td>
         </%if>
+	<td><a href=tableQuery.jsp?name=<% htDesc.getNameAsString() %>>Query</a></td>
         <td><% openRegionsCount %></td>
         <td><% offlineRegionsCount %></td>
         <td><% failedRegionsCount %></td>

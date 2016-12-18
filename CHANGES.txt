@@ -1,5 +1,94 @@
 HBase Change Log
 
+Release Notes - ADP HBase - Version 1.1.2-adp-1.1 TBD
+
+** Sub-task
+
+** Bug
+    * [HBASE-15811] - Batch Get after batch Put does not fetch all Cells
+
+** Improvement
+    * [EHB-314] - Remove RS WAL direcotry after normal server stop
+    * [EHB-318] - Add more details in RpcServer log when responseTooSlow happens
+    * [EHB-319] - Use special retry pause time when server throws CallQueueTooBigException
+    * [EHB-308] - Log details for undone task in AsyncProcess
+    * [EHB-352] - Add detailed log for long running batch request on client side
+    * [HBASE-15496] - Throw RowTooBigException only for user scan/get
+
+** Task
+
+
+Release Notes - ADP HBase - Version 1.1.2-adp-1.0 05/10/2016
+
+** Sub-task
+    * [HBASE-14535] - Integration test for rpc connection concurrency / deadlock testing
+
+** Bug
+    * [HBASE-14287] - Bootstrapping a cluster leaves temporary WAL directory laying around
+    * [HBASE-14313] - After a Connection sees ConnectionClosingException it never recovers
+    * [HBASE-14359] - HTable#close will hang forever if unchecked error/exception thrown in AsyncProcess#sendMultiAction
+    * [HBASE-14385] - Close the sockets that is missing in connection closure.
+    * [HBASE-14394] - Properly close the connection after reading records from table.
+    * [HBASE-14407] - NotServingRegion: hbase region closed forever
+    * [HBASE-14431] - AsyncRpcClient#removeConnection() never removes connection from connections pool if server fails
+    * [HBASE-14449] - Rewrite deadlock prevention for concurrent connection close
+    * [HBASE-14474] - DeadLock in RpcClientImpl.Connection.close()
+    * [HBASE-14591] - Region with reference hfile may split after a forced split in IncreasingToUpperBoundRegionSplitPolicy
+    * [HBASE-14632] - Region server aborts due to unguarded dereference of Reader
+    * [HBASE-14875] - Region was hijacked and remained in transition when RS failed to open a region and later regionplan changed to new RS on retry
+    * [HBASE-14891] - Add log for uncaught exception in RegionServerMetricsWrapperRunnable
+    * [EHB-89] - Randomize region assignment, preventing regions from gathering to the first regionservers
+    * [EHB-104] - Merge duplicated kvs when generating hfiles to be bulkloaded
+    * [EHB-112] - Fix bug on potential data-loss when scanning from hqueue
+    * [EHB-115] - Revert patch HBASE-12108 to fix ClassNotFoundException issue in runtime environment
+    * [EHB-133] - Fix bug on DNS failure
+    * [EHB-163] - Fix NullPointerException when calling Listener.getAddress() in RpcServer
+    * [EHB-201] - IllegalArgumentException was thrown when doing online configuration change in CompactSplitThread
+    * [HBASE-15129] - Set default value for hbase.fs.tmp.dir rather than fully depend on hbase-default.xml
+    * [HBASE-15214] - Valid mutate Ops fail with RPC Codec in use and region moves across
+    * [HBASE-15198] - RPC client not using Codec and CellBlock for puts by default
+    * [HBASE-14812] - Fix ResultBoundedCompletionService deadlock
+    * [HBASE-15252] - Data loss when replaying wal if HDFS timeout
+    * [HBASE-14229] - Flushing canceled by coprocessor still leads to memstoreSize set down
+    * [HBASE-14374] - Backport parent 'HBASE-14317 Stuck FSHLog' issue to 1.1
+    * [HBASE-15031] - Fix merge of MVCC and SequenceID performance regression in branch-1.0
+    * [HBASE-15150] - Fix TestDurablity in branch-1.1
+    * [HBASE-15213] - Fix increment performance regression caused by HBASE-8763 on branch-1.0
+    * [HBASE-15083] - Gets from Multiactions are not counted in metrics for gets
+    * [EHB-279] - Include issue server information in RetriesExhaustedWithDetailsException
+    * [EHB-280] - Add client side property to control whether to log details for batch errors
+
+** Improvement
+    * [EHB-80] - Add a customized region split policy - ConstantFamilySizeRegionSplitPolicy
+    * [EHB-81] - Add webpage tool to read single row data from HTable
+    * [EHB-82] - New table info page containing requests info, storeFile info and more
+    * [EHB-83] - Separate some region-level metrics from regionserver to reduce ganglia pressure
+    * [EHB-84] - Increase writeRequest by one when doing batchMutation, increase readRequest by one when doing scan
+    * [EHB-85] - Add more rpc-level request metrics for get/scan/multi/mutate
+    * [EHB-90] - Bulkload with region locality
+    * [EHB-117] - Optimize bulkload lock wait duration
+    * [EHB-120] - Optimize batchMutate performance for hqueue
+    * [EHB-130] - Add a knob to kkip hfile verification when bulkloading a huge amount of hfiles
+    * [EHB-147] - Add a customized filter - ColumnPrefixCountGetFilter
+    * [EHB-196] - Improve and enable Per-CF flush
+    * [HBASE-15177] - Reduce garbage created under high load
+    * [HBASE-15180] - Reduce garbage created while reading Cells from Codec Decoder
+    * [HBASE-15157] - Add *PerformanceTest for Append, CheckAnd*
+    * [EHB-236] - Follow the 0.98 way to fix the MVCC lock issue and further reduce contention
+    * [EHB-238] - Allow Rowlock to be read write (backport HBASE-12751)
+    * [HBASE-14807] - TestWALLockup is flakey
+    * [HBASE-14266] - RegionServers have a lock contention of Configuration.getProps
+    * [HBASE-15146] - Don't block on Reader threads queueing to a scheduler queue
+    * [EHB-278] - Fix table.jsp for backup master
+
+** Task
+    * [EHB-77] - Correct compatibility issues for client API
+    * [EHB-86] - Support HQueue(0.7.0) in hbase-thrift module
+    * [EHB-131] - Support cf-level block storage policy for flush and compaction
+    * [EHB-144] - Support cf-level block storage policy for bulkload
+    * [EHB-193] - Add throughput control for flush
+
+
 Release Nodes - HBase - Version 1.1.2 08/21/2015
 
 ** Sub-task

@@ -36,7 +36,6 @@ import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Matchers.anyLong;
-import static org.mockito.Matchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -57,9 +56,14 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.commons.lang.RandomStringUtils;
@@ -101,6 +105,7 @@ import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.Increment;
+import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.RowMutations;
@@ -132,6 +137,7 @@ import org.apache.hadoop.hbase.regionserver.HRegion.RegionScannerImpl;
 import org.apache.hadoop.hbase.regionserver.Region.RowLock;
 import org.apache.hadoop.hbase.regionserver.TestStore.FaultyFileSystem;
 import org.apache.hadoop.hbase.regionserver.handler.FinishRegionRecoveringHandler;
+import org.apache.hadoop.hbase.regionserver.wal.FSHLog;
 import org.apache.hadoop.hbase.regionserver.wal.HLogKey;
 import org.apache.hadoop.hbase.regionserver.wal.MetricsWAL;
 import org.apache.hadoop.hbase.regionserver.wal.MetricsWALSource;
@@ -155,6 +161,7 @@ import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.hbase.wal.WALProvider;
+import org.apache.hadoop.hbase.wal.WALProvider.Writer;
 import org.apache.hadoop.hbase.wal.WALSplitter;
 import org.junit.After;
 import org.junit.Assert;
@@ -166,6 +173,8 @@ import org.junit.rules.TestName;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatcher;
 import org.mockito.Mockito;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
@@ -191,7 +200,7 @@ public class TestHRegion {
 
   HRegion region = null;
   // Do not run unit tests in parallel (? Why not?  It don't work?  Why not?  St.Ack)
-  private static HBaseTestingUtility TEST_UTIL;
+  protected static HBaseTestingUtility TEST_UTIL;
   public static Configuration CONF ;
   private String dir;
   private static FileSystem FILESYSTEM;
@@ -264,6 +273,8 @@ public class TestHRegion {
     HRegion.closeHRegion(region);
   }
 
+
+
   /*
    * This test is for verifying memstore snapshot size is correctly updated in case of rollback
    * See HBASE-10845
@@ -292,7 +303,7 @@ public class TestHRegion {
     Path rootDir = new Path(dir + "testMemstoreSnapshotSize");
     MyFaultyFSLog faultyLog = new MyFaultyFSLog(fs, rootDir, "testMemstoreSnapshotSize", CONF);
     HRegion region = initHRegion(tableName, null, null, name.getMethodName(),
-      CONF, false, Durability.SYNC_WAL, faultyLog, COLUMN_FAMILY_BYTES);
+        CONF, false, Durability.SYNC_WAL, faultyLog, COLUMN_FAMILY_BYTES);
 
     Store store = region.getStore(COLUMN_FAMILY_BYTES);
     // Get some random bytes.
@@ -313,6 +324,49 @@ public class TestHRegion {
     }
     long sz = store.getFlushableSize();
     assertTrue("flushable size should be zero, but it is " + sz, sz == 0);
+    HRegion.closeHRegion(region);
+  }
+
+  /**
+   * Test for HBASE-14229: Flushing canceled by coprocessor still leads to memstoreSize set down
+   */
+  @Test
+  public void testMemstoreSizeWithFlushCanceling() throws IOException {
+    FileSystem fs = FileSystem.get(CONF);
+    Path rootDir = new Path(dir + "testMemstoreSizeWithFlushCanceling");
+    FSHLog hLog = new FSHLog(fs, rootDir, "testMemstoreSizeWithFlushCanceling", CONF);
+    HRegion region = initHRegion(tableName, null, null, name.getMethodName(),
+        CONF, false, Durability.SYNC_WAL, hLog, COLUMN_FAMILY_BYTES);
+    Store store = region.getStore(COLUMN_FAMILY_BYTES);
+    assertEquals(0, region.getMemstoreSize());
+
+    // Put some value and make sure flush could be completed normally
+    byte [] value = Bytes.toBytes(name.getMethodName());
+    Put put = new Put(value);
+    put.add(COLUMN_FAMILY_BYTES, Bytes.toBytes("abc"), value);
+    region.put(put);
+    long onePutSize = region.getMemstoreSize();
+    assertTrue(onePutSize > 0);
+    region.flush(true);
+    assertEquals("memstoreSize should be zero", 0, region.getMemstoreSize());
+    assertEquals("flushable size should be zero", 0, store.getFlushableSize());
+
+    // save normalCPHost and replaced by mockedCPHost, which will cancel flush requests
+    RegionCoprocessorHost normalCPHost = region.getCoprocessorHost();
+    RegionCoprocessorHost mockedCPHost = Mockito.mock(RegionCoprocessorHost.class);
+    when(mockedCPHost.preFlush(Mockito.isA(HStore.class), Mockito.isA(InternalScanner.class))).
+      thenReturn(null);
+    region.setCoprocessorHost(mockedCPHost);
+    region.put(put);
+    region.flush(true);
+    assertEquals("memstoreSize should NOT be zero", onePutSize, region.getMemstoreSize());
+    assertEquals("flushable size should NOT be zero", onePutSize, store.getFlushableSize());
+
+    // set normalCPHost and flush again, the snapshot will be flushed
+    region.setCoprocessorHost(normalCPHost);
+    region.flush(true);
+    assertEquals("memstoreSize should be zero", 0, region.getMemstoreSize());
+    assertEquals("flushable size should be zero", 0, store.getFlushableSize());
     HRegion.closeHRegion(region);
   }
 
@@ -366,9 +420,18 @@ public class TestHRegion {
           } catch (DroppedSnapshotException dse) {
             // What we are expecting
             region.closing.set(false); // this is needed for the rest of the test to work
+          } catch (Exception e) {
+            // What we are expecting
+            region.closing.set(false); // this is needed for the rest of the test to work
           }
           // Make it so all writes succeed from here on out
           ffs.fault.set(false);
+          // WAL is bad because of above faulty fs. Roll WAL.
+          try {
+            region.getWAL().rollWriter(true);
+          } catch (Exception e) {
+            int x = 0;
+          }
           // Check sizes.  Should still be the one entry.
           Assert.assertEquals(sizeOfOnePut, region.getMemstoreSize());
           // Now add two entries so that on this next flush that fails, we can see if we
@@ -384,6 +447,8 @@ public class TestHRegion {
           region.flush(true);
           // Make sure our memory accounting is right.
           Assert.assertEquals(sizeOfOnePut * 2, region.getMemstoreSize());
+        } catch (Exception e) {
+          int x = 0;
         } finally {
           HRegion.closeHRegion(region);
         }
@@ -396,6 +461,9 @@ public class TestHRegion {
   @Test (timeout=60000)
   public void testCloseWithFailingFlush() throws Exception {
     final Configuration conf = HBaseConfiguration.create(CONF);
+    final String callingMethod = name.getMethodName();
+    final WAL wal =
+        createWALCompatibleWithFaultyFileSystem(callingMethod, conf, TableName.valueOf(tableName));
     // Only retry once.
     conf.setInt("hbase.hstore.flush.retries.number", 1);
     final User user =
@@ -412,7 +480,8 @@ public class TestHRegion {
         HRegion region = null;
         try {
           // Initialize region
-          region = initHRegion(tableName, name.getMethodName(), conf, COLUMN_FAMILY_BYTES);
+          region = initHRegion(tableName, null, null, callingMethod, conf, false,
+            Durability.SYNC_WAL, wal, COLUMN_FAMILY_BYTES);
           long size = region.getMemstoreSize();
           Assert.assertEquals(0, size);
           // Put one item into memstore.  Measure the size of one item in memstore.
@@ -431,18 +500,39 @@ public class TestHRegion {
           // Now try close on top of a failing flush.
           region.close();
           fail();
-        } catch (DroppedSnapshotException dse) {
+        } catch (IOException dse) {
           // Expected
           LOG.info("Expected DroppedSnapshotException");
+        } catch (Throwable e) {
+          LOG.debug("Caught exception", e);
+          throw e;
         } finally {
           // Make it so all writes succeed from here on out so can close clean
           ffs.fault.set(false);
+          region.getWAL().rollWriter(true);
           HRegion.closeHRegion(region);
         }
         return null;
       }
     });
     FileSystem.closeAllForUGI(user.getUGI());
+  }
+
+  /**
+   * Create a WAL outside of the usual helper in
+   * {@link HBaseTestingUtility#createWal(Configuration, Path, HRegionInfo)} because that method
+   * doesn't play nicely with FaultyFileSystem. Call this method before overriding
+   * {@code fs.file.impl}.
+   * @param callingMethod a unique component for the path, probably the name of the test method.
+   */
+  private static WAL createWALCompatibleWithFaultyFileSystem(String callingMethod,
+      Configuration conf, TableName tableName) throws IOException {
+    final Path logDir = TEST_UTIL.getDataTestDirOnTestFS(callingMethod + ".log");
+    final Configuration walConf = new Configuration(conf);
+    FSUtils.setRootDir(walConf, logDir);
+    return (new WALFactory(walConf,
+        Collections.<WALActionsListener> singletonList(new MetricsWAL()), callingMethod)).getWAL(
+      tableName.toBytes(), tableName.getNamespace());
   }
 
   @Test
@@ -561,7 +651,7 @@ public class TestHRegion {
       }
       long seqId = region.replayRecoveredEditsIfAny(regiondir, maxSeqIdInStores, null, status);
       assertEquals(maxSeqId, seqId);
-      region.getMVCC().initialize(seqId);
+      region.getMVCC().advanceTo(seqId);
       Get get = new Get(row);
       Result result = region.get(get);
       for (long i = minSeqId; i <= maxSeqId; i += 10) {
@@ -615,7 +705,7 @@ public class TestHRegion {
       }
       long seqId = region.replayRecoveredEditsIfAny(regiondir, maxSeqIdInStores, null, status);
       assertEquals(maxSeqId, seqId);
-      region.getMVCC().initialize(seqId);
+      region.getMVCC().advanceTo(seqId);
       Get get = new Get(row);
       Result result = region.get(get);
       for (long i = minSeqId; i <= maxSeqId; i += 10) {
@@ -783,7 +873,7 @@ public class TestHRegion {
           .getRegionFileSystem().getStoreDir(Bytes.toString(family)));
 
       WALUtil.writeCompactionMarker(region.getWAL(), this.region.getTableDesc(),
-          this.region.getRegionInfo(), compactionDescriptor, new AtomicLong(1));
+          this.region.getRegionInfo(), compactionDescriptor, region.getMVCC());
 
       Path recoveredEditsDir = WALSplitter.getRegionDirRecoveredEditsDir(regiondir);
 
@@ -864,7 +954,7 @@ public class TestHRegion {
 
       // now verify that the flush markers are written
       wal.shutdown();
-      WAL.Reader reader = wals.createReader(fs, DefaultWALProvider.getCurrentFileName(wal),
+      WAL.Reader reader = WALFactory.createReader(fs, DefaultWALProvider.getCurrentFileName(wal),
         TEST_UTIL.getConfiguration());
       try {
         List<WAL.Entry> flushDescriptors = new ArrayList<WAL.Entry>();
@@ -980,8 +1070,7 @@ public class TestHRegion {
     }
   }
 
-  @Test
-  @SuppressWarnings("unchecked")
+  @Test (timeout=60000)
   public void testFlushMarkersWALFail() throws Exception {
     // test the cases where the WAL append for flush markers fail.
     String method = name.getMethodName();
@@ -993,9 +1082,56 @@ public class TestHRegion {
 
     final Configuration walConf = new Configuration(TEST_UTIL.getConfiguration());
     FSUtils.setRootDir(walConf, logDir);
-    final WALFactory wals = new WALFactory(walConf, null, method);
-    WAL wal = spy(wals.getWAL(tableName.getName(), tableName.getNamespace()));
 
+    // Make up a WAL that we can manipulate at append time.
+    class FailAppendFlushMarkerWAL extends FSHLog {
+      volatile FlushAction [] flushActions = null;
+
+      public FailAppendFlushMarkerWAL(FileSystem fs, Path root, String logDir, Configuration conf)
+      throws IOException {
+        super(fs, root, logDir, conf);
+      }
+
+      @Override
+      protected Writer createWriterInstance(Path path) throws IOException {
+        final Writer w = super.createWriterInstance(path);
+        return new Writer() {
+          @Override
+          public void close() throws IOException {
+            w.close();
+          }
+
+          @Override
+          public void sync() throws IOException {
+            w.sync();
+          }
+
+          @Override
+          public void append(Entry entry) throws IOException {
+            List<Cell> cells = entry.getEdit().getCells();
+            if (WALEdit.isMetaEditFamily(cells.get(0))) {
+               FlushDescriptor desc = WALEdit.getFlushDescriptor(cells.get(0));
+              if (desc != null) {
+                for (FlushAction flushAction: flushActions) {
+                  if (desc.getAction().equals(flushAction)) {
+                    throw new IOException("Failed to append flush marker! " + flushAction);
+                  }
+                }
+              }
+            }
+            w.append(entry);
+          }
+
+          @Override
+          public long getLength() throws IOException {
+            return w.getLength();
+          }
+        };
+      }
+    }
+    FailAppendFlushMarkerWAL wal =
+      new FailAppendFlushMarkerWAL(FileSystem.get(walConf), FSUtils.getRootDir(walConf),
+        getName(), walConf);
     this.region = initHRegion(tableName.getName(), HConstants.EMPTY_START_ROW,
       HConstants.EMPTY_END_ROW, method, CONF, false, Durability.USE_DEFAULT, wal, family);
     try {
@@ -1006,13 +1142,7 @@ public class TestHRegion {
       region.put(put);
 
       // 1. Test case where START_FLUSH throws exception
-      IsFlushWALMarker isFlushWALMarker = new IsFlushWALMarker(FlushAction.START_FLUSH);
-
-      // throw exceptions if the WalEdit is a start flush action
-      when(wal.append((HTableDescriptor)any(), (HRegionInfo)any(), (WALKey)any(),
-        (WALEdit)argThat(isFlushWALMarker), (AtomicLong)any(), Mockito.anyBoolean(),
-        (List<Cell>)any()))
-          .thenThrow(new IOException("Fail to append flush marker"));
+      wal.flushActions = new FlushAction [] {FlushAction.START_FLUSH};
 
       // start cache flush will throw exception
       try {
@@ -1024,21 +1154,16 @@ public class TestHRegion {
       } catch (IOException expected) {
         // expected
       }
+      // The WAL is hosed now. It has two edits appended. We cannot roll the log without it
+      // throwing a DroppedSnapshotException to force an abort. Just clean up the mess.
+      region.close(true);
+      wal.close();
 
       // 2. Test case where START_FLUSH succeeds but COMMIT_FLUSH will throw exception
-      isFlushWALMarker.set(FlushAction.COMMIT_FLUSH);
+      wal.flushActions = new FlushAction [] {FlushAction.COMMIT_FLUSH};
+      wal = new FailAppendFlushMarkerWAL(FileSystem.get(walConf), FSUtils.getRootDir(walConf),
+          getName(), walConf);
 
-      try {
-        region.flush(true);
-        fail("This should have thrown exception");
-      } catch (DroppedSnapshotException expected) {
-        // we expect this exception, since we were able to write the snapshot, but failed to
-        // write the flush marker to WAL
-      } catch (IOException unexpected) {
-        throw unexpected;
-      }
-
-      region.close();
       this.region = initHRegion(tableName.getName(), HConstants.EMPTY_START_ROW,
         HConstants.EMPTY_END_ROW, method, CONF, false, Durability.USE_DEFAULT, wal, family);
       region.put(put);
@@ -1046,7 +1171,7 @@ public class TestHRegion {
       // 3. Test case where ABORT_FLUSH will throw exception.
       // Even if ABORT_FLUSH throws exception, we should not fail with IOE, but continue with
       // DroppedSnapshotException. Below COMMMIT_FLUSH will cause flush to abort
-      isFlushWALMarker.set(FlushAction.COMMIT_FLUSH, FlushAction.ABORT_FLUSH);
+      wal.flushActions = new FlushAction [] {FlushAction.COMMIT_FLUSH, FlushAction.ABORT_FLUSH};
 
       try {
         region.flush(true);
@@ -1393,14 +1518,18 @@ public class TestHRegion {
 
       LOG.info("batchPut will have to break into four batches to avoid row locks");
       RowLock rowLock1 = region.getRowLock(Bytes.toBytes("row_2"));
-      RowLock rowLock2 = region.getRowLock(Bytes.toBytes("row_4"));
-      RowLock rowLock3 = region.getRowLock(Bytes.toBytes("row_6"));
+      RowLock rowLock2 = region.getRowLock(Bytes.toBytes("row_1"));
+      RowLock rowLock3 = region.getRowLock(Bytes.toBytes("row_3"));
+      RowLock rowLock4 = region.getRowLock(Bytes.toBytes("row_3"), true);
 
       MultithreadedTestUtil.TestContext ctx = new MultithreadedTestUtil.TestContext(CONF);
       final AtomicReference<OperationStatus[]> retFromThread = new AtomicReference<OperationStatus[]>();
+      final CountDownLatch startingPuts = new CountDownLatch(1);
+      final CountDownLatch startingClose = new CountDownLatch(1);
       TestThread putter = new TestThread(ctx) {
         @Override
         public void doWork() throws IOException {
+          startingPuts.countDown();
           retFromThread.set(region.batchMutate(puts));
         }
       };
@@ -1408,43 +1537,43 @@ public class TestHRegion {
       ctx.addThread(putter);
       ctx.startThreads();
 
-      LOG.info("...waiting for put thread to sync 1st time");
-      waitForCounter(source, "syncTimeNumOps", syncs + 1);
-
       // Now attempt to close the region from another thread.  Prior to HBASE-12565
       // this would cause the in-progress batchMutate operation to to fail with
       // exception because it use to release and re-acquire the close-guard lock
       // between batches.  Caller then didn't get status indicating which writes succeeded.
       // We now expect this thread to block until the batchMutate call finishes.
-      Thread regionCloseThread = new Thread() {
+      Thread regionCloseThread = new TestThread(ctx) {
         @Override
-        public void run() {
+        public void doWork() {
           try {
+            startingPuts.await();
+            // Give some time for the batch mutate to get in.
+            // We don't want to race with the mutate
+            Thread.sleep(10);
+            startingClose.countDown();
             HRegion.closeHRegion(region);
           } catch (IOException e) {
+            throw new RuntimeException(e);
+          } catch (InterruptedException e) {
             throw new RuntimeException(e);
           }
         }
       };
       regionCloseThread.start();
 
+      startingClose.await();
+      startingPuts.await();
+      Thread.sleep(100);
       LOG.info("...releasing row lock 1, which should let put thread continue");
       rowLock1.release();
-
-      LOG.info("...waiting for put thread to sync 2nd time");
-      waitForCounter(source, "syncTimeNumOps", syncs + 2);
 
       LOG.info("...releasing row lock 2, which should let put thread continue");
       rowLock2.release();
 
-      LOG.info("...waiting for put thread to sync 3rd time");
-      waitForCounter(source, "syncTimeNumOps", syncs + 3);
-
       LOG.info("...releasing row lock 3, which should let put thread continue");
       rowLock3.release();
 
-      LOG.info("...waiting for put thread to sync 4th time");
-      waitForCounter(source, "syncTimeNumOps", syncs + 4);
+      waitForCounter(source, "syncTimeNumOps", syncs + 1);
 
       LOG.info("...joining on put thread");
       ctx.stop();
@@ -1455,6 +1584,7 @@ public class TestHRegion {
         assertEquals((i == 5) ? OperationStatusCode.BAD_FAMILY : OperationStatusCode.SUCCESS,
             codes[i].getOperationStatusCode());
       }
+      rowLock4.release();
     } finally {
       HRegion.closeHRegion(this.region);
       this.region = null;
@@ -4633,7 +4763,7 @@ public class TestHRegion {
     //verify append called or not
     verify(wal, expectAppend ? times(1) : never())
       .append((HTableDescriptor)any(), (HRegionInfo)any(), (WALKey)any(),
-          (WALEdit)any(), (AtomicLong)any(), Mockito.anyBoolean(), (List<Cell>)any());
+          (WALEdit)any(), Mockito.anyBoolean());
 
     // verify sync called or not
     if (expectSync || expectSyncFromLogSyncer) {
@@ -4980,7 +5110,7 @@ public class TestHRegion {
    * @return A region on which you must call
    *         {@link HRegion#closeHRegion(HRegion)} when done.
    */
-  public static HRegion initHRegion(TableName tableName, String callingMethod, Configuration conf,
+  public HRegion initHRegion(TableName tableName, String callingMethod, Configuration conf,
       byte[]... families) throws IOException {
     return initHRegion(tableName.getName(), null, null, callingMethod, conf, false, families);
   }
@@ -4994,7 +5124,7 @@ public class TestHRegion {
    * @return A region on which you must call
    *         {@link HRegion#closeHRegion(HRegion)} when done.
    */
-  public static HRegion initHRegion(byte[] tableName, String callingMethod, Configuration conf,
+  public HRegion initHRegion(byte[] tableName, String callingMethod, Configuration conf,
       byte[]... families) throws IOException {
     return initHRegion(tableName, null, null, callingMethod, conf, false, families);
   }
@@ -5009,16 +5139,19 @@ public class TestHRegion {
    * @return A region on which you must call
    *         {@link HRegion#closeHRegion(HRegion)} when done.
    */
-  public static HRegion initHRegion(byte[] tableName, String callingMethod, Configuration conf,
+  public HRegion initHRegion(byte[] tableName, String callingMethod, Configuration conf,
       boolean isReadOnly, byte[]... families) throws IOException {
     return initHRegion(tableName, null, null, callingMethod, conf, isReadOnly, families);
   }
 
-  public static HRegion initHRegion(byte[] tableName, byte[] startKey, byte[] stopKey,
+  public HRegion initHRegion(byte[] tableName, byte[] startKey, byte[] stopKey,
       String callingMethod, Configuration conf, boolean isReadOnly, byte[]... families)
       throws IOException {
+    Path logDir = TEST_UTIL.getDataTestDirOnTestFS(callingMethod + ".log");
+    HRegionInfo hri = new HRegionInfo(TableName.valueOf(tableName), startKey, stopKey);
+    final WAL wal = HBaseTestingUtility.createWal(conf, logDir, hri);
     return initHRegion(tableName, startKey, stopKey, callingMethod, conf, isReadOnly,
-        Durability.SYNC_WAL, null, families);
+        Durability.SYNC_WAL, wal, families);
   }
 
   /**
@@ -5033,7 +5166,7 @@ public class TestHRegion {
    * @return A region on which you must call
    *         {@link HRegion#closeHRegion(HRegion)} when done.
    */
-  public static HRegion initHRegion(byte[] tableName, byte[] startKey, byte[] stopKey,
+  public HRegion initHRegion(byte[] tableName, byte[] startKey, byte[] stopKey,
       String callingMethod, Configuration conf, boolean isReadOnly, Durability durability,
       WAL wal, byte[]... families) throws IOException {
     return TEST_UTIL.createLocalHRegion(tableName, startKey, stopKey, callingMethod, conf,
@@ -5634,7 +5767,6 @@ public class TestHRegion {
     putData(startRow, numRows, qualifier, families);
     int splitRow = startRow + numRows;
     putData(splitRow, numRows, qualifier, families);
-    int endRow = splitRow + numRows;
     region.flush(true);
 
     HRegion [] regions = null;
@@ -5766,7 +5898,7 @@ public class TestHRegion {
     ArgumentCaptor<WALEdit> editCaptor = ArgumentCaptor.forClass(WALEdit.class);
 
     // capture append() calls
-    WAL wal = mock(WAL.class);
+    WAL wal = mockWAL();
     when(rss.getWAL((HRegionInfo) any())).thenReturn(wal);
 
     try {
@@ -5774,7 +5906,7 @@ public class TestHRegion {
         TEST_UTIL.getConfiguration(), rss, null);
 
       verify(wal, times(1)).append((HTableDescriptor)any(), (HRegionInfo)any(), (WALKey)any()
-        , editCaptor.capture(), (AtomicLong)any(), anyBoolean(), (List<Cell>)any());
+        , editCaptor.capture(), anyBoolean());
 
       WALEdit edit = editCaptor.getValue();
       assertNotNull(edit);
@@ -5851,7 +5983,7 @@ public class TestHRegion {
     ArgumentCaptor<WALEdit> editCaptor = ArgumentCaptor.forClass(WALEdit.class);
 
     // capture append() calls
-    WAL wal = mock(WAL.class);
+    WAL wal = mockWAL();
     when(rss.getWAL((HRegionInfo) any())).thenReturn(wal);
 
     // add the region to recovering regions
@@ -5868,7 +6000,7 @@ public class TestHRegion {
       // verify that we have not appended region open event to WAL because this region is still
       // recovering
       verify(wal, times(0)).append((HTableDescriptor)any(), (HRegionInfo)any(), (WALKey)any()
-        , editCaptor.capture(), (AtomicLong)any(), anyBoolean(), (List<Cell>)any());
+        , editCaptor.capture(), anyBoolean());
 
       // not put the region out of recovering state
       new FinishRegionRecoveringHandler(rss, region.getRegionInfo().getEncodedName(), "/foo")
@@ -5876,7 +6008,7 @@ public class TestHRegion {
 
       // now we should have put the entry
       verify(wal, times(1)).append((HTableDescriptor)any(), (HRegionInfo)any(), (WALKey)any()
-        , editCaptor.capture(), (AtomicLong)any(), anyBoolean(), (List<Cell>)any());
+        , editCaptor.capture(), anyBoolean());
 
       WALEdit edit = editCaptor.getValue();
       assertNotNull(edit);
@@ -5911,6 +6043,33 @@ public class TestHRegion {
     }
   }
 
+  /**
+   * Utility method to setup a WAL mock. Needs to do the bit where we close latch on the WALKey on
+   * append else test hangs.
+   * @return
+   * @throws IOException
+   */
+  private WAL mockWAL() throws IOException {
+    WAL wal = mock(WAL.class);
+    Mockito.when(
+      wal.append((HTableDescriptor) Mockito.any(), (HRegionInfo) Mockito.any(),
+        (WALKey) Mockito.any(), (WALEdit) Mockito.any(), Mockito.anyBoolean())).thenAnswer(
+      new Answer<Long>() {
+        @Override
+        public Long answer(InvocationOnMock invocation) throws Throwable {
+          WALKey key = invocation.getArgumentAt(2, WALKey.class);
+          MultiVersionConsistencyControl.WriteEntry we = key.getPreAssignedWriteEntry();
+          if (we == null) {
+            we = key.getMvcc().beginMemstoreInsert();
+            key.setWriteEntry(we);
+          }
+          return 1L;
+        }
+
+      });
+    return wal;
+  }
+
   @Test
   @SuppressWarnings("unchecked")
   public void testCloseRegionWrittenToWAL() throws Exception {
@@ -5928,7 +6087,7 @@ public class TestHRegion {
     ArgumentCaptor<WALEdit> editCaptor = ArgumentCaptor.forClass(WALEdit.class);
 
     // capture append() calls
-    WAL wal = mock(WAL.class);
+    WAL wal = mockWAL();
     when(rss.getWAL((HRegionInfo) any())).thenReturn(wal);
 
     // open a region first so that it can be closed later
@@ -5940,7 +6099,7 @@ public class TestHRegion {
 
     // 2 times, one for region open, the other close region
     verify(wal, times(2)).append((HTableDescriptor)any(), (HRegionInfo)any(), (WALKey)any(),
-      editCaptor.capture(), (AtomicLong)any(), anyBoolean(), (List<Cell>)any());
+      editCaptor.capture(), anyBoolean());
 
     WALEdit edit = editCaptor.getAllValues().get(1);
     assertNotNull(edit);
@@ -6236,6 +6395,68 @@ public class TestHRegion {
       qual2, 0, qual2.length));
   }
 
+  @Test(timeout = 60000)
+  public void testBatchMutateWithWrongRegionException() throws Exception {
+    final byte[] a = Bytes.toBytes("a");
+    final byte[] b = Bytes.toBytes("b");
+    final byte[] c = Bytes.toBytes("c"); // exclusive
+
+    int prevLockTimeout = CONF.getInt("hbase.rowlock.wait.duration", 30000);
+    CONF.setInt("hbase.rowlock.wait.duration", 1000);
+    final HRegion region = initHRegion(tableName, a, c, name.getMethodName(), CONF, false, fam1);
+
+    Mutation[] mutations = new Mutation[] {
+        new Put(a).addImmutable(fam1, null, null),
+        new Put(c).addImmutable(fam1, null, null), // this is outside the region boundary
+        new Put(b).addImmutable(fam1, null, null),
+    };
+
+    OperationStatus[] status = region.batchMutate(mutations);
+    assertEquals(status[0].getOperationStatusCode(), OperationStatusCode.SUCCESS);
+    assertEquals(status[1].getOperationStatusCode(), OperationStatusCode.SANITY_CHECK_FAILURE);
+    assertEquals(status[2].getOperationStatusCode(), OperationStatusCode.SUCCESS);
+
+
+    // test with a row lock held for a long time
+    final CountDownLatch obtainedRowLock = new CountDownLatch(1);
+    ExecutorService exec = Executors.newFixedThreadPool(2);
+    Future<Void> f1 = exec.submit(new Callable<Void>() {
+      @Override
+      public Void call() throws Exception {
+        LOG.info("Acquiring row lock");
+        RowLock rl = region.getRowLock(b);
+        obtainedRowLock.countDown();
+        LOG.info("Waiting for 5 seconds before releasing lock");
+        Threads.sleep(5000);
+        LOG.info("Releasing row lock");
+        rl.release();
+        return null;
+      }
+    });
+    obtainedRowLock.await(30, TimeUnit.SECONDS);
+
+    Future<Void> f2 = exec.submit(new Callable<Void>() {
+      @Override
+      public Void call() throws Exception {
+        Mutation[] mutations = new Mutation[] {
+            new Put(a).addImmutable(fam1, null, null),
+            new Put(b).addImmutable(fam1, null, null),
+        };
+
+        // this will wait for the row lock, and it will eventually succeed
+        OperationStatus[] status = region.batchMutate(mutations);
+        assertEquals(status[0].getOperationStatusCode(), OperationStatusCode.SUCCESS);
+        assertEquals(status[1].getOperationStatusCode(), OperationStatusCode.SUCCESS);
+        return null;
+      }
+    });
+
+    f1.get();
+    f2.get();
+
+    CONF.setInt("hbase.rowlock.wait.duration", prevLockTimeout);
+  }
+
   @Test
   public void testCheckAndRowMutateTimestampsAreMonotonic() throws IOException {
     HRegion region = initHRegion(tableName, name.getMethodName(), CONF, fam1);
@@ -6269,9 +6490,75 @@ public class TestHRegion {
       qual2, 0, qual2.length));
   }
 
-  static HRegion initHRegion(byte[] tableName, String callingMethod,
+  HRegion initHRegion(byte[] tableName, String callingMethod,
       byte[]... families) throws IOException {
     return initHRegion(tableName, callingMethod, HBaseConfiguration.create(),
         families);
+  }
+
+  @Test(timeout = 60000)
+  public void testWritesWhileRollWriter() throws IOException, InterruptedException {
+    int testCount = 10;
+    int numRows = 1024;
+    int numFamilies = 2;
+    int numQualifiers = 2;
+    final byte[][] families = new byte[numFamilies][];
+    for (int i = 0; i < numFamilies; i++) {
+      families[i] = Bytes.toBytes("family" + i);
+    }
+    final byte[][] qualifiers = new byte[numQualifiers][];
+    for (int i = 0; i < numQualifiers; i++) {
+      qualifiers[i] = Bytes.toBytes("qual" + i);
+    }
+
+    String method = "testWritesWhileRollWriter";
+    CONF.setInt("hbase.regionserver.wal.disruptor.event.count", 2);
+    this.region = initHRegion(tableName, method, CONF, families);
+    try {
+      List<Thread> threads = new ArrayList<Thread>();
+      for (int i = 0; i < numRows; i++) {
+        final int count = i;
+        Thread t = new Thread(new Runnable() {
+
+          @Override
+          public void run() {
+            byte[] row = Bytes.toBytes("row" + count);
+            Put put = new Put(row);
+            put.setDurability(Durability.SYNC_WAL);
+            byte[] value = Bytes.toBytes(String.valueOf(count));
+            for (byte[] family : families) {
+              for (byte[] qualifier : qualifiers) {
+                put.add(family, qualifier, (long) count, value);
+              }
+            }
+            try {
+              region.put(put);
+            } catch (IOException e) {
+              throw new RuntimeException(e);
+            }
+          }
+        });
+        threads.add(t);
+      }
+      for (Thread t : threads) {
+        t.start();
+      }
+
+      for (int i = 0; i < testCount; i++) {
+        region.getWAL().rollWriter();
+        Thread.yield();
+      }
+    } finally {
+      try {
+        HRegion.closeHRegion(this.region);
+        CONF.setInt("hbase.regionserver.wal.disruptor.event.count", 16 * 1024);
+      } catch (DroppedSnapshotException dse) {
+        // We could get this on way out because we interrupt the background flusher and it could
+        // fail anywhere causing a DSE over in the background flusher... only it is not properly
+        // dealt with so could still be memory hanging out when we get to here -- memory we can't
+        // flush because the accounting is 'off' since original DSE.
+      }
+      this.region = null;
+    }
   }
 }

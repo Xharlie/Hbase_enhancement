@@ -25,6 +25,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 
+import com.etao.hadoop.hbase.queue.client.Message;
+import com.etao.hadoop.hbase.queue.client.MessageID;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
@@ -41,6 +43,8 @@ import org.apache.hadoop.hbase.thrift.generated.TAppend;
 import org.apache.hadoop.hbase.thrift.generated.TCell;
 import org.apache.hadoop.hbase.thrift.generated.TColumn;
 import org.apache.hadoop.hbase.thrift.generated.TIncrement;
+import org.apache.hadoop.hbase.thrift.generated.TMessage;
+import org.apache.hadoop.hbase.thrift.generated.TMessageID;
 import org.apache.hadoop.hbase.thrift.generated.TRowResult;
 import org.apache.hadoop.hbase.util.Bytes;
 
@@ -192,6 +196,47 @@ public class ThriftUtilities {
   static public List<TRowResult> rowResultFromHBase(Result in) {
     Result [] result = { in };
     return rowResultFromHBase(result);
+  }
+
+  /**
+   * This utility method creates a list of Thrift Message "struct" based on an Hbase Message object.
+   * The empty list is returned if the input is null.
+   * @param in Hbase Message object
+   * @return Thrift TMessage array
+   */
+  static public List<TMessage> messageFromHBase(Message[] in) {
+    List<TMessage> messages = new ArrayList<TMessage>(in.length);
+    for (Message message : in) {
+      short partitionID = message.getPartitionID();
+      MessageID id = message.getID();
+      byte[] topic = message.getTopic();
+      byte[] value = message.getValue();
+      if (partitionID < 0 || null == id || null == topic || null == value) {
+        continue;
+      }
+      TMessageID tid = new TMessageID(id.getTimestamp(), id.getSequeceID());
+      TMessage tMessage = new TMessage(ByteBuffer.wrap(topic), ByteBuffer.wrap(value));
+      tMessage.setId(tid);
+      tMessage.setPartitionID(partitionID);
+      messages.add(tMessage);
+    }
+    return messages;
+  }
+
+  /**
+   * This utility method creates a list of Thrift TRowResult "struct" based on an Hbase TMessage
+   * object. The empty list is returned if the input is null.
+   * @param in HQueue Message object
+   * @return Thrift TMessage array
+   */
+  static public TMessage messageFromHBase(Message in) {
+    Message[] messages = { in };
+    List<TMessage> tMessages = messageFromHBase(messages);
+    if (tMessages.isEmpty()) {
+      return null;
+    } else {
+      return messageFromHBase(messages).get(0);
+    }
   }
 
   /**

@@ -46,6 +46,8 @@ public interface MetricsHBaseServerSource extends BaseSource {
   String TOTAL_CALL_TIME_DESC = "Total call time, including both queued and processing time.";
   String QUEUE_SIZE_NAME = "queueSize";
   String QUEUE_SIZE_DESC = "Number of bytes in the call queues.";
+  String RESPONSE_QUEUE_SIZE_NAME = "responseQueueSize";
+  String RESPONSE_QUEUE_SIZE_DESC = "Number of bytes in the response queues.";
   String GENERAL_QUEUE_NAME = "numCallsInGeneralQueue";
   String GENERAL_QUEUE_DESC = "Number of calls in the general call queue.";
   String PRIORITY_QUEUE_NAME = "numCallsInPriorityQueue";
@@ -53,6 +55,8 @@ public interface MetricsHBaseServerSource extends BaseSource {
   String REPLICATION_QUEUE_DESC =
       "Number of calls in the replication call queue.";
   String PRIORITY_QUEUE_DESC = "Number of calls in the priority call queue.";
+  String RESPONSE_QUEUE_NAME = "numCallsInResponseQueue";
+  String RESPONSE_QUEUE_DESC = "Number of calls in the response queue.";
   String NUM_OPEN_CONNECTIONS_NAME = "numOpenConnections";
   String NUM_OPEN_CONNECTIONS_DESC = "Number of open connections.";
   String NUM_ACTIVE_HANDLER_NAME = "numActiveHandler";

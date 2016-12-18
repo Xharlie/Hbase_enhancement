@@ -28,6 +28,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
@@ -52,10 +54,13 @@ import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.ipc.BlockingRpcCallback;
 import org.apache.hadoop.hbase.ipc.FifoRpcScheduler;
+import org.apache.hadoop.hbase.ipc.NettyRpcServer;
 import org.apache.hadoop.hbase.ipc.RpcClient;
 import org.apache.hadoop.hbase.ipc.RpcClientFactory;
 import org.apache.hadoop.hbase.ipc.RpcServer;
+import org.apache.hadoop.hbase.ipc.SimpleRpcServer;
 import org.apache.hadoop.hbase.ipc.RpcServer.BlockingServiceAndInterface;
+import org.apache.hadoop.hbase.ipc.RpcServerFactory;
 import org.apache.hadoop.hbase.ipc.RpcServerInterface;
 import org.apache.hadoop.hbase.ipc.ServerRpcController;
 import org.apache.hadoop.hbase.protobuf.generated.AuthenticationProtos;
@@ -80,10 +85,15 @@ import org.apache.hadoop.security.authorize.Service;
 import org.apache.hadoop.security.token.SecretManager;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenIdentifier;
+import org.junit.After;
 import org.junit.AfterClass;
+import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameters;
 
 import com.google.protobuf.BlockingRpcChannel;
 import com.google.protobuf.BlockingService;
@@ -93,6 +103,7 @@ import com.google.protobuf.ServiceException;
 /**
  * Tests for authentication token creation and usage
  */
+@RunWith(Parameterized.class)
 @Category(MediumTests.class)
 public class TestTokenAuthentication {
   static {
@@ -104,6 +115,17 @@ public class TestTokenAuthentication {
   private static Log LOG = LogFactory.getLog(TestTokenAuthentication.class);
 
   public interface AuthenticationServiceSecurityInfo {}
+
+  @Parameters
+  public static Collection<Object[]> parameters() {
+    return HBaseTestingUtility.RPCSERVER_PARAMETERIZED;
+  }
+
+  private final String rpcServerClass;
+
+  public TestTokenAuthentication(String rpcServerClass) {
+    this.rpcServerClass = rpcServerClass;
+  }
 
   /**
    * Basic server process for RPC authentication testing
@@ -140,7 +162,7 @@ public class TestTokenAuthentication {
       sai.add(new BlockingServiceAndInterface(service,
         AuthenticationProtos.AuthenticationService.BlockingInterface.class));
       this.rpcServer =
-        new RpcServer(this, "tokenServer", sai, initialIsa, conf, new FifoRpcScheduler(conf, 1));
+          RpcServerFactory.createServer(this, "tokenServer", sai, initialIsa, conf, new FifoRpcScheduler(conf, 1));
       this.isa = this.rpcServer.getListenerAddress();
       this.sleeper = new Sleeper(1000, this);
     }
@@ -333,13 +355,13 @@ public class TestTokenAuthentication {
   }
 
   private static HBaseTestingUtility TEST_UTIL;
-  private static TokenServer server;
-  private static Thread serverThread;
-  private static AuthenticationTokenSecretManager secretManager;
-  private static ClusterId clusterId = new ClusterId();
+  private TokenServer server;
+  private Thread serverThread;
+  private AuthenticationTokenSecretManager secretManager;
+  private ClusterId clusterId = new ClusterId();
 
-  @BeforeClass
-  public static void setupBeforeClass() throws Exception {
+  @Before
+  public void setUp() throws Exception {
     TEST_UTIL = new HBaseTestingUtility();
     TEST_UTIL.startMiniZKCluster();
     // register token type for protocol
@@ -351,6 +373,7 @@ public class TestTokenAuthentication {
     conf.set("hadoop.security.authentication", "kerberos");
     conf.set("hbase.security.authentication", "kerberos");
     conf.setBoolean(HADOOP_SECURITY_AUTHORIZATION, true);
+    conf.set(RpcServerFactory.CUSTOM_RPC_SERVER_IMPL_CONF_KEY, rpcServerClass);
     server = new TokenServer(conf);
     serverThread = new Thread(server);
     Threads.setDaemonThreadRunning(serverThread, "TokenServer:"+server.getServerName().toString());
@@ -373,8 +396,8 @@ public class TestTokenAuthentication {
     }
   }
 
-  @AfterClass
-  public static void tearDownAfterClass() throws Exception {
+  @After
+  public void tearDown() throws Exception {
     server.stop("Test complete");
     Threads.shutdown(serverThread);
     TEST_UTIL.shutdownMiniZKCluster();

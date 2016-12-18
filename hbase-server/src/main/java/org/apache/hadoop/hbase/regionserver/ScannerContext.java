@@ -50,7 +50,7 @@ import org.apache.hadoop.hbase.classification.InterfaceStability;
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.COPROC)
 @InterfaceStability.Evolving
 public class ScannerContext {
-  private final Log LOG = LogFactory.getLog(this.getClass());
+  private static final Log LOG = LogFactory.getLog(ScannerContext.class);
 
   /**
    * Two sets of the same fields. One for the limits, another for the progress towards those limits
@@ -206,6 +206,15 @@ public class ScannerContext {
   boolean partialResultFormed() {
     return scannerState == NextState.SIZE_LIMIT_REACHED_MID_ROW
         || scannerState == NextState.TIME_LIMIT_REACHED_MID_ROW;
+  }
+
+  /**
+   * @return true when a mid-row result is formed.
+   */
+  boolean midRowResultFormed() {
+    return scannerState == NextState.SIZE_LIMIT_REACHED_MID_ROW
+        || scannerState == NextState.TIME_LIMIT_REACHED_MID_ROW
+        || scannerState == NextState.BATCH_LIMIT_REACHED;
   }
 
   /**

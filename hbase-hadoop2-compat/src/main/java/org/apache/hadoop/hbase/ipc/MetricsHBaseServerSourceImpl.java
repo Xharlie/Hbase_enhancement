@@ -47,7 +47,6 @@ public class MetricsHBaseServerSourceImpl extends BaseSourceImpl
   private final MutableCounterLong exceptionsNSRE;
   private final MutableCounterLong exceptionsMoved;
 
-
   private MutableHistogram queueCallTime;
   private MutableHistogram processCallTime;
   private MutableHistogram totalCallTime;
@@ -190,7 +189,11 @@ public class MetricsHBaseServerSourceImpl extends BaseSourceImpl
           .addGauge(Interns.info(NUM_OPEN_CONNECTIONS_NAME,
               NUM_OPEN_CONNECTIONS_DESC), wrapper.getNumOpenConnections())
           .addGauge(Interns.info(NUM_ACTIVE_HANDLER_NAME,
-              NUM_ACTIVE_HANDLER_DESC), wrapper.getActiveRpcHandlerCount());
+              NUM_ACTIVE_HANDLER_DESC), wrapper.getActiveRpcHandlerCount())
+          .addGauge(Interns.info(RESPONSE_QUEUE_SIZE_NAME,
+              RESPONSE_QUEUE_SIZE_DESC), wrapper.getResponseQueueSize())
+          .addGauge(Interns.info(RESPONSE_QUEUE_NAME,
+              RESPONSE_QUEUE_DESC), wrapper.getResponseQueueLength());
     }
 
     metricsRegistry.snapshot(mrb, all);

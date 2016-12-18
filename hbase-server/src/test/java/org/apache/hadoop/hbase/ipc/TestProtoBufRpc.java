@@ -19,10 +19,13 @@ package org.apache.hadoop.hbase.ipc;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.Collection;
 
 import com.google.common.collect.Lists;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.ServerName;
@@ -40,6 +43,9 @@ import org.junit.Test;
 import org.junit.Before;
 import org.junit.After;
 import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameters;
 
 import com.google.protobuf.BlockingRpcChannel;
 import com.google.protobuf.BlockingService;
@@ -51,6 +57,7 @@ import com.google.protobuf.ServiceException;
  * This test depends on test.proto definition of types in <code>src/test/protobuf/test.proto</code>
  * and protobuf service definition from <code>src/test/protobuf/test_rpc_service.proto</code>
  */
+@RunWith(Parameterized.class)
 @Category(MediumTests.class)
 public class TestProtoBufRpc {
   public final static String ADDRESS = "localhost";
@@ -58,6 +65,17 @@ public class TestProtoBufRpc {
   private InetSocketAddress isa;
   private Configuration conf;
   private RpcServerInterface server;
+
+  @Parameters
+  public static Collection<Object[]> parameters() {
+    return HBaseTestingUtility.RPCSERVER_PARAMETERIZED;
+  }
+
+  private final String rpcServerClass;
+
+  public TestProtoBufRpc(String rpcServerClass) {
+    this.rpcServerClass = rpcServerClass;
+  }
 
   /**
    * Implementation of the test service defined out in TestRpcServiceProtos
@@ -87,6 +105,7 @@ public class TestProtoBufRpc {
   @Before
   public  void setUp() throws IOException { // Setup server for both protocols
     this.conf = HBaseConfiguration.create();
+    this.conf.set(RpcServerFactory.CUSTOM_RPC_SERVER_IMPL_CONF_KEY, rpcServerClass);
     Logger log = Logger.getLogger("org.apache.hadoop.ipc.HBaseServer");
     log.setLevel(Level.DEBUG);
     log = Logger.getLogger("org.apache.hadoop.ipc.HBaseServer.trace");
@@ -96,7 +115,7 @@ public class TestProtoBufRpc {
     BlockingService service =
       TestRpcServiceProtos.TestProtobufRpcProto.newReflectiveBlockingService(serverImpl);
     // Get RPC server for server side implementation
-    this.server = new RpcServer(null, "testrpc",
+    this.server = RpcServerFactory.createServer(null, "testrpc",
         Lists.newArrayList(new RpcServer.BlockingServiceAndInterface(service, null)),
         new InetSocketAddress(ADDRESS, PORT), conf,
         new FifoRpcScheduler(conf, 10));

@@ -83,6 +83,7 @@ import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.ConnectionUtils;
 import org.apache.hadoop.hbase.client.RpcRetryingCallerFactory;
 import org.apache.hadoop.hbase.conf.ConfigurationManager;
+import org.apache.hadoop.hbase.conf.ConfigurationObserver;
 import org.apache.hadoop.hbase.coordination.BaseCoordinatedStateManager;
 import org.apache.hadoop.hbase.coordination.CloseRegionCoordination;
 import org.apache.hadoop.hbase.coordination.SplitLogWorkerCoordination;
@@ -95,12 +96,7 @@ import org.apache.hadoop.hbase.executor.ExecutorType;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.http.InfoServer;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
-import org.apache.hadoop.hbase.ipc.RpcClient;
-import org.apache.hadoop.hbase.ipc.RpcClientFactory;
-import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
-import org.apache.hadoop.hbase.ipc.RpcServerInterface;
-import org.apache.hadoop.hbase.ipc.ServerNotRunningYetException;
-import org.apache.hadoop.hbase.ipc.ServerRpcController;
+import org.apache.hadoop.hbase.ipc.*;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.RegionState.State;
 import org.apache.hadoop.hbase.master.TableLockManager;
@@ -133,6 +129,9 @@ import org.apache.hadoop.hbase.protobuf.generated.RegionServerStatusProtos.Repor
 import org.apache.hadoop.hbase.protobuf.generated.RegionServerStatusProtos.ReportRegionStateTransitionResponse;
 import org.apache.hadoop.hbase.quotas.RegionServerQuotaManager;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionProgress;
+import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputControllerFactory;
+import org.apache.hadoop.hbase.regionserver.controller.FlushThroughputControllerFactory;
+import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.regionserver.handler.CloseMetaHandler;
 import org.apache.hadoop.hbase.regionserver.handler.CloseRegionHandler;
 import org.apache.hadoop.hbase.regionserver.handler.RegionReplicaFlushHandler;
@@ -195,7 +194,7 @@ import com.google.protobuf.ServiceException;
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.TOOLS)
 @SuppressWarnings("deprecation")
 public class HRegionServer extends HasThread implements
-    RegionServerServices, LastSequenceId {
+    RegionServerServices, LastSequenceId, ConfigurationObserver {
 
   public static final Log LOG = LogFactory.getLog(HRegionServer.class);
 
@@ -476,6 +475,8 @@ public class HRegionServer extends HasThread implements
    */
   protected final ConfigurationManager configurationManager;
 
+  private volatile ThroughputController flushThroughputController;
+
   /**
    * Starts a HRegionServer at the default location.
    * @param conf
@@ -598,7 +599,10 @@ public class HRegionServer extends HasThread implements
     rpcServices.start();
     putUpWebUI();
     this.walRoller = new LogRoller(this, this);
-    this.choreService = new ChoreService(getServerName().toString());
+    int initialCorePoolSize =
+        conf.getInt(HConstants.INITIAL_CORE_POOL_SIZE, HConstants.DEFAULT_INITIAL_CORE_POOL_SIZE);
+    this.choreService = new ChoreService(getServerName().toString(), initialCorePoolSize);
+    this.flushThroughputController = FlushThroughputControllerFactory.create(this, conf);
   }
 
   /*
@@ -726,8 +730,6 @@ public class HRegionServer extends HasThread implements
           HConstants.DEFAULT_THREAD_WAKE_FREQUENCY);
         healthCheckChore = new HealthCheckChore(sleepTime, this, getConfiguration());
       }
-      this.pauseMonitor = new JvmPauseMonitor(conf);
-      pauseMonitor.start();
 
       initializeZooKeeper();
       if (!isStopped() && !isAborted()) {
@@ -864,6 +866,11 @@ public class HRegionServer extends HasThread implements
   private void registerConfigurationObservers() {
     // Registering the compactSplitThread object with the ConfigurationManager.
     configurationManager.registerObserver(this.compactSplitThread);
+    configurationManager.registerObserver(this);
+    RpcServerInterface rpcServer = this.getRpcServer();
+    if(rpcServer instanceof ConfigurationObserver) {
+      configurationManager.registerObserver((ConfigurationObserver)rpcServer);
+    }
   }
 
   /**
@@ -1362,6 +1369,9 @@ public class HRegionServer extends HasThread implements
       this.walFactory = setupWALAndReplication();
       // Init in here rather than in constructor after thread name has been set
       this.metricsRegionServer = new MetricsRegionServer(new MetricsRegionServerWrapperImpl(this));
+      // Now that we have a metrics source, start the pause monitor
+      this.pauseMonitor = new JvmPauseMonitor(conf, metricsRegionServer.getMetricsSource());
+      pauseMonitor.start();
 
       startServiceThreads();
       startHeapMemoryManager();
@@ -2257,6 +2267,10 @@ public class HRegionServer extends HasThread implements
     RegionServerStartupResponse result = null;
     try {
       rpcServices.requestCount.set(0);
+      rpcServices.rpcGetRequestCount.set(0);
+      rpcServices.rpcScanRequestCount.set(0);
+      rpcServices.rpcMultiRequestCount.set(0);
+      rpcServices.rpcMutateRequestCount.set(0);
       LOG.info("reportForDuty to master=" + masterServerName + " with port="
         + rpcServices.isa.getPort() + ", startcode=" + this.startcode);
       long now = EnvironmentEdgeManager.currentTime();
@@ -3320,5 +3334,52 @@ public class HRegionServer extends HasThread implements
   @VisibleForTesting
   public boolean walRollRequestFinished() {
     return this.walRoller.walRollFinished();
+  }
+
+  @Override
+  public ThroughputController getFlushThroughputController() {
+    return flushThroughputController;
+  }
+
+  @Override
+  public double getFlushPressure() {
+    if (getRegionServerAccounting() == null || cacheFlusher == null) {
+      // return 0 during RS initialization
+      return 0.0;
+    }
+    return getRegionServerAccounting().getGlobalMemstoreSize() * 1.0
+        / cacheFlusher.globalMemStoreLimitLowMark;
+  }
+
+  @Override
+  public void onConfigurationChange(Configuration newConf) {
+    ThroughputController old = this.flushThroughputController;
+    if (old != null) {
+      old.stop("configuration change");
+    }
+    this.flushThroughputController = FlushThroughputControllerFactory.create(this, newConf);
+
+    // reconfig Health checker thread.
+    if (isHealthCheckerConfigured()) {
+      HealthCheckChore oldHealthCheckChore = this.healthCheckChore;
+      if (oldHealthCheckChore != null) {
+        oldHealthCheckChore.cancel(true);
+      }
+
+      int sleepTime = this.conf.getInt(HConstants.HEALTH_CHORE_WAKE_FREQ,
+        HConstants.DEFAULT_THREAD_WAKE_FREQUENCY);
+      healthCheckChore = new HealthCheckChore(sleepTime, this, newConf);
+      if (this.healthCheckChore != null) choreService.scheduleChore(healthCheckChore);
+    }
+  }
+
+  @VisibleForTesting
+  public List<Region> getOnlineRegions() {
+    List<Region> allRegions = new ArrayList<Region>();
+    synchronized (this.onlineRegions) {
+      // Return a clone copy of the onlineRegions
+      allRegions.addAll(onlineRegions.values());
+    }
+    return allRegions;
   }
 }

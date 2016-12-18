@@ -88,6 +88,27 @@ public class TestDefaultMemStore extends TestCase {
     assertTrue(Bytes.toString(found.getValue()), CellUtil.matchingValue(samekey, found));
   }
 
+  public void testPutSameCell() {
+    byte[] bytes = Bytes.toBytes(getName());
+    KeyValue kv = new KeyValue(bytes, bytes, bytes, bytes);
+    long sizeChangeForFirstCell = this.memstore.add(kv).getFirst();
+    long sizeChangeForSecondCell = this.memstore.add(kv).getFirst();
+    // make sure memstore size increase won't double-count MSLAB chunk size
+    assertEquals(DefaultMemStore.heapSizeChange(kv, true), sizeChangeForFirstCell);
+    if (this.memstore.allocator != null) {
+      // make sure memstore size increased even when writing the same cell, if using MSLAB
+      assertEquals(memstore.getCellLength(kv), sizeChangeForSecondCell);
+      // make sure chunk size increased even when writing the same cell, if using MSLAB
+      if (this.memstore.allocator instanceof HeapMemStoreLAB) {
+        assertEquals(2 * memstore.getCellLength(kv),
+          ((HeapMemStoreLAB) this.memstore.allocator).getCurrentChunk().getNextFreeOffset());
+      }
+    } else {
+      // make sure no memstore size change w/o MSLAB
+      assertEquals(0, sizeChangeForSecondCell);
+    }
+  }
+
   /**
    * Test memstore snapshot happening while scanning.
    * @throws IOException
@@ -97,8 +118,9 @@ public class TestDefaultMemStore extends TestCase {
     List<KeyValueScanner> memstorescanners = this.memstore.getScanners(0);
     Scan scan = new Scan();
     List<Cell> result = new ArrayList<Cell>();
+    Configuration conf = HBaseConfiguration.create();
     ScanInfo scanInfo =
-        new ScanInfo(null, 0, 1, HConstants.LATEST_TIMESTAMP, KeepDeletedCells.FALSE, 0,
+        new ScanInfo(conf, null, 0, 1, HConstants.LATEST_TIMESTAMP, KeepDeletedCells.FALSE, 0,
             this.memstore.comparator);
     ScanType scanType = ScanType.USER_SCAN;
     StoreScanner s = new StoreScanner(scan, scanInfo, scanType, null, memstorescanners);
@@ -243,8 +265,7 @@ public class TestDefaultMemStore extends TestCase {
     final byte[] q2 = Bytes.toBytes("q2");
     final byte[] v = Bytes.toBytes("value");
 
-    MultiVersionConsistencyControl.WriteEntry w =
-        mvcc.beginMemstoreInsertWithSeqNum(this.startSeqNum.incrementAndGet());
+    MultiVersionConsistencyControl.WriteEntry w = mvcc.beginMemstoreInsert();
 
     KeyValue kv1 = new KeyValue(row, f, q1, v);
     kv1.setSequenceId(w.getWriteNumber());
@@ -258,7 +279,7 @@ public class TestDefaultMemStore extends TestCase {
     s = this.memstore.getScanners(mvcc.memstoreReadPoint()).get(0);
     assertScannerResults(s, new KeyValue[]{kv1});
 
-    w = mvcc.beginMemstoreInsertWithSeqNum(this.startSeqNum.incrementAndGet());
+    w = mvcc.beginMemstoreInsert();
     KeyValue kv2 = new KeyValue(row, f, q2, v);
     kv2.setSequenceId(w.getWriteNumber());
     memstore.add(kv2);
@@ -287,8 +308,7 @@ public class TestDefaultMemStore extends TestCase {
     final byte[] v2 = Bytes.toBytes("value2");
 
     // INSERT 1: Write both columns val1
-    MultiVersionConsistencyControl.WriteEntry w =
-        mvcc.beginMemstoreInsertWithSeqNum(this.startSeqNum.incrementAndGet());
+    MultiVersionConsistencyControl.WriteEntry w = mvcc.beginMemstoreInsert();
 
     KeyValue kv11 = new KeyValue(row, f, q1, v1);
     kv11.setSequenceId(w.getWriteNumber());
@@ -304,7 +324,7 @@ public class TestDefaultMemStore extends TestCase {
     assertScannerResults(s, new KeyValue[]{kv11, kv12});
 
     // START INSERT 2: Write both columns val2
-    w = mvcc.beginMemstoreInsertWithSeqNum(this.startSeqNum.incrementAndGet());
+    w = mvcc.beginMemstoreInsert();
     KeyValue kv21 = new KeyValue(row, f, q1, v2);
     kv21.setSequenceId(w.getWriteNumber());
     memstore.add(kv21);
@@ -339,8 +359,7 @@ public class TestDefaultMemStore extends TestCase {
     final byte[] q2 = Bytes.toBytes("q2");
     final byte[] v1 = Bytes.toBytes("value1");
     // INSERT 1: Write both columns val1
-    MultiVersionConsistencyControl.WriteEntry w =
-        mvcc.beginMemstoreInsertWithSeqNum(this.startSeqNum.incrementAndGet());
+    MultiVersionConsistencyControl.WriteEntry w = mvcc.beginMemstoreInsert();
 
     KeyValue kv11 = new KeyValue(row, f, q1, v1);
     kv11.setSequenceId(w.getWriteNumber());
@@ -356,7 +375,7 @@ public class TestDefaultMemStore extends TestCase {
     assertScannerResults(s, new KeyValue[]{kv11, kv12});
 
     // START DELETE: Insert delete for one of the columns
-    w = mvcc.beginMemstoreInsertWithSeqNum(this.startSeqNum.incrementAndGet());
+    w = mvcc.beginMemstoreInsert();
     KeyValue kvDel = new KeyValue(row, f, q2, kv11.getTimestamp(),
         KeyValue.Type.DeleteColumn);
     kvDel.setSequenceId(w.getWriteNumber());
@@ -385,7 +404,6 @@ public class TestDefaultMemStore extends TestCase {
 
     final MultiVersionConsistencyControl mvcc;
     final MemStore memstore;
-    final AtomicLong startSeqNum;
 
     AtomicReference<Throwable> caughtException;
 
@@ -400,7 +418,6 @@ public class TestDefaultMemStore extends TestCase {
       this.memstore = memstore;
       this.caughtException = caughtException;
       row = Bytes.toBytes(id);
-      this.startSeqNum = startSeqNum;
     }
 
     public void run() {
@@ -413,8 +430,7 @@ public class TestDefaultMemStore extends TestCase {
 
     private void internalRun() throws IOException {
       for (long i = 0; i < NUM_TRIES && caughtException.get() == null; i++) {
-        MultiVersionConsistencyControl.WriteEntry w =
-            mvcc.beginMemstoreInsertWithSeqNum(this.startSeqNum.incrementAndGet());
+        MultiVersionConsistencyControl.WriteEntry w = mvcc.beginMemstoreInsert();
 
         // Insert the sequence value (i)
         byte[] v = Bytes.toBytes(i);
@@ -517,9 +533,10 @@ public class TestDefaultMemStore extends TestCase {
       }
     }
     //starting from each row, validate results should contain the starting row
+    Configuration conf = HBaseConfiguration.create();
     for (int startRowId = 0; startRowId < ROW_COUNT; startRowId++) {
-      ScanInfo scanInfo = new ScanInfo(FAMILY, 0, 1, Integer.MAX_VALUE, KeepDeletedCells.FALSE,
-          0, this.memstore.comparator);
+      ScanInfo scanInfo = new ScanInfo(conf, FAMILY, 0, 1, Integer.MAX_VALUE,
+        KeepDeletedCells.FALSE, 0, this.memstore.comparator);
       ScanType scanType = ScanType.USER_SCAN;
       InternalScanner scanner = new StoreScanner(new Scan(
           Bytes.toBytes(startRowId)), scanInfo, scanType, null,

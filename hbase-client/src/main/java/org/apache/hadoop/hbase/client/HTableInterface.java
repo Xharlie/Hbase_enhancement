@@ -19,6 +19,7 @@
 package org.apache.hadoop.hbase.client;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.util.List;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
@@ -139,11 +140,12 @@ public interface HTableInterface extends Table {
    * This method gets called once automatically for every {@link Put} or batch
    * of {@link Put}s (when <code>put(List<Put>)</code> is used) when
    * {@link #isAutoFlush} is {@code true}.
-   * @throws IOException if a remote or network exception occurs.
+   * @throws RetriesExhaustedException
+   * @throws InterruptedIOException
    * @deprecated as of 1.0.0. Replaced by {@link BufferedMutator#flush()}
    */
   @Deprecated
-  void flushCommits() throws IOException;
+  void flushCommits() throws RetriesExhaustedException, InterruptedIOException;
 
   /**
    * Returns the maximum size in bytes of the write buffer for this HTable.

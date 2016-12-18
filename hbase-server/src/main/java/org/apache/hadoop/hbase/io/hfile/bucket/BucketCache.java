@@ -149,7 +149,6 @@ public class BucketCache implements BlockCache, HeapSize {
   private final AtomicLong heapSize = new AtomicLong(0);
   /** Current number of cached elements */
   private final AtomicLong blockNumber = new AtomicLong(0);
-  private final AtomicLong failedBlockAdditions = new AtomicLong(0);
 
   /** Cache access count (sequential ID) */
   private final AtomicLong accessCount = new AtomicLong(0);
@@ -376,7 +375,7 @@ public class BucketCache implements BlockCache, HeapSize {
     }
     if (!successfulAddition) {
       ramCache.remove(cacheKey);
-      failedBlockAdditions.incrementAndGet();
+      cacheStats.failInsert();
     } else {
       this.blockNumber.incrementAndGet();
       this.heapSize.addAndGet(cachedItem.heapSize());
@@ -395,6 +394,21 @@ public class BucketCache implements BlockCache, HeapSize {
   @Override
   public Cacheable getBlock(BlockCacheKey key, boolean caching, boolean repeat,
       boolean updateCacheMetrics) {
+    return getBlock(key, caching, repeat, updateCacheMetrics, null);
+  }
+
+  /**
+   * Get the buffer of the block with the specified key.
+   * @param key block's cache key
+   * @param caching true if the caller caches blocks on cache misses
+   * @param repeat Whether this is a repeat lookup for the same block
+   * @param updateCacheMetrics Whether we should update cache metrics or not
+   * @param blockType block type of {@link HFileBlock}
+   * @return buffer of specified cache key, or null if not in cache
+   */
+  @Override
+  public Cacheable getBlock(BlockCacheKey key, boolean caching, boolean repeat,
+      boolean updateCacheMetrics, BlockType blockType) {
     if (!cacheEnabled) {
       return null;
     }
@@ -402,6 +416,9 @@ public class BucketCache implements BlockCache, HeapSize {
     if (re != null) {
       if (updateCacheMetrics) {
         cacheStats.hit(caching);
+        if (null != blockType) {
+          cacheStats.hitByBlockType(blockType, caching);
+        }
       }
       re.access(accessCount.incrementAndGet());
       return re.getData();
@@ -423,12 +440,15 @@ public class BucketCache implements BlockCache, HeapSize {
             throw new RuntimeException("Only " + lenRead + " bytes read, " + len + " expected");
           }
           CacheableDeserializer<Cacheable> deserializer =
-            bucketEntry.deserializerReference(this.deserialiserMap);
+              bucketEntry.deserializerReference(this.deserialiserMap);
           Cacheable cachedBlock = deserializer.deserialize(bb, true);
           long timeTaken = System.nanoTime() - start;
           if (updateCacheMetrics) {
             cacheStats.hit(caching);
             cacheStats.ioHit(timeTaken);
+            if (null != blockType) {
+              cacheStats.hitByBlockType(blockType, caching);
+            }
           }
           bucketEntry.access(accessCount.incrementAndGet());
           if (this.ioErrorStartTime > 0) {
@@ -447,6 +467,9 @@ public class BucketCache implements BlockCache, HeapSize {
     }
     if (!repeat && updateCacheMetrics) {
       cacheStats.miss(caching);
+      if (null != blockType) {
+        cacheStats.missByBlockType(blockType, caching);
+      }
     }
     return null;
   }
@@ -523,7 +546,7 @@ public class BucketCache implements BlockCache, HeapSize {
     long usedSize = bucketAllocator.getUsedSize();
     long freeSize = totalSize - usedSize;
     long cacheSize = getRealCacheSize();
-    LOG.info("failedBlockAdditions=" + getFailedBlockAdditions() + ", " +
+    LOG.info("failedBlockAdditions=" + cacheStats.getFailedInserts() + ", " +
         "totalSize=" + StringUtils.byteDesc(totalSize) + ", " +
         "freeSize=" + StringUtils.byteDesc(freeSize) + ", " +
         "usedSize=" + StringUtils.byteDesc(usedSize) +", " +
@@ -542,10 +565,6 @@ public class BucketCache implements BlockCache, HeapSize {
         "evicted=" + cacheStats.getEvictedCount() + ", " +
         "evictedPerRun=" + cacheStats.evictedPerEviction());
     cacheStats.reset();
-  }
-
-  public long getFailedBlockAdditions() {
-    return this.failedBlockAdditions.get();
   }
 
   public long getRealCacheSize() {
@@ -869,7 +888,7 @@ public class BucketCache implements BlockCache, HeapSize {
   /**
    * Blocks until elements available in <code>q</code> then tries to grab as many as possible
    * before returning.
-   * @param recepticle Where to stash the elements taken from queue. We clear before we use it
+   * @param receptical Where to stash the elements taken from queue. We clear before we use it
    * just in case.
    * @param q The queue to take from.
    * @return <code>receptical laden with elements taken from the queue or empty if none found.

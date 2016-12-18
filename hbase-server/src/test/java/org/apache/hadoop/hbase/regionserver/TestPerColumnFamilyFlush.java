@@ -55,6 +55,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVMClusterUtil;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.wal.WAL;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
@@ -417,7 +418,7 @@ public class TestPerColumnFamilyFlush {
   // In distributed log replay, the log splitters ask the master for the
   // last flushed sequence id for a region. This test would ensure that we
   // are doing the book-keeping correctly.
-  @Test(timeout = 180000)
+  @Ignore("DLR is broken by HBASE-12751") @Test(timeout = 180000)
   public void testLogReplayWithDistributedReplay() throws Exception {
     TEST_UTIL.getConfiguration().setBoolean(HConstants.DISTRIBUTED_LOG_REPLAY_KEY, true);
     doTestLogReplay();
@@ -571,7 +572,6 @@ public class TestPerColumnFamilyFlush {
     Configuration conf = TEST_UTIL.getConfiguration();
     conf.setLong(HConstants.HREGION_MEMSTORE_FLUSH_SIZE, memstoreFlushSize);
     conf.set(FlushPolicyFactory.HBASE_FLUSH_POLICY_KEY, FlushAllStoresPolicy.class.getName());
-    conf.setLong(FlushLargeStoresPolicy.HREGION_COLUMNFAMILY_FLUSH_SIZE_LOWER_BOUND, 400 * 1024);
     conf.setInt(HStore.BLOCKING_STOREFILES_KEY, 10000);
     conf.set(HConstants.HBASE_REGION_SPLIT_POLICY_KEY,
       ConstantSizeRegionSplitPolicy.class.getName());
@@ -611,6 +611,8 @@ public class TestPerColumnFamilyFlush {
 
     LOG.info("==============Test with selective flush enabled===============");
     conf.set(FlushPolicyFactory.HBASE_FLUSH_POLICY_KEY, FlushLargeStoresPolicy.class.getName());
+    // default value of per-cf flush lower bound is too big, set to a small enough value
+    conf.setLong(FlushLargeStoresPolicy.HREGION_COLUMNFAMILY_FLUSH_SIZE_LOWER_BOUND, 0);
     try {
       TEST_UTIL.startMiniCluster(1);
       TEST_UTIL.getHBaseAdmin().createNamespace(

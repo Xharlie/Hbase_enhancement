@@ -59,6 +59,19 @@ public interface BlockCache extends Iterable<CachedBlock> {
     boolean updateCacheMetrics);
 
   /**
+   * Fetch block from cache
+   * @param cacheKey Block to fetch.
+   * @param caching Whether this request has caching enabled (used for stats)
+   * @param repeat Whether this is a repeat lookup for the same block
+   *          (used to avoid double counting cache misses when doing double-check locking)
+   * @param updateCacheMetrics Whether to update cache metrics or not
+   * @param blockType block type of {@link HFileBlock}
+   * @return Block or null if block is not in 2 cache.
+   */
+  Cacheable getBlock(BlockCacheKey cacheKey, boolean caching, boolean repeat,
+      boolean updateCacheMetrics, BlockType blockType);
+
+  /**
    * Evict block from cache.
    * @param cacheKey Block to evict
    * @return true if block existed and was evicted, false if not

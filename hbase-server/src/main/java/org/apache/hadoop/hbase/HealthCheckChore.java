@@ -21,6 +21,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HealthChecker.HealthCheckerExitStatus;
+import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -42,8 +43,21 @@ public class HealthCheckChore extends ScheduledChore {
     String healthCheckScript = this.config.get(HConstants.HEALTH_SCRIPT_LOC);
     long scriptTimeout = this.config.getLong(HConstants.HEALTH_SCRIPT_TIMEOUT,
       HConstants.DEFAULT_HEALTH_SCRIPT_TIMEOUT);
+    int threadPoolSize = this.config.getInt(HConstants.HEALTH_THREAD_POOL_SIZE, HConstants.DEFAULT_HEALTH_THREAD_POOL_SIZE);
+    float failedThreshold = this.config.getFloat(HConstants.HEALTH_FAILED_THRESHOLD, HConstants.DEFAULT_HEALTH_FAILED_THRESHOLD);
+    int sampledRegionCount = this.config.getInt(HConstants.HEALTH_SAMPLED_REGION_COUNT, HConstants.DEFAULT_HEALTH_SAMPLED_REGION_COUNT);
+    long scanTimeout = this.config.getLong(HConstants.HEALTH_SCAN_TIMEOUT, HConstants.DEFAULT_HEALTH_SCAN_TIMEOUT);
+    String currentServerName = "localhost";
+    if (stopper instanceof HRegionServer) {
+      currentServerName = ((HRegionServer)stopper).getServerName().getServerName();
+    }
     healthChecker = new HealthChecker();
-    healthChecker.init(healthCheckScript, scriptTimeout);
+    healthChecker.init(healthCheckScript, scriptTimeout,
+        new Integer(threadPoolSize),
+        new Float(failedThreshold),
+        new Integer(sampledRegionCount),
+        new Long(scanTimeout),
+        currentServerName);
     this.threshold = config.getInt(HConstants.HEALTH_FAILURE_THRESHOLD,
       HConstants.DEFAULT_HEALTH_FAILURE_THRESHOLD);
     this.failureWindow = (long)this.threshold * (long)sleepTime;

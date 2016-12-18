@@ -40,6 +40,7 @@ public final class ByteBufferUtils {
   private final static int VALUE_MASK = 0x7f;
   private final static int NEXT_BIT_SHIFT = 7;
   private final static int NEXT_BIT_MASK = 1 << 7;
+  private static final boolean UNSAFE_UNALIGNED = UnsafeAccess.unaligned();
 
   private ByteBufferUtils() {
   }
@@ -507,5 +508,19 @@ public final class ByteBufferUtils {
       }
     }
     return len1 - len2;
+  }
+
+  /**
+   * Reads an int value at the given buffer's offset.
+   * @param buffer
+   * @param offset
+   * @return int value at offset
+   */
+  public static int toInt(ByteBuffer buffer, int offset) {
+    if (UNSAFE_UNALIGNED) {
+      return UnsafeAccess.toInt(buffer, offset);
+    } else {
+      return buffer.getInt(offset);
+    }
   }
 }

@@ -264,7 +264,7 @@ public class HFileReaderV2 extends AbstractHFileReader {
      if (cacheConf.isBlockCacheEnabled()) {
        BlockCache cache = cacheConf.getBlockCache();
        HFileBlock cachedBlock = (HFileBlock) cache.getBlock(cacheKey, cacheBlock, useLock,
-         updateCacheMetrics);
+         updateCacheMetrics, expectedBlockType);
        if (cachedBlock != null) {
          if (cacheConf.shouldCacheCompressed(cachedBlock.getBlockType().getCategory())) {
            cachedBlock = cachedBlock.unpack(hfileContext, fsBlockReader);
@@ -334,7 +334,10 @@ public class HFileReaderV2 extends AbstractHFileReader {
     if (block == -1)
       return null;
     long blockSize = metaBlockIndexReader.getRootBlockDataSize(block);
+    long deltaTime = -1L;
+    long startTimeNs = System.nanoTime();
 
+    try{
     // Per meta key from any given file, synchronize reads for said block. This
     // is OK to do for meta blocks because the meta block index is always
     // single-level.
@@ -359,6 +362,8 @@ public class HFileReaderV2 extends AbstractHFileReader {
       HFileBlock metaBlock = fsBlockReader.readBlockData(metaBlockOffset,
           blockSize, -1, true).unpack(hfileContext, fsBlockReader);
 
+      deltaTime = System.nanoTime() - startTimeNs;
+
       // Cache the block
       if (cacheBlock) {
         cacheConf.getBlockCache().cacheBlock(cacheKey, metaBlock,
@@ -366,6 +371,11 @@ public class HFileReaderV2 extends AbstractHFileReader {
       }
 
       return metaBlock.getBufferWithoutHeader();
+    }
+    } finally {
+      if (deltaTime > 0) {
+        hfileMetrics.updateFsReadTime(deltaTime, true);
+      }
     }
   }
 
@@ -391,6 +401,7 @@ public class HFileReaderV2 extends AbstractHFileReader {
     boolean useLock = false;
     IdLock.Entry lockEntry = null;
     TraceScope traceScope = Trace.startSpan("HFileReaderV2.readBlock");
+    long deltaTimeNs = -1L;
     try {
       while (true) {
         // Check cache for block. If found return.
@@ -434,11 +445,14 @@ public class HFileReaderV2 extends AbstractHFileReader {
           traceScope.getSpan().addTimelineAnnotation("blockCacheMiss");
         }
         // Load block from filesystem.
+        long startTimeNs = System.nanoTime();
         HFileBlock hfileBlock = fsBlockReader.readBlockData(dataBlockOffset, onDiskBlockSize, -1,
             pread);
         validateBlockType(hfileBlock, expectedBlockType);
         HFileBlock unpacked = hfileBlock.unpack(hfileContext, fsBlockReader);
         BlockType.BlockCategory category = hfileBlock.getBlockType().getCategory();
+
+        deltaTimeNs = System.nanoTime() - startTimeNs;
 
         // Cache the block if necessary
         if (cacheBlock && cacheConf.shouldCacheBlockOnRead(category)) {
@@ -457,6 +471,9 @@ public class HFileReaderV2 extends AbstractHFileReader {
       traceScope.close();
       if (lockEntry != null) {
         offsetLock.releaseLockEntry(lockEntry);
+      }
+      if (deltaTimeNs > 0) {
+        hfileMetrics.updateFsReadTime(deltaTimeNs, pread);
       }
     }
   }

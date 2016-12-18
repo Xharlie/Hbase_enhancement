@@ -420,7 +420,7 @@ public class AsyncRpcChannel {
         requestHeaderBuilder.setCellBlockMeta(cellBlockBuilder.build());
       }
       // Only pass priority if there one.  Let zero be same as no priority.
-      if (call.controller.getPriority() != 0) {
+      if (call.controller.getPriority() != PayloadCarryingRpcController.PRIORITY_UNSET) {
         requestHeaderBuilder.setPriority(call.controller.getPriority());
       }
 
@@ -670,6 +670,7 @@ public class AsyncRpcChannel {
   private void handleSaslConnectionFailure(final int currRetries, final Throwable ex,
       final UserGroupInformation user) throws IOException, InterruptedException {
     user.doAs(new PrivilegedExceptionAction<Void>() {
+      @Override
       public Void run() throws IOException, InterruptedException {
         if (shouldAuthenticateOverKrb()) {
           if (currRetries < MAX_SASL_RETRIES) {
@@ -712,6 +713,21 @@ public class AsyncRpcChannel {
   public int getConnectionHashCode() {
     return ConnectionId.hashCode(ticket, serviceName, address);
   }
+
+  @Override
+  public int hashCode() {
+    return getConnectionHashCode();
+  }
+
+  @Override
+  public boolean equals(Object obj) {
+    if (obj instanceof AsyncRpcChannel) {
+      AsyncRpcChannel channel = (AsyncRpcChannel) obj;
+      return channel.hashCode() == obj.hashCode();
+    }
+    return false;
+  }
+
 
   @Override
   public String toString() {

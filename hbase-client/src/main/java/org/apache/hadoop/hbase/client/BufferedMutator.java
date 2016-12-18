@@ -25,6 +25,7 @@ import org.apache.hadoop.hbase.classification.InterfaceStability;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.util.List;
 
 /**
@@ -81,9 +82,11 @@ public interface BufferedMutator extends Closeable {
    * wire as part of a batch. Currently only supports {@link Put} and {@link Delete} mutations.
    *
    * @param mutation The data to send.
-   * @throws IOException if a remote or network exception occurs.
+   * @throws InterruptedIOException if we were interrupted.
+   * @throws RetriesExhaustedWithDetailsException if there is an error on the cluster.
    */
-  void mutate(Mutation mutation) throws IOException;
+  void mutate(Mutation mutation) throws InterruptedIOException,
+      RetriesExhaustedWithDetailsException;
 
   /**
    * Send some {@link Mutation}s to the table. The mutations will be buffered and sent over the
@@ -91,9 +94,11 @@ public interface BufferedMutator extends Closeable {
    * in a single batch; it will be broken up according to the write buffer capacity.
    *
    * @param mutations The data to send.
-   * @throws IOException if a remote or network exception occurs.
+   * @throws InterruptedIOException if we were interrupted.
+   * @throws RetriesExhaustedWithDetailsException if there is an error on the cluster.
    */
-  void mutate(List<? extends Mutation> mutations) throws IOException;
+  void mutate(List<? extends Mutation> mutations) throws InterruptedIOException,
+      RetriesExhaustedWithDetailsException;
 
   /**
    * Performs a {@link #flush()} and releases any resources held.
@@ -107,9 +112,10 @@ public interface BufferedMutator extends Closeable {
    * Executes all the buffered, asynchronous {@link Mutation} operations and waits until they
    * are done.
    *
-   * @throws IOException if a remote or network exception occurs.
+   * @throws InterruptedIOException
+   * @throws {@link RetriesExhaustedWithDetailsException}
    */
-  void flush() throws IOException;
+  void flush() throws InterruptedIOException, RetriesExhaustedWithDetailsException;
 
   /**
    * Returns the maximum size in bytes of the write buffer for this HTable.

@@ -82,7 +82,7 @@ public class TestDelayedRpc {
     TestDelayedImplementation instance = new TestDelayedImplementation(delayReturnValue);
     BlockingService service =
       TestDelayedRpcProtos.TestDelayedService.newReflectiveBlockingService(instance);
-    rpcServer = new RpcServer(null, "testDelayedRpc",
+    rpcServer = RpcServerFactory.createServer(null, "testDelayedRpc",
         Lists.newArrayList(new RpcServer.BlockingServiceAndInterface(service, null)),
         isa,
         conf,
@@ -164,7 +164,7 @@ public class TestDelayedRpc {
     TestDelayedImplementation instance = new TestDelayedImplementation(true);
     BlockingService service =
       TestDelayedRpcProtos.TestDelayedService.newReflectiveBlockingService(instance);
-    rpcServer = new RpcServer(null, "testTooManyDelayedRpcs",
+    rpcServer = RpcServerFactory.createServer(null, "testTooManyDelayedRpcs",
       Lists.newArrayList(new RpcServer.BlockingServiceAndInterface(service, null)),
         isa,
         conf,
@@ -288,7 +288,7 @@ public class TestDelayedRpc {
     FaultyTestDelayedImplementation instance = new FaultyTestDelayedImplementation();
     BlockingService service =
       TestDelayedRpcProtos.TestDelayedService.newReflectiveBlockingService(instance);
-    rpcServer = new RpcServer(null, "testEndDelayThrowing",
+    rpcServer = RpcServerFactory.createServer(null, "testEndDelayThrowing",
         Lists.newArrayList(new RpcServer.BlockingServiceAndInterface(service, null)),
         isa,
         conf,

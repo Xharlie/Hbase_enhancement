@@ -15,7 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.hadoop.hbase.regionserver.compactions;
+package org.apache.hadoop.hbase.regionserver.controller;
 
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.Stoppable;
@@ -23,11 +23,11 @@ import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.regionserver.RegionServerServices;
 
 /**
- * A utility that constrains the total throughput of one or more simultaneous flows (compactions) by
+ * A utility that constrains the total throughput of one or more simultaneous flows by
  * sleeping when necessary.
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.CONFIG)
-public interface CompactionThroughputController extends Stoppable {
+public interface ThroughputController extends Stoppable {
 
   /**
    * Setup controller for the given region server.
@@ -35,18 +35,18 @@ public interface CompactionThroughputController extends Stoppable {
   void setup(RegionServerServices server);
 
   /**
-   * Start a compaction.
+   * Start the throughput controller.
    */
-  void start(String compactionName);
+  void start(String name);
 
   /**
-   * Control the compaction throughput. Will sleep if too fast.
+   * Control the throughput. Will sleep if too fast.
    * @return the actual sleep time.
    */
-  long control(String compactionName, long size) throws InterruptedException;
+  long control(String name, long size) throws InterruptedException;
 
   /**
-   * Finish a compaction. Should call this method in a finally block.
+   * Finish the controller. Should call this method in a finally block.
    */
-  void finish(String compactionName);
+  void finish(String name);
 }

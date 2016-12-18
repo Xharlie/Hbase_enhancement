@@ -22,6 +22,7 @@ package org.apache.hadoop.hbase.client;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.io.IOException;
 import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.util.Random;
@@ -137,7 +138,8 @@ public class TestClientTimeouts {
     // Return my own instance, one that does random timeouts
     @Override
     public BlockingRpcChannel createBlockingRpcChannel(ServerName sn,
-        User ticket, int rpcTimeout) {
+        User ticket, int rpcTimeout)
+        throws IOException {
       return new RandomTimeoutBlockingRpcChannel(this, sn, ticket, rpcTimeout);
     }
   }
@@ -152,7 +154,8 @@ public class TestClientTimeouts {
     private static AtomicInteger invokations = new AtomicInteger();
 
     RandomTimeoutBlockingRpcChannel(final RpcClientImpl rpcClient, final ServerName sn,
-        final User ticket, final int rpcTimeout) {
+        final User ticket, final int rpcTimeout)
+        throws IOException {
       super(rpcClient, sn, ticket, rpcTimeout);
     }
 

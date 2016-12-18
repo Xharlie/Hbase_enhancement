@@ -1495,6 +1495,15 @@ public class KeyValue implements Cell, HeapSize, Cloneable, SettableSequenceId, 
     Bytes.putBytes(this.bytes, this.getTimestampOffset(), ts, tsOffset, Bytes.SIZEOF_LONG);
   }
 
+  /**
+   * for pre-0.94 users
+   * @deprecated ATTENTION: Not for value
+   * @return True if column name is empty.
+   */
+  public boolean isEmptyColumn() {
+    return getQualifierLength() == 0;
+  }
+
   //---------------------------------------------------------------------------
   //
   //  Methods that return copies of fields
@@ -2500,18 +2509,9 @@ public class KeyValue implements Cell, HeapSize, Cloneable, SettableSequenceId, 
    * @throws IOException
    */
   public static KeyValue iscreate(final InputStream in) throws IOException {
-    byte [] intBytes = new byte[Bytes.SIZEOF_INT];
-    int bytesRead = 0;
-    while (bytesRead < intBytes.length) {
-      int n = in.read(intBytes, bytesRead, intBytes.length - bytesRead);
-      if (n < 0) {
-        if (bytesRead == 0) return null; // EOF at start is ok
-        throw new IOException("Failed read of int, read " + bytesRead + " bytes");
-      }
-      bytesRead += n;
-    }
+    int len = StreamUtils.readInt(in);
     // TODO: perhaps some sanity check is needed here.
-    byte [] bytes = new byte[Bytes.toInt(intBytes)];
+    byte[] bytes = new byte[len];
     IOUtils.readFully(in, bytes, 0, bytes.length);
     return new KeyValue(bytes, 0, bytes.length);
   }

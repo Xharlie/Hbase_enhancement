@@ -32,6 +32,11 @@ public interface MetricsThriftServerSource extends BaseSource {
   String SLOW_THRIFT_CALL_KEY = "slowThriftCall";
   String CALL_QUEUE_LEN_KEY = "callQueueLen";
 
+  String TABLE_SCANNER_NUM_KEY = "tableScannerNum";
+  String MESSAGE_SCANNER_NUM_KEY = "messageScannerNum";
+  String PARTITION_SCANNER_NUM_KEY = "partitionScannerNum";
+  String QUEUE_SCANNER_NUM_KEY = "queueScannerNum";
+
   /**
    * Add how long an operation was in the queue.
    * @param time
@@ -75,4 +80,27 @@ public interface MetricsThriftServerSource extends BaseSource {
    */
   void incSlowCall(long time);
 
+  /**
+   * Set the number of table scanner.
+   * @param value num
+   */
+  public void setTableScannerNum(long value);
+
+  /**
+   * Set the number of message scanner.
+   * @param value num
+   */
+  public void setMessageScannerNum(long value);
+
+  /**
+   * Set the number of partition scanner.
+   * @param value num
+   */
+  public void setPartitionScannerNum(long value);
+
+  /**
+   * Set the number of queue scanner.
+   * @param value num
+   */
+  public void setQueueScannerNum(long value);
 }

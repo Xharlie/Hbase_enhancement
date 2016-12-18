@@ -652,6 +652,16 @@ public final class HConstants {
   public static final long DEFAULT_HBASE_CLIENT_PAUSE = 100;
 
   /**
+   * Parameter name for client pause value for special case such as call queue too big, etc.
+   */
+  public static final String HBASE_CLIENT_PAUSE_SPECIAL_CASE = "hbase.client.pause.special";
+
+  /**
+   * Default value of {@link #HBASE_CLIENT_PAUSE_SPECIAL_CASE}.
+   */
+  public static final long DEFAULT_HBASE_CLIENT_PAUSE_SPECIAL_CASE = 1000;
+
+  /**
    * The maximum number of concurrent connections the client will maintain.
    */
   public static final String HBASE_CLIENT_MAX_TOTAL_TASKS = "hbase.client.max.total.tasks";
@@ -705,6 +715,21 @@ public final class HConstants {
    * Default value of {@link #HBASE_CLIENT_RETRIES_NUMBER}.
    */
   public static final int DEFAULT_HBASE_CLIENT_RETRIES_NUMBER = 31;
+
+  /**
+   * Parameter name for client prefetch limit, used as the maximum number of regions
+   * info that will be prefetched.
+   * for pre-0.94 users Parameter name for maximum attempts, used to limit the number of times the
+   * client will try to obtain the proxy for a given region server.
+   */
+  @Deprecated
+  public static String HBASE_CLIENT_RPC_MAXATTEMPTS = "hbase.client.rpc.maxattempts";
+
+  /**
+   * Default value of {@link #HBASE_CLIENT_RPC_MAXATTEMPTS}.
+   */
+  @Deprecated
+  public static int DEFAULT_HBASE_CLIENT_RPC_MAXATTEMPTS = 1;
 
   /**
    * Parameter name to set the default scanner caching for all clients.
@@ -1026,6 +1051,15 @@ public final class HConstants {
   public static final String HEALTH_CHORE_WAKE_FREQ =
       "hbase.node.health.script.frequency";
   public static final long DEFAULT_HEALTH_SCRIPT_TIMEOUT = 60000;
+  /** Health Check agent related settings. */
+  public static final String HEALTH_THREAD_POOL_SIZE = "hbase.regionserver.healthcheck.thread.pool.size";
+  public static final String HEALTH_FAILED_THRESHOLD = "hbase.regionserver.healthcheck.failed.threshold";
+  public static final String HEALTH_SAMPLED_REGION_COUNT = "hbase.regionserver.healthcheck.sampled.region.count";
+  public static final String HEALTH_SCAN_TIMEOUT = "hbase.regionserver.healthcheck.scan.timeout";
+  public static final int DEFAULT_HEALTH_THREAD_POOL_SIZE = 60000;
+  public static final float DEFAULT_HEALTH_FAILED_THRESHOLD = 0.8f;
+  public static final int DEFAULT_HEALTH_SAMPLED_REGION_COUNT = 20;
+  public static final long DEFAULT_HEALTH_SCAN_TIMEOUT = 20000;
   /**
    * The maximum number of health check failures a server can encounter consecutively.
    */
@@ -1181,6 +1215,19 @@ public final class HConstants {
    */
   public static final String REGION_SPLIT_THREADS_MAX =
     "hbase.regionserver.region.split.threads.max";
+
+  /** Config key for hbase temporary directory in hdfs */
+  public static final String TEMPORARY_HDFS_DIRECTORY_KEY = "hbase.fs.tmp.dir";
+  public static final String DEFAULT_TEMPORARY_HDFS_DIRECTORY = "/tmp/hbase-staging";
+
+  /** Config key for whether enable cluster availability flag **/
+  public static final String HBASE_CLIENT_CLUSTER_AVAILABILITY = "hbase.client.cluster.availability";
+  public static final boolean DEFAULT_USE_CLUSTER_AVAILABILITY = true;
+
+  /** Config key for initial core pool size of the server chore service */
+  public static final String INITIAL_CORE_POOL_SIZE = "hbase.server.chore.corepoolsize.initial";
+  /** Set default to 5 since chores such as HFileCleaner and LogCleaner may be time costing */
+  public static final int DEFAULT_INITIAL_CORE_POOL_SIZE = 5;
 
   private HConstants() {
     // Can't be instantiated with this ctor.

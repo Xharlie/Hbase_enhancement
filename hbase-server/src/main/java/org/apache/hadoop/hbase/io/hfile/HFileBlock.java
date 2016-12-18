@@ -27,6 +27,8 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.Path;
@@ -154,6 +156,11 @@ public class HFileBlock implements Cacheable {
     deserializerIdentifier = CacheableDeserializerIdManager
         .registerDeserializer(blockDeserializer);
   }
+
+  // allocation size threshold for detailed logging, 512MB is considered abnormally large
+  private static final long ALLOCATE_BUFFER_DETAIL_LOG_THRESHOLD = 512 * 1024 * 1024L;
+
+  private static final Log LOG = LogFactory.getLog(HFileBlock.class);
 
   /** Type of block. Header field 0. */
   private BlockType blockType;
@@ -517,7 +524,7 @@ public class HFileBlock implements Cacheable {
     }
 
     HFileBlock unpacked = new HFileBlock(this);
-    unpacked.allocateBuffer(); // allocates space for the decompressed block
+    unpacked.allocateBuffer(reader); // allocates space for the decompressed block
 
     HFileBlockDecodingContext ctx = blockType == BlockType.ENCODED_DATA ?
       reader.getBlockDecodingContext() : reader.getDefaultBlockDecodingContext();
@@ -560,13 +567,29 @@ public class HFileBlock implements Cacheable {
    * Always allocates a new buffer of the correct size. Copies header bytes
    * from the existing buffer. Does not change header fields.
    * Reserve room to keep checksum bytes too.
+   * @param reader Reader of the HFile, passed for logging purpose
    */
-  private void allocateBuffer() {
+  private void allocateBuffer(FSReader reader) {
     int cksumBytes = totalChecksumBytes();
     int headerSize = headerSize();
     int capacityNeeded = headerSize + uncompressedSizeWithoutHeader +
         cksumBytes + (hasNextBlockHeader() ? headerSize : 0);
 
+    if (capacityNeeded >= ALLOCATE_BUFFER_DETAIL_LOG_THRESHOLD) {
+      StringBuilder warningMsg = new StringBuilder();
+      warningMsg.append("Allocating large array with length: ").append(capacityNeeded)
+          .append("; Header size: ").append(headerSize).append("; Uncompressed size w/o header: ")
+          .append(uncompressedSizeWithoutHeader).append("; Checksum size: ").append(cksumBytes)
+          .append("; Block type: ").append(blockType).append("; Block offset: ").append(offset);
+      if (reader instanceof AbstractFSReader) {
+        // We expect to get table/region information from the file path
+        warningMsg.append("; Path of the hfile containing current block: ").append(
+          ((AbstractFSReader) reader).path);
+      } else {
+        warningMsg.append("; FSReader: ").append(reader);
+      }
+      LOG.warn(warningMsg);
+    }
     // TODO we need consider allocating offheap here?
     ByteBuffer newBuf = ByteBuffer.allocate(capacityNeeded);
 

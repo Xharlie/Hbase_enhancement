@@ -104,14 +104,14 @@ public class TestReversibleScanners {
           TEST_UTIL.getConfiguration(), cacheConf, BloomType.NONE);
 
       List<StoreFileScanner> scanners = StoreFileScanner
-          .getScannersForStoreFiles(Collections.singletonList(sf), false, true,
-              false, Long.MAX_VALUE);
+          .getScannersForStoreFiles(Collections.singletonList(sf),
+              false, true, false, false, Long.MAX_VALUE);
       StoreFileScanner scanner = scanners.get(0);
       seekTestOfReversibleKeyValueScanner(scanner);
       for (int readPoint = 0; readPoint < MAXMVCC; readPoint++) {
         LOG.info("Setting read point to " + readPoint);
         scanners = StoreFileScanner.getScannersForStoreFiles(
-            Collections.singletonList(sf), false, true, false, readPoint);
+            Collections.singletonList(sf), false, true, false, false, readPoint);
         seekTestOfReversibleKeyValueScannerWithMVCC(scanners.get(0), readPoint);
       }
     }
@@ -251,8 +251,9 @@ public class TestReversibleScanners {
         TEST_UTIL.getConfiguration(), cacheConf, BloomType.NONE);
 
     ScanType scanType = ScanType.USER_SCAN;
-    ScanInfo scanInfo = new ScanInfo(FAMILYNAME, 0, Integer.MAX_VALUE,
-        Long.MAX_VALUE, KeepDeletedCells.FALSE, 0, KeyValue.COMPARATOR);
+    ScanInfo scanInfo =
+        new ScanInfo(TEST_UTIL.getConfiguration(), FAMILYNAME, 0, Integer.MAX_VALUE,
+            Long.MAX_VALUE, KeepDeletedCells.FALSE, 0, KeyValue.COMPARATOR);
 
     // Case 1.Test a full reversed scan
     Scan scan = new Scan();
@@ -493,7 +494,7 @@ public class TestReversibleScanners {
       throws IOException {
     List<StoreFileScanner> fileScanners = StoreFileScanner
         .getScannersForStoreFiles(Lists.newArrayList(sf1, sf2), false, true,
-            false, readPoint);
+            false, false, readPoint);
     List<KeyValueScanner> memScanners = memstore.getScanners(readPoint);
     List<KeyValueScanner> scanners = new ArrayList<KeyValueScanner>(
         fileScanners.size() + 1);

@@ -39,6 +39,7 @@ import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.security.access.Permission;
 import org.apache.hadoop.hbase.security.visibility.CellVisibility;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.ClassSize;
 
 /**
  * Used to perform Put operations for a single row.
@@ -50,6 +51,20 @@ import org.apache.hadoop.hbase.util.Bytes;
 @InterfaceAudience.Public
 @InterfaceStability.Stable
 public class Put extends Mutation implements HeapSize, Comparable<Row> {
+  /**
+   * for pre-0.94 users
+   * @deprecated
+   */
+  private static final long OVERHEAD = ClassSize.align(ClassSize.OBJECT + 2 * ClassSize.REFERENCE
+      + 2 * Bytes.SIZEOF_LONG + Bytes.SIZEOF_BOOLEAN + ClassSize.REFERENCE + ClassSize.TREEMAP);
+
+  /**
+   * for pre-0.94 users
+   * @deprecated use {@link Put(byte[] row)}
+   */
+  public Put() {
+  }
+
   /**
    * Create a Put operation for the specified row.
    * @param row row key
@@ -518,5 +533,38 @@ public class Put extends Mutation implements HeapSize, Comparable<Row> {
   @Override
   public Put setTTL(long ttl) {
     return (Put) super.setTTL(ttl);
+  }
+
+  /**
+   * for pre-0.94 users
+   * @deprecated
+   */
+  public long heapSize() {
+    long heapsize = OVERHEAD;
+    // Adding row
+    heapsize += ClassSize.align(ClassSize.ARRAY + this.row.length);
+
+    // Adding map overhead
+    heapsize += ClassSize.align(this.familyMap.size() * ClassSize.MAP_ENTRY);
+    for (Map.Entry<byte[], List<Cell>> entry : this.familyMap.entrySet()) {
+      // Adding key overhead
+      heapsize += ClassSize.align(ClassSize.ARRAY + entry.getKey().length);
+
+      // This part is kinds tricky since the JVM can reuse references if you
+      // store the same value, but have a good match with SizeOf at the moment
+      // Adding value overhead
+      heapsize += ClassSize.align(ClassSize.ARRAYLIST);
+      int size = entry.getValue().size();
+      heapsize += ClassSize.align(ClassSize.ARRAY + size * ClassSize.REFERENCE);
+
+      for (Cell kv : entry.getValue()) {
+        if (kv instanceof KeyValue) {
+          heapsize += ((KeyValue) kv).heapSize();
+        }
+      }
+    }
+    heapsize += getAttributeSize();
+
+    return ClassSize.align((int) heapsize);
   }
 }

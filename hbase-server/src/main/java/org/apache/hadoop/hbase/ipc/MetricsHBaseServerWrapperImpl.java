@@ -36,7 +36,12 @@ public class MetricsHBaseServerWrapperImpl implements MetricsHBaseServerWrapper 
     if (!isServerStarted()) {
       return 0;
     }
-    return server.callQueueSize.get();
+    return server.getTotalQueueSize();
+  }
+
+  @Override
+  public long getResponseQueueSize() {
+    return server.getResponseQueueSize();
   }
 
   @Override
@@ -65,10 +70,10 @@ public class MetricsHBaseServerWrapperImpl implements MetricsHBaseServerWrapper 
 
   @Override
   public int getNumOpenConnections() {
-    if (!isServerStarted() || this.server.connectionList == null) {
+    if (!isServerStarted()) {
       return 0;
     }
-    return server.connectionList.size();
+    return server.getNumOpenConnections();
   }
 
   @Override
@@ -77,5 +82,10 @@ public class MetricsHBaseServerWrapperImpl implements MetricsHBaseServerWrapper 
       return 0;
     }
     return server.getScheduler().getActiveRpcHandlerCount();
+  }
+
+  @Override
+  public int getResponseQueueLength() {
+    return server.getResponseQueueLength();
   }
 }

@@ -20,10 +20,12 @@ package org.apache.hadoop.hbase.codec;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PushbackInputStream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.io.ByteBufferInputStream;
 import org.apache.hadoop.hbase.Cell;
 
 /**
@@ -33,26 +35,56 @@ import org.apache.hadoop.hbase.Cell;
 public abstract class BaseDecoder implements Codec.Decoder {
   protected static final Log LOG = LogFactory.getLog(BaseDecoder.class);
   protected final InputStream in;
-  private boolean hasNext = true;
   private Cell current = null;
+  private final boolean remainAwareIS;
+
+  // Notice: we partially back-ported changes on BaseDecoder from HBASE-14501
+  protected static class PBIS extends PushbackInputStream {
+    public PBIS(InputStream in, int size) {
+      super(in, size);
+    }
+
+    public void resetBuf(int size) {
+      this.buf = new byte[size];
+      this.pos = size;
+    }
+  }
 
   public BaseDecoder(final InputStream in) {
-    this.in = in;
+    if (in instanceof ByteBufferInputStream) {
+      this.in = in;
+      remainAwareIS = true;
+    } else {
+      this.in = new PBIS(in, 1);
+      remainAwareIS = false;
+    }
   }
 
   @Override
   public boolean advance() throws IOException {
-    if (!this.hasNext) return this.hasNext;
-    if (this.in.available() == 0) {
-      this.hasNext = false;
-      return this.hasNext;
+    if (remainAwareIS) {
+      if (in.available() == 0) {
+        return false;
+      }
+    } else {
+      int firstByte = in.read();
+      if (firstByte == -1) {
+        return false;
+      } else {
+        ((PBIS) in).unread(firstByte);
+      }
     }
+
     try {
       this.current = parseCell();
     } catch (IOException ioEx) {
+      if (!remainAwareIS) {
+        ((PBIS) in).resetBuf(1); // reset the buffer in case the underlying stream is read from
+                                 // upper layers
+      }
       rethrowEofException(ioEx);
     }
-    return this.hasNext;
+    return true;
   }
 
   private void rethrowEofException(IOException ioEx) throws IOException {

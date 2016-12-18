@@ -45,6 +45,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 
 import com.google.protobuf.CodedInputStream;
+import com.google.protobuf.InvalidProtocolBufferException;
 
 /**
  * A Protobuf based WAL has the following structure:
@@ -53,11 +54,12 @@ import com.google.protobuf.CodedInputStream;
  * &lt;TrailerSize&gt; &lt;PB_WAL_COMPLETE_MAGIC&gt;
  * </p>
  * The Reader reads meta information (WAL Compression state, WALTrailer, etc) in
- * {@link ProtobufLogReader#initReader(FSDataInputStream)}. A WALTrailer is an extensible structure
+ * ProtobufLogReader#initReader(FSDataInputStream). A WALTrailer is an extensible structure
  * which is appended at the end of the WAL. This is empty for now; it can contain some meta
  * information such as Region level stats, etc in future.
  */
-@InterfaceAudience.LimitedPrivate({HBaseInterfaceAudience.COPROC, HBaseInterfaceAudience.PHOENIX, HBaseInterfaceAudience.CONFIG})
+@InterfaceAudience.LimitedPrivate({HBaseInterfaceAudience.COPROC, HBaseInterfaceAudience.PHOENIX,
+  HBaseInterfaceAudience.CONFIG})
 public class ProtobufLogReader extends ReaderBase {
   private static final Log LOG = LogFactory.getLog(ProtobufLogReader.class);
   // public for WALFactory until we move everything to o.a.h.h.wal
@@ -78,8 +80,8 @@ public class ProtobufLogReader extends ReaderBase {
   protected WALCellCodec.ByteStringUncompressor byteStringUncompressor;
   protected boolean hasCompression = false;
   protected boolean hasTagCompression = false;
-  // walEditsStopOffset is the position of the last byte to read. After reading the last WALEdit entry
-  // in the wal, the inputstream's position is equal to walEditsStopOffset.
+  // walEditsStopOffset is the position of the last byte to read. After reading the last WALEdit
+  // entry in the wal, the inputstream's position is equal to walEditsStopOffset.
   private long walEditsStopOffset;
   private boolean trailerPresent;
   protected WALTrailer trailer;
@@ -331,7 +333,7 @@ public class ProtobufLogReader extends ReaderBase {
           }
           ProtobufUtil.mergeFrom(builder, new LimitInputStream(this.inputStream, size),
             (int)size);
-        } catch (IOException ipbe) {
+        } catch (InvalidProtocolBufferException ipbe) {
           throw (EOFException) new EOFException("Invalid PB, EOF? Ignoring; originalPosition=" +
             originalPosition + ", currentPosition=" + this.inputStream.getPos() +
             ", messageSize=" + size + ", currentAvailable=" + available).initCause(ipbe);

@@ -24,6 +24,7 @@ import com.google.protobuf.Descriptors.MethodDescriptor;
 import com.google.protobuf.Message;
 import com.google.protobuf.RpcController;
 import com.google.protobuf.ServiceException;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -32,6 +33,7 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.ipc.protobuf.generated.TestProtos.EchoRequestProto;
@@ -43,18 +45,24 @@ import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.security.authorize.PolicyProvider;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameters;
 import org.mockito.Mockito;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 import static org.mockito.Mockito.mock;
 
+@RunWith(Parameterized.class)
 @Category({SmallTests.class})
 public class TestRpcHandlerException {
   public static final Log LOG = LogFactory.getLog(TestRpcHandlerException.class);
@@ -64,6 +72,17 @@ public class TestRpcHandlerException {
 
   private final static Configuration CONF = HBaseConfiguration.create();
   RpcExecutor rpcExecutor = Mockito.mock(RpcExecutor.class);
+
+  @Parameters
+  public static Collection<Object[]> parameters() {
+    return HBaseTestingUtility.RPCSERVER_PARAMETERIZED;
+  }
+
+  private final String rpcServerClass;
+
+  public TestRpcHandlerException(String rpcServerClass) {
+    this.rpcServerClass = rpcServerClass;
+  }
 
   // We are using the test TestRpcServiceProtos generated classes and Service because they are
   // available and basic with methods like 'echo', and ping. Below we make a blocking service
@@ -122,24 +141,87 @@ public class TestRpcHandlerException {
    * Instance of server. We actually don't do anything speical in here so could just use
    * HBaseRpcServer directly.
    */
-  private static class TestRpcServer extends RpcServer {
+  private static class TestRpcServer implements RpcServerInterface {
 
-    TestRpcServer() throws IOException {
-      this(new FifoRpcScheduler(CONF, 1));
+    private RpcServerInterface rpcServer;
+
+    TestRpcServer(Configuration conf) throws IOException {
+      this(conf, new FifoRpcScheduler(CONF, 1));
     }
 
-    TestRpcServer(RpcScheduler scheduler) throws IOException {
-      super(null, "testRpcServer",
-		  Lists.newArrayList(new BlockingServiceAndInterface(SERVICE, null)),
-		  new InetSocketAddress("localhost", 0), CONF, scheduler);
+    TestRpcServer(Configuration conf, RpcScheduler scheduler) throws IOException {
+      rpcServer = RpcServerFactory.createServer(null, "testRpcServer",
+        Lists.newArrayList(new RpcServer.BlockingServiceAndInterface(SERVICE, null)),
+        new InetSocketAddress("localhost", 0), CONF, scheduler);
+    }
+
+    @Override
+    public void start() {
+      rpcServer.start();
+    }
+
+    @Override
+    public void stop() {
+      rpcServer.stop();
+    }
+
+    @Override
+    public void join() throws InterruptedException {
+      rpcServer.join();
+    }
+
+    @Override
+    public void setSocketSendBufSize(int size) {
+      rpcServer.setSocketSendBufSize(size);
+    }
+
+    @Override
+    public InetSocketAddress getListenerAddress() {
+      return rpcServer.getListenerAddress();
+    }
+
+    @Override
+    public boolean isStarted() {
+      return rpcServer.isStarted();
+    }
+
+    @Override
+    public void setErrorHandler(HBaseRPCErrorHandler handler) {
+      rpcServer.setErrorHandler(handler);
+    }
+
+    @Override
+    public HBaseRPCErrorHandler getErrorHandler() {
+      return rpcServer.getErrorHandler();
+    }
+
+    @Override
+    public MetricsHBaseServer getMetrics() {
+      return rpcServer.getMetrics();
+    }
+
+    @Override
+    public void addCallSize(long diff) {
+      rpcServer.addCallSize(diff);
+    }
+
+    @Override
+    public void refreshAuthManager(PolicyProvider pp) {
+      rpcServer.refreshAuthManager(pp);
+    }
+
+    @Override
+    public RpcScheduler getScheduler() {
+      return rpcServer.getScheduler();
     }
 
     @Override
     public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
-      Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
-          throws IOException {
-      return super.call(service, md, param, cellScanner, receiveTime, status);
+        Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
+        throws IOException, ServiceException {
+      return rpcServer.call(service, md, param, cellScanner, receiveTime, status);
     }
+
   }
 
   /** Tests that the rpc scheduler is called when requests arrive.
@@ -170,7 +252,8 @@ public class TestRpcHandlerException {
     PriorityFunction qosFunction = mock(PriorityFunction.class);
     Abortable abortable = new AbortServer();
     RpcScheduler scheduler = new SimpleRpcScheduler(CONF, 2, 0, 0, qosFunction, abortable, 0);
-    RpcServer rpcServer = new TestRpcServer(scheduler);
+    CONF.set(RpcServerFactory.CUSTOM_RPC_SERVER_IMPL_CONF_KEY, rpcServerClass);
+    RpcServerInterface rpcServer = new TestRpcServer(CONF, scheduler);
     RpcClientImpl client = new RpcClientImpl(CONF, HConstants.CLUSTER_ID_DEFAULT);
     try {
       rpcServer.start();

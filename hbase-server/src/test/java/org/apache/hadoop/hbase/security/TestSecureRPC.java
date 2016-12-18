@@ -28,6 +28,8 @@ import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Properties;
 
@@ -42,7 +44,9 @@ import org.apache.hadoop.hbase.ipc.RpcClient;
 import org.apache.hadoop.hbase.ipc.RpcClientFactory;
 import org.apache.hadoop.hbase.ipc.RpcClientImpl;
 import org.apache.hadoop.hbase.ipc.RpcServer;
+import org.apache.hadoop.hbase.ipc.RpcServerFactory;
 import org.apache.hadoop.hbase.ipc.RpcServerInterface;
+import org.apache.hadoop.hbase.ipc.SimpleRpcServer;
 import org.apache.hadoop.hbase.ipc.TestDelayedRpc.TestDelayedImplementation;
 import org.apache.hadoop.hbase.ipc.TestDelayedRpc.TestThread;
 import org.apache.hadoop.hbase.ipc.protobuf.generated.TestDelayedRpcProtos;
@@ -54,12 +58,16 @@ import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameters;
 import org.mockito.Mockito;
 
 import com.google.common.collect.Lists;
 import com.google.protobuf.BlockingRpcChannel;
 import com.google.protobuf.BlockingService;
 
+@RunWith(Parameterized.class)
 @Category(SmallTests.class)
 public class TestSecureRPC {
 
@@ -73,6 +81,17 @@ public class TestSecureRPC {
   private static String HOST = "localhost";
 
   private static String PRINCIPAL;
+
+  @Parameters
+  public static Collection<Object[]> parameters() {
+    return HBaseTestingUtility.RPCSERVER_PARAMETERIZED;
+  }
+
+  private final String rpcServerClass;
+
+  public TestSecureRPC(String rpcServerClass) {
+    this.rpcServerClass = rpcServerClass;
+  }
 
   @BeforeClass
   public static void setUp() throws Exception {
@@ -134,8 +153,10 @@ public class TestSecureRPC {
     BlockingService service =
         TestDelayedRpcProtos.TestDelayedService.newReflectiveBlockingService(instance);
 
+    conf.set(RpcServerFactory.CUSTOM_RPC_SERVER_IMPL_CONF_KEY, rpcServerClass);
+
     RpcServerInterface rpcServer =
-        new RpcServer(null, "testSecuredDelayedRpc",
+        RpcServerFactory.createServer(null, "testSecuredDelayedRpc",
             Lists.newArrayList(new RpcServer.BlockingServiceAndInterface(service, null)), isa,
             conf, new FifoRpcScheduler(conf, 1));
     rpcServer.start();

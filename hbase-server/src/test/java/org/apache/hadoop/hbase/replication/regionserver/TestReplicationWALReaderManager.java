@@ -28,6 +28,7 @@ import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
 import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 import org.apache.hadoop.hbase.wal.WAL;
@@ -53,7 +54,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Category(LargeTests.class)
 @RunWith(Parameterized.class)
@@ -76,8 +76,8 @@ public class TestReplicationWALReaderManager {
   private PathWatcher pathWatcher;
   private int nbRows;
   private int walEditKVs;
-  private final AtomicLong sequenceId = new AtomicLong(1);
   @Rule public TestName tn = new TestName();
+  private final MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
 
   @Parameters
   public static Collection<Object[]> parameters() {
@@ -106,6 +106,7 @@ public class TestReplicationWALReaderManager {
     this.walEditKVs = walEditKVs;
     TEST_UTIL.getConfiguration().setBoolean(HConstants.ENABLE_WAL_COMPRESSION,
       enableCompression);
+    mvcc.advanceTo(1);
   }
   
   @BeforeClass
@@ -199,7 +200,7 @@ public class TestReplicationWALReaderManager {
 
   private void appendToLogPlus(int count) throws IOException {
     final long txid = log.append(htd, info, new WALKey(info.getEncodedNameAsBytes(), tableName,
-        System.currentTimeMillis()), getWALEdits(count), sequenceId, true, null);
+        System.currentTimeMillis(), mvcc), getWALEdits(count), true);
     log.sync(txid);
   }
 

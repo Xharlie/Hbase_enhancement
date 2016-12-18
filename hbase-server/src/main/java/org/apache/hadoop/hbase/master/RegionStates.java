@@ -926,9 +926,14 @@ public class RegionStates {
    * At cluster clean re/start, mark all user regions closed except those of tables
    * that are excluded, such as disabled/disabling/enabling tables. All user regions
    * and their previous locations are returned.
+   * @param  excludedTables regions on which table will not be closed
+   * @param  regionsOnQueuedDeadServers regions of which will not be closed
+   * @return Map all user regions has been closed
    */
-  synchronized Map<HRegionInfo, ServerName> closeAllUserRegions(Set<TableName> excludedTables) {
+  synchronized Map<HRegionInfo, ServerName> closeAllUserRegions(Set<TableName> excludedTables,
+		  Set<HRegionInfo> regionsOnQueuedDeadServers) {
     boolean noExcludeTables = excludedTables == null || excludedTables.isEmpty();
+    boolean noRegionsOnQueuedDeadServer = regionsOnQueuedDeadServers == null || regionsOnQueuedDeadServers.isEmpty();
     Set<HRegionInfo> toBeClosed = new HashSet<HRegionInfo>(regionStates.size());
     for(RegionState state: regionStates.values()) {
       HRegionInfo hri = state.getRegion();
@@ -937,7 +942,8 @@ public class RegionStates {
       }
       TableName tableName = hri.getTable();
       if (!TableName.META_TABLE_NAME.equals(tableName)
-          && (noExcludeTables || !excludedTables.contains(tableName))) {
+          && (noExcludeTables || !excludedTables.contains(tableName))
+          && (noRegionsOnQueuedDeadServer || !regionsOnQueuedDeadServers.contains(hri))) {
         toBeClosed.add(hri);
       }
     }

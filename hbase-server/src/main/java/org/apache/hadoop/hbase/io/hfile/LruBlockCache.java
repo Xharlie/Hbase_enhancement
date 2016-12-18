@@ -112,6 +112,10 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
    */
   static final String LRU_ACCEPTABLE_FACTOR_CONFIG_NAME = "hbase.lru.blockcache.acceptable.factor";
 
+  /**
+   * Hard capacity limit of cache, will reject any put if size > this * acceptable
+   */
+  static final String LRU_HARD_CAPACITY_LIMIT_FACTOR_CONFIG_NAME = "hbase.lru.blockcache.hard.capacity.limit.factor";
   static final String LRU_SINGLE_PERCENTAGE_CONFIG_NAME = "hbase.lru.blockcache.single.percentage";
   static final String LRU_MULTI_PERCENTAGE_CONFIG_NAME = "hbase.lru.blockcache.multi.percentage";
   static final String LRU_MEMORY_PERCENTAGE_CONFIG_NAME = "hbase.lru.blockcache.memory.percentage";
@@ -140,14 +144,22 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
 
   static final boolean DEFAULT_IN_MEMORY_FORCE_MODE = false;
 
+  /** default hard capacity limit */
+  static final float DEFAULT_HARD_CAPACITY_LIMIT_FACTOR = 1.2f;
+
   /** Statistics thread */
   static final int statThreadPeriod = 60 * 5;
+
+  private static final String LRU_MAX_BLOCK_SIZE = "hbase.lru.max.block.size";
+  private static final long DEFAULT_MAX_BLOCK_SIZE = 16L * 1024L * 1024L;
 
   /** Concurrent map (the cache) */
   private final Map<BlockCacheKey,LruCachedBlock> map;
 
   /** Eviction lock (locked when eviction in process) */
   private final ReentrantLock evictionLock = new ReentrantLock(true);
+  
+  private final long maxBlockSize;
 
   /** Volatile boolean to track if we are in an eviction process or not */
   private volatile boolean evictionInProgress = false;
@@ -167,6 +179,9 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
 
   /** Cache access count (sequential ID) */
   private final AtomicLong count;
+
+  /** hard capacity limit */
+  private float hardCapacityLimitFactor;
 
   /** Cache statistics */
   private final CacheStats stats;
@@ -225,7 +240,9 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
         DEFAULT_SINGLE_FACTOR,
         DEFAULT_MULTI_FACTOR,
         DEFAULT_MEMORY_FACTOR,
-        false
+        DEFAULT_HARD_CAPACITY_LIMIT_FACTOR,
+        false,
+        DEFAULT_MAX_BLOCK_SIZE
         );
   }
 
@@ -239,7 +256,9 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
         conf.getFloat(LRU_SINGLE_PERCENTAGE_CONFIG_NAME, DEFAULT_SINGLE_FACTOR),
         conf.getFloat(LRU_MULTI_PERCENTAGE_CONFIG_NAME, DEFAULT_MULTI_FACTOR),
         conf.getFloat(LRU_MEMORY_PERCENTAGE_CONFIG_NAME, DEFAULT_MEMORY_FACTOR),
-        conf.getBoolean(LRU_IN_MEMORY_FORCE_MODE_CONFIG_NAME, DEFAULT_IN_MEMORY_FORCE_MODE)
+        conf.getFloat(LRU_HARD_CAPACITY_LIMIT_FACTOR_CONFIG_NAME, DEFAULT_HARD_CAPACITY_LIMIT_FACTOR),
+        conf.getBoolean(LRU_IN_MEMORY_FORCE_MODE_CONFIG_NAME, DEFAULT_IN_MEMORY_FORCE_MODE),
+        conf.getLong(LRU_MAX_BLOCK_SIZE, DEFAULT_MAX_BLOCK_SIZE)
         );
   }
 
@@ -264,7 +283,9 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
   public LruBlockCache(long maxSize, long blockSize, boolean evictionThread,
       int mapInitialSize, float mapLoadFactor, int mapConcurrencyLevel,
       float minFactor, float acceptableFactor, float singleFactor,
-      float multiFactor, float memoryFactor, boolean forceInMemory) {
+      float multiFactor, float memoryFactor, float hardLimitFactor, boolean forceInMemory, 
+      long maxBlockSize) {
+    this.maxBlockSize = maxBlockSize;
     if(singleFactor + multiFactor + memoryFactor != 1 ||
         singleFactor < 0 || multiFactor < 0 || memoryFactor < 0) {
       throw new IllegalArgumentException("Single, multi, and memory factors " +
@@ -291,6 +312,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
     this.elements = new AtomicLong(0);
     this.overhead = calculateOverhead(maxSize, blockSize, mapConcurrencyLevel);
     this.size = new AtomicLong(this.overhead);
+    this.hardCapacityLimitFactor = hardLimitFactor;
     if(evictionThread) {
       this.evictionThread = new EvictionThread(this);
       this.evictionThread.start(); // FindBugs SC_START_IN_CTOR
@@ -326,6 +348,17 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
   @Override
   public void cacheBlock(BlockCacheKey cacheKey, Cacheable buf, boolean inMemory,
       final boolean cacheDataInL1) {
+    if (buf.heapSize() > maxBlockSize) {
+      // If there are a lot of blocks that are too
+      // big this can make the logs way too noisy.
+      // So we log 2%
+      if (stats.failInsert() % 50 == 0) {
+        LOG.warn("Trying to cache too large a block " + cacheKey.getHfileName() + " @ "
+            + cacheKey.getOffset() + " is " + buf.heapSize() + " which is larger than "
+            + maxBlockSize);
+      }
+      return;
+    }
     LruCachedBlock cb = map.get(cacheKey);
     if (cb != null) {
       // compare the contents, if they are not equal, we are in big trouble
@@ -338,6 +371,21 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
       LOG.warn(msg);
       return;
     }
+    long currentSize = size.get();
+    long currentAcceptableSize = acceptableSize();
+    long hardLimitSize = (long) (hardCapacityLimitFactor * currentAcceptableSize);
+    if (currentSize > hardLimitSize) {
+      if (LOG.isTraceEnabled()) {
+        LOG.trace("LruBlockCache current size " + StringUtils.byteDesc(currentSize)
+          + " has exceeded acceptable size " + StringUtils.byteDesc(currentAcceptableSize) + "  too many."
+          + " the hard limit size is " + StringUtils.byteDesc(hardLimitSize) + ", failed to put cacheKey:"
+          + cacheKey + " into LruBlockCache.");
+      }
+      if (!evictionInProgress) {
+        runEviction();
+      }
+      return;
+    }
     cb = new LruCachedBlock(cacheKey, buf, count.incrementAndGet(), inMemory);
     long newSize = updateSizeMetrics(cb, false);
     map.put(cacheKey, cb);
@@ -346,7 +394,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
       long size = map.size();
       assertCounterSanity(size, val);
     }
-    if (newSize > acceptableSize() && !evictionInProgress) {
+    if (newSize > currentAcceptableSize && !evictionInProgress) {
       runEviction();
     }
   }
@@ -417,14 +465,36 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
   @Override
   public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching, boolean repeat,
       boolean updateCacheMetrics) {
+    return getBlock(cacheKey, caching, repeat, updateCacheMetrics, null);
+  }
+
+  /**
+   * Get the buffer of the block with the specified name.
+   * @param cacheKey block's cache key
+   * @param caching true if the caller caches blocks on cache misses
+   * @param repeat Whether this is a repeat lookup for the same block
+   *        (used to avoid double counting cache misses when doing double-check locking)
+   * @param updateCacheMetrics Whether to update cache metrics or not
+   * @param blockType block type of {@link HFileBlock}
+   * @return buffer of specified cache key, or null if not in cache
+   */
+  @Override
+  public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching, boolean repeat,
+      boolean updateCacheMetrics, BlockType blockType) {
     LruCachedBlock cb = map.get(cacheKey);
     if (cb == null) {
-      if (!repeat && updateCacheMetrics) stats.miss(caching);
+      if (!repeat && updateCacheMetrics) {
+        stats.miss(caching);
+        if (null != blockType) {
+          stats.missByBlockType(blockType, caching);
+        }
+      }
       // If there is another block cache then try and read there.
       // However if this is a retry ( second time in double checked locking )
       // And it's already a miss then the l2 will also be a miss.
       if (victimHandler != null && !repeat) {
-        Cacheable result = victimHandler.getBlock(cacheKey, caching, repeat, updateCacheMetrics);
+        Cacheable result =
+            victimHandler.getBlock(cacheKey, caching, repeat, updateCacheMetrics, blockType);
 
         // Promote this to L1.
         if (result != null && caching) {
@@ -434,7 +504,12 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
       }
       return null;
     }
-    if (updateCacheMetrics) stats.hit(caching);
+    if (updateCacheMetrics) {
+      stats.hit(caching);
+      if (null != blockType) {
+        stats.hitByBlockType(blockType, caching);
+      }
+    }
     cb.access(count.incrementAndGet());
     return cb.getBuffer();
   }
@@ -883,8 +958,8 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
   }
 
   public final static long CACHE_FIXED_OVERHEAD = ClassSize.align(
-      (3 * Bytes.SIZEOF_LONG) + (9 * ClassSize.REFERENCE) +
-      (5 * Bytes.SIZEOF_FLOAT) + Bytes.SIZEOF_BOOLEAN
+      (4 * Bytes.SIZEOF_LONG) + (9 * ClassSize.REFERENCE) +
+      (6 * Bytes.SIZEOF_FLOAT) + (Bytes.SIZEOF_BOOLEAN)
       + ClassSize.OBJECT);
 
   @Override

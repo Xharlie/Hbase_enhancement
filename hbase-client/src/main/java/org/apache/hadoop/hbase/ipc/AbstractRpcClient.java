@@ -139,6 +139,11 @@ public abstract class AbstractRpcClient implements RpcClient {
     }
   }
 
+  @Override
+  public boolean supportsCellBlock() {
+    return this.codec != null;
+  }
+
   /**
    * Encapsulate the ugly casting and RuntimeException conversion in private method.
    * @param conf configuration
@@ -245,7 +250,8 @@ public abstract class AbstractRpcClient implements RpcClient {
 
   @Override
   public BlockingRpcChannel createBlockingRpcChannel(final ServerName sn, final User ticket,
-      int defaultOperationTimeout) {
+      int defaultOperationTimeout)
+      throws IOException {
     return new BlockingRpcChannelImplementation(this, sn, ticket, defaultOperationTimeout);
   }
 
@@ -263,8 +269,12 @@ public abstract class AbstractRpcClient implements RpcClient {
      * @param channelOperationTimeout - the default timeout when no timeout is given
      */
     protected BlockingRpcChannelImplementation(final AbstractRpcClient rpcClient,
-        final ServerName sn, final User ticket, int channelOperationTimeout) {
+        final ServerName sn, final User ticket, int channelOperationTimeout)
+        throws IOException {
       this.isa = new InetSocketAddress(sn.getHostname(), sn.getPort());
+      if (this.isa.isUnresolved()) {
+        throw new IOException("unknown host: " + sn.getHostname());
+      }
       this.rpcClient = rpcClient;
       this.ticket = ticket;
       this.channelOperationTimeout = channelOperationTimeout;

@@ -18,6 +18,8 @@
 package org.apache.hadoop.hbase.util;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
@@ -28,6 +30,7 @@ import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 
 import sun.misc.Unsafe;
+import sun.nio.ch.DirectBuffer;
 
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
@@ -36,6 +39,7 @@ public final class UnsafeAccess {
   private static final Log LOG = LogFactory.getLog(UnsafeAccess.class);
 
   public static final Unsafe theUnsafe;
+  private static boolean unaligned;
 
   /** The offset to the first element in a byte array. */
   public static final int BYTE_ARRAY_BASE_OFFSET;
@@ -57,8 +61,18 @@ public final class UnsafeAccess {
 
     if(theUnsafe != null){
       BYTE_ARRAY_BASE_OFFSET = theUnsafe.arrayBaseOffset(byte[].class);
+      try {
+        // Using java.nio.Bits#unaligned() to check for unaligned-access capability
+        Class<?> clazz = Class.forName("java.nio.Bits");
+        Method m = clazz.getDeclaredMethod("unaligned");
+        m.setAccessible(true);
+        unaligned = (boolean) m.invoke(null);
+      } catch (Exception e) {
+        unaligned = false; // FindBugs: Causes REC_CATCH_EXCEPTION. Suppressed.
+      }
     } else{
       BYTE_ARRAY_BASE_OFFSET = -1;
+      unaligned = false;
     }
   }
 
@@ -66,6 +80,41 @@ public final class UnsafeAccess {
   
   public static boolean isAvailable() {
     return theUnsafe != null;
+  }
+
+  /**
+   * @return true when running JVM is having sun's Unsafe package available in it and underlying
+   *         system having unaligned-access capability.
+   */
+  public static boolean unaligned() {
+    return unaligned;
+  }
+
+  /**
+   * Reads an int value at the given buffer's offset considering it was written in big-endian
+   * format.
+   * @param buf
+   * @param offset
+   * @return int value at offset
+   */
+  public static int toInt(ByteBuffer buf, int offset) {
+    if (littleEndian) {
+      return Integer.reverseBytes(getAsInt(buf, offset));
+    }
+    return getAsInt(buf, offset);
+  }
+
+  /**
+   * Reads bytes at the given offset as an int value.
+   * @param buf
+   * @param offset
+   * @return int value at offset
+   */
+  static int getAsInt(ByteBuffer buf, int offset) {
+    if (buf.isDirect()) {
+      return theUnsafe.getInt(((DirectBuffer) buf).address() + offset);
+    }
+    return theUnsafe.getInt(buf.array(), BYTE_ARRAY_BASE_OFFSET + buf.arrayOffset() + offset);
   }
 
   public static final boolean littleEndian = ByteOrder.nativeOrder()

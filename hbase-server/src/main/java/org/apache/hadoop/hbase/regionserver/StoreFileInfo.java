@@ -30,6 +30,7 @@ import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HDFSBlocksDistribution;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
@@ -206,6 +207,11 @@ public class StoreFileInfo {
     return this.link != null && this.reference == null;
   }
 
+  /** @return True if the store file is a normal hfile and not a link or reference */
+  public boolean isNormalHFile() {
+    return this.link == null && this.reference == null;
+  }
+
   /** @return the HDFS block distribution */
   public HDFSBlocksDistribution getHDFSBlockDistribution() {
     return this.hdfsBlocksDistribution;
@@ -218,21 +224,24 @@ public class StoreFileInfo {
    * @return The StoreFile.Reader for the file
    */
   public StoreFile.Reader open(final FileSystem fs,
-      final CacheConfig cacheConf) throws IOException {
+      final CacheConfig cacheConf, final boolean canUseDropBehind) throws IOException {
     FSDataInputStreamWrapper in;
     FileStatus status;
 
+    final boolean doDropBehind = canUseDropBehind && cacheConf.shouldDropBehindCompaction();
     if (this.link != null) {
       // HFileLink
-      in = new FSDataInputStreamWrapper(fs, this.link);
+      in = new FSDataInputStreamWrapper(fs, this.link, doDropBehind);
       status = this.link.getFileStatus(fs);
     } else if (this.reference != null) {
       // HFile Reference
       Path referencePath = getReferredToFile(this.getPath());
-      in = new FSDataInputStreamWrapper(fs, referencePath);
+      in = new FSDataInputStreamWrapper(fs, referencePath,
+          doDropBehind);
       status = fs.getFileStatus(referencePath);
     } else {
-      in = new FSDataInputStreamWrapper(fs, this.getPath());
+      in = new FSDataInputStreamWrapper(fs, this.getPath(),
+          doDropBehind);
       status = fs.getFileStatus(initialPath);
     }
     long length = status.getLen();
@@ -284,6 +293,10 @@ public class StoreFileInfo {
 
   private HDFSBlocksDistribution computeHDFSBlocksDistributionInternal(final FileSystem fs)
       throws IOException {
+    if (isNormalHFile()) {
+      LocatedFileStatus locatedFileStatus = fs.listLocatedStatus(initialPath).next();
+      return FSUtils.getHDFSBlocksDistribution(locatedFileStatus.getBlockLocations());
+    }
     FileStatus status = getReferencedFileStatus(fs);
     if (this.reference != null) {
       return computeRefFileHDFSBlockDistribution(fs, reference, status);

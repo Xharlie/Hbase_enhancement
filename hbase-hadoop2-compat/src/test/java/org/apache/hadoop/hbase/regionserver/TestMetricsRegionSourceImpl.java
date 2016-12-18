@@ -123,10 +123,5 @@ public class TestMetricsRegionSourceImpl {
     public long getNumCompactionsCompleted() {
       return 0;
     }
-
-    @Override
-    public Map<String, DescriptiveStatistics> getCoprocessorExecutionStatistics() {
-      return null;
-    }
   }
 }

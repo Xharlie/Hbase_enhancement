@@ -161,17 +161,17 @@ public class RWQueueRpcExecutor extends RpcExecutor {
   }
 
   @Override
-  public void dispatch(final CallRunner callTask) throws InterruptedException {
+  public boolean dispatch(final CallRunner callTask) throws InterruptedException {
     RpcServer.Call call = callTask.getCall();
     int queueIndex;
-    if (isWriteRequest(call.getHeader(), call.param)) {
+    if (isWriteRequest(call.getHeader(), call.getParam())) {
       queueIndex = writeBalancer.getNextQueue();
-    } else if (numScanQueues > 0 && isScanRequest(call.getHeader(), call.param)) {
+    } else if (numScanQueues > 0 && isScanRequest(call.getHeader(), call.getParam())) {
       queueIndex = numWriteQueues + numReadQueues + scanBalancer.getNextQueue();
     } else {
       queueIndex = numWriteQueues + readBalancer.getNextQueue();
     }
-    queues.get(queueIndex).put(callTask);
+    return queues.get(queueIndex).offer(callTask);
   }
 
   private boolean isWriteRequest(final RequestHeader header, final Message param) {
