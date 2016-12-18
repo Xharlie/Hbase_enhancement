@@ -29,6 +29,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -39,13 +40,13 @@ import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.TagUtil;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Get;
-import org.apache.hadoop.hbase.client.HBaseAdmin;
-import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Table;
@@ -169,7 +170,7 @@ public class TestReplicationWithTags {
     put.setAttribute("visibility", Bytes.toBytes("myTag3"));
     put.add(FAMILY, ROW, ROW);
 
-    htable1 = new HTable(conf1, TABLE_NAME);
+    htable1 = utility1.getConnection().getTable(TABLE_NAME);
     htable1.put(put);
 
     Get get = new Get(ROW);
@@ -207,15 +208,16 @@ public class TestReplicationWithTags {
           for (Cell cell : edits) {
             KeyValue kv = KeyValueUtil.ensureKeyValue(cell);
             if (cf == null) {
-              cf = kv.getFamily();
+              cf = CellUtil.cloneFamily(kv);
             }
-            Tag tag = new Tag(TAG_TYPE, attribute);
+            Tag tag = new ArrayBackedTag(TAG_TYPE, attribute);
             List<Tag> tagList = new ArrayList<Tag>();
             tagList.add(tag);
 
-            KeyValue newKV = new KeyValue(kv.getRow(), 0, kv.getRowLength(), kv.getFamily(), 0,
-                kv.getFamilyLength(), kv.getQualifier(), 0, kv.getQualifierLength(),
-                kv.getTimestamp(), KeyValue.Type.codeToType(kv.getType()), kv.getValue(), 0,
+            KeyValue newKV = new KeyValue(CellUtil.cloneRow(kv), 0, kv.getRowLength(),
+                CellUtil.cloneFamily(kv), 0, kv.getFamilyLength(), CellUtil.cloneQualifier(kv), 0,
+                kv.getQualifierLength(), kv.getTimestamp(),
+                KeyValue.Type.codeToType(kv.getTypeByte()), CellUtil.cloneValue(kv), 0,
                 kv.getValueLength(), tagList);
             ((List<Cell>) updatedCells).add(newKV);
           }
@@ -237,7 +239,7 @@ public class TestReplicationWithTags {
         // Check tag presence in the 1st cell in 1st Result
         if (!results.isEmpty()) {
           Cell cell = results.get(0);
-          tags = Tag.asList(cell.getTagsArray(), cell.getTagsOffset(), cell.getTagsLength());
+          tags = TagUtil.asList(cell.getTagsArray(), cell.getTagsOffset(), cell.getTagsLength());
         }
       }
     }

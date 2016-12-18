@@ -18,7 +18,10 @@
 
 package org.apache.hadoop.hbase;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -30,7 +33,7 @@ import org.apache.hadoop.hbase.io.util.StreamUtils;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.IterableUtils;
-import org.apache.hadoop.hbase.util.SimpleMutableByteRange;
+import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.WritableUtils;
 
 import com.google.common.base.Function;
@@ -54,7 +57,7 @@ public class KeyValueUtil {
         cell.getValueLength(), cell.getTagsLength(), true);
   }
 
-  private static int length(short rlen, byte flen, int qlen, int vlen, int tlen, boolean withTags) {
+  public static int length(short rlen, byte flen, int qlen, int vlen, int tlen, boolean withTags) {
     if (withTags) {
       return (int) (KeyValue.getKeyValueDataStructureSize(rlen, flen, qlen, vlen, tlen));
     }
@@ -78,7 +81,7 @@ public class KeyValueUtil {
   public static int lengthWithMvccVersion(final KeyValue kv, final boolean includeMvccVersion) {
     int length = kv.getLength();
     if (includeMvccVersion) {
-      length += WritableUtils.getVIntSize(kv.getMvccVersion());
+      length += WritableUtils.getVIntSize(kv.getSequenceId());
     }
     return length;
   }
@@ -93,12 +96,12 @@ public class KeyValueUtil {
   }
 
 
-  /**************** copy key only *********************/
+  /**************** copy the cell to create a new keyvalue *********************/
 
   public static KeyValue copyToNewKeyValue(final Cell cell) {
     byte[] bytes = copyToNewByteArray(cell);
     KeyValue kvCell = new KeyValue(bytes, 0, bytes.length);
-    kvCell.setSequenceId(cell.getMvccVersion());
+    kvCell.setSequenceId(cell.getSequenceId());
     return kvCell;
   }
 
@@ -112,6 +115,21 @@ public class KeyValueUtil {
     appendKeyTo(cell, bytes, 0);
     ByteBuffer buffer = ByteBuffer.wrap(bytes);
     return buffer;
+  }
+
+  /**
+   * Copies the key to a new KeyValue
+   * @param cell
+   * @return the KeyValue that consists only the key part of the incoming cell
+   */
+  public static KeyValue toNewKeyCell(final Cell cell) {
+    byte[] bytes = new byte[keyLength(cell)];
+    appendKeyTo(cell, bytes, 0);
+    KeyValue kv = new KeyValue.KeyOnlyKeyValue(bytes, 0, bytes.length);
+    // Set the seq id. The new key cell could be used in comparisons so it
+    // is important that it uses the seqid also. If not the comparsion would fail
+    kv.setSequenceId(cell.getSequenceId());
+    return kv;
   }
 
   public static byte[] copyToNewByteArray(final Cell cell) {
@@ -170,9 +188,9 @@ public class KeyValueUtil {
     bb.limit(bb.position() + kv.getLength());
     bb.put(kv.getBuffer(), kv.getOffset(), kv.getLength());
     if (includeMvccVersion) {
-      int numMvccVersionBytes = WritableUtils.getVIntSize(kv.getMvccVersion());
+      int numMvccVersionBytes = WritableUtils.getVIntSize(kv.getSequenceId());
       ByteBufferUtils.extendLimit(bb, numMvccVersionBytes);
-      ByteBufferUtils.writeVLong(bb, kv.getMvccVersion());
+      ByteBufferUtils.writeVLong(bb, kv.getSequenceId());
     }
   }
 
@@ -218,26 +236,6 @@ public class KeyValueUtil {
   /*************** next/previous **********************************/
 
   /**
-   * Append single byte 0x00 to the end of the input row key
-   */
-  public static KeyValue createFirstKeyInNextRow(final Cell in){
-    byte[] nextRow = new byte[in.getRowLength() + 1];
-    System.arraycopy(in.getRowArray(), in.getRowOffset(), nextRow, 0, in.getRowLength());
-    nextRow[nextRow.length - 1] = 0;//maybe not necessary
-    return createFirstOnRow(nextRow);
-  }
-
-  /**
-   * Increment the row bytes and clear the other fields
-   */
-  public static KeyValue createFirstKeyInIncrementedRow(final Cell in){
-    byte[] thisRow = new SimpleMutableByteRange(in.getRowArray(), in.getRowOffset(),
-        in.getRowLength()).deepCopyToNewArray();
-    byte[] nextRow = Bytes.unsignedCopyAndIncrement(thisRow);
-    return createFirstOnRow(nextRow);
-  }
-
-  /**
    * Decrement the timestamp.  For tests (currently wasteful)
    *
    * Remember timestamps are sorted reverse chronologically.
@@ -281,53 +279,7 @@ public class KeyValueUtil {
     return new KeyValue(row, roffset, rlength, family, foffset, flength, qualifier, qoffset,
         qlength, HConstants.OLDEST_TIMESTAMP, Type.Minimum, null, 0, 0);
   }
-  
-  /**
-   * Creates a keyValue for the specified keyvalue larger than or equal to all other possible
-   * KeyValues that have the same row, family, qualifer.  Used for reseeking
-   * @param kv
-   * @return KeyValue
-   */
-  public static KeyValue createLastOnRow(Cell kv) {
-    return createLastOnRow(kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(), null, 0, 0,
-        null, 0, 0);
-  }
 
-  /**
-   * Similar to
-   * {@link #createLastOnRow(byte[], int, int, byte[], int, int, byte[], int, int)}
-   * but creates the last key on the row/column of this KV (the value part of
-   * the returned KV is always empty). Used in creating "fake keys" for the
-   * multi-column Bloom filter optimization to skip the row/column we already
-   * know is not in the file.
-   * 
-   * @param kv - cell
-   * @return the last key on the row/column of the given key-value pair
-   */
-  public static KeyValue createLastOnRowCol(Cell kv) {
-    return new KeyValue(kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-        kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength(), kv.getQualifierArray(),
-        kv.getQualifierOffset(), kv.getQualifierLength(), HConstants.OLDEST_TIMESTAMP,
-        Type.Minimum, null, 0, 0);
-  }
-
-  /**
-   * Creates the first KV with the row/family/qualifier of this KV and the given
-   * timestamp. Uses the "maximum" KV type that guarantees that the new KV is
-   * the lowest possible for this combination of row, family, qualifier, and
-   * timestamp. This KV's own timestamp is ignored. While this function copies
-   * the value from this KV, it is normally used on key-only KVs.
-   * 
-   * @param kv - cell
-   * @param ts
-   */
-  public static KeyValue createFirstOnRowColTS(Cell kv, long ts) {
-    return new KeyValue(kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-        kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength(), kv.getQualifierArray(),
-        kv.getQualifierOffset(), kv.getQualifierLength(), ts, Type.Maximum, kv.getValueArray(),
-        kv.getValueOffset(), kv.getValueLength());
-  }
-  
   /**
    * Create a KeyValue that is smaller than all other possible KeyValues
    * for the given row. That is any (valid) KeyValue on 'row' would sort
@@ -340,7 +292,6 @@ public class KeyValueUtil {
     return new KeyValue(row, roffset, rlength,
         null, 0, 0, null, 0, 0, HConstants.LATEST_TIMESTAMP, Type.Maximum, null, 0, 0);
   }
-  
 
   /**
    * Creates a KeyValue that is last on the specified row id. That is,
@@ -389,21 +340,6 @@ public class KeyValueUtil {
   public static KeyValue createFirstOnRow(final byte [] row, final byte [] family,
       final byte [] qualifier) {
     return new KeyValue(row, family, qualifier, HConstants.LATEST_TIMESTAMP, Type.Maximum);
-  }
-
-  /**
-   * Create a Delete Family KeyValue for the specified row and family that would
-   * be smaller than all other possible Delete Family KeyValues that have the
-   * same row and family.
-   * Used for seeking.
-   * @param row - row key (arbitrary byte array)
-   * @param family - family name
-   * @return First Delete Family possible key on passed <code>row</code>.
-   */
-  public static KeyValue createFirstDeleteFamilyOnRow(final byte [] row,
-      final byte [] family) {
-    return new KeyValue(row, family, null, HConstants.LATEST_TIMESTAMP,
-        Type.DeleteFamily);
   }
 
   /**
@@ -512,21 +448,6 @@ public class KeyValueUtil {
     return new KeyValue(buffer, boffset, len);
   }
 
-  /**
-   * Creates the first KV with the row/family/qualifier of this KV and the
-   * given timestamp. Uses the "maximum" KV type that guarantees that the new
-   * KV is the lowest possible for this combination of row, family, qualifier,
-   * and timestamp. This KV's own timestamp is ignored. While this function
-   * copies the value from this KV, it is normally used on key-only KVs.
-   */
-  public static KeyValue createFirstOnRowColTS(KeyValue kv, long ts) {
-    return new KeyValue(
-        kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-        kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength(),
-        kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength(),
-        ts, Type.Maximum, kv.getValueArray(), kv.getValueOffset(), kv.getValueLength());
-  }
-
   /*************** misc **********************************/
   /**
    * @param cell
@@ -549,11 +470,127 @@ public class KeyValueUtil {
     });
     return new ArrayList<KeyValue>(lazyList);
   }
+  /**
+   * Write out a KeyValue in the manner in which we used to when KeyValue was a
+   * Writable.
+   *
+   * @param kv
+   * @param out
+   * @return Length written on stream
+   * @throws IOException
+   * @see #create(DataInput) for the inverse function
+   */
+  public static long write(final KeyValue kv, final DataOutput out) throws IOException {
+    // This is how the old Writables write used to serialize KVs. Need to figure
+    // way to make it
+    // work for all implementations.
+    int length = kv.getLength();
+    out.writeInt(length);
+    out.write(kv.getBuffer(), kv.getOffset(), length);
+    return length + Bytes.SIZEOF_INT;
+  }
+
+  /**
+   * Create a KeyValue reading from the raw InputStream. Named
+   * <code>iscreate</code> so doesn't clash with {@link #create(DataInput)}
+   *
+   * @param in
+   * @return Created KeyValue OR if we find a length of zero, we will return
+   *         null which can be useful marking a stream as done.
+   * @throws IOException
+   */
+  public static KeyValue iscreate(final InputStream in) throws IOException {
+    byte[] intBytes = new byte[Bytes.SIZEOF_INT];
+    int bytesRead = 0;
+    while (bytesRead < intBytes.length) {
+      int n = in.read(intBytes, bytesRead, intBytes.length - bytesRead);
+      if (n < 0) {
+        if (bytesRead == 0)
+          return null; // EOF at start is ok
+        throw new IOException("Failed read of int, read " + bytesRead + " bytes");
+      }
+      bytesRead += n;
+    }
+    // TODO: perhaps some sanity check is needed here.
+    byte[] bytes = new byte[Bytes.toInt(intBytes)];
+    IOUtils.readFully(in, bytes, 0, bytes.length);
+    return new KeyValue(bytes, 0, bytes.length);
+  }
+
+  /**
+   * @param b
+   * @return A KeyValue made of a byte array that holds the key-only part.
+   *         Needed to convert hfile index members to KeyValues.
+   */
+  public static KeyValue createKeyValueFromKey(final byte[] b) {
+    return createKeyValueFromKey(b, 0, b.length);
+  }
+
+  /**
+   * @param bb
+   * @return A KeyValue made of a byte buffer that holds the key-only part.
+   *         Needed to convert hfile index members to KeyValues.
+   */
+  public static KeyValue createKeyValueFromKey(final ByteBuffer bb) {
+    return createKeyValueFromKey(bb.array(), bb.arrayOffset(), bb.limit());
+  }
+
+  /**
+   * @param b
+   * @param o
+   * @param l
+   * @return A KeyValue made of a byte array that holds the key-only part.
+   *         Needed to convert hfile index members to KeyValues.
+   */
+  public static KeyValue createKeyValueFromKey(final byte[] b, final int o, final int l) {
+    byte[] newb = new byte[l + KeyValue.ROW_OFFSET];
+    System.arraycopy(b, o, newb, KeyValue.ROW_OFFSET, l);
+    Bytes.putInt(newb, 0, l);
+    Bytes.putInt(newb, Bytes.SIZEOF_INT, 0);
+    return new KeyValue(newb);
+  }
+
+  /**
+   * @param in
+   *          Where to read bytes from. Creates a byte array to hold the
+   *          KeyValue backing bytes copied from the steam.
+   * @return KeyValue created by deserializing from <code>in</code> OR if we
+   *         find a length of zero, we will return null which can be useful
+   *         marking a stream as done.
+   * @throws IOException
+   */
+  public static KeyValue create(final DataInput in) throws IOException {
+    return create(in.readInt(), in);
+  }
+
+  /**
+   * Create a KeyValue reading <code>length</code> from <code>in</code>
+   * 
+   * @param length
+   * @param in
+   * @return Created KeyValue OR if we find a length of zero, we will return
+   *         null which can be useful marking a stream as done.
+   * @throws IOException
+   */
+  public static KeyValue create(int length, final DataInput in) throws IOException {
+
+    if (length <= 0) {
+      if (length == 0)
+        return null;
+      throw new IOException("Failed read " + length + " bytes, stream corrupt?");
+    }
+
+    // This is how the old Writables.readFrom used to deserialize. Didn't even
+    // vint.
+    byte[] bytes = new byte[length];
+    in.readFully(bytes);
+    return new KeyValue(bytes, 0, length);
+  }
 
   public static void oswrite(final Cell cell, final OutputStream out, final boolean withTags)
       throws IOException {
-    if (cell instanceof KeyValue) {
-      KeyValue.oswrite((KeyValue) cell, out, withTags);
+    if (cell instanceof Streamable) {
+      ((Streamable)cell).write(out, withTags);
     } else {
       short rlen = cell.getRowLength();
       byte flen = cell.getFamilyLength();
@@ -562,11 +599,11 @@ public class KeyValueUtil {
       int tlen = cell.getTagsLength();
 
       // write total length
-      StreamUtils.writeInt(out, length(rlen, flen, qlen, vlen, tlen, withTags));
+      ByteBufferUtils.putInt(out, length(rlen, flen, qlen, vlen, tlen, withTags));
       // write key length
-      StreamUtils.writeInt(out, keyLength(rlen, flen, qlen));
+      ByteBufferUtils.putInt(out, keyLength(rlen, flen, qlen));
       // write value length
-      StreamUtils.writeInt(out, vlen);
+      ByteBufferUtils.putInt(out, vlen);
       // Write rowkey - 2 bytes rk length followed by rowkey bytes
       StreamUtils.writeShort(out, rlen);
       out.write(cell.getRowArray(), cell.getRowOffset(), rlen);
@@ -584,7 +621,8 @@ public class KeyValueUtil {
       // write tags if we have to
       if (withTags && tlen > 0) {
         // 2 bytes tags length followed by tags bytes
-        // tags length is serialized with 2 bytes only(short way) even if the type is int. As this
+        // tags length is serialized with 2 bytes only(short way) even if the
+        // type is int. As this
         // is non -ve numbers, we save the sign bit. See HBASE-11437
         out.write((byte) (0xff & (tlen >> 8)));
         out.write((byte) (0xff & tlen));

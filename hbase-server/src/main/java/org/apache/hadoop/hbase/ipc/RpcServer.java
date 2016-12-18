@@ -94,6 +94,7 @@ import org.apache.htrace.TraceInfo;
 import org.codehaus.jackson.map.ObjectMapper;
 
 import com.google.protobuf.BlockingService;
+import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.Descriptors.MethodDescriptor;
 import com.google.protobuf.Message;
 import com.google.protobuf.ServiceException;
@@ -123,7 +124,7 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
 
   protected static long maxRpcSize;
   protected static final long DEFAULT_MAX_RPC_SIZE = 100 * 1024 * 1024L;
-  protected final String CONF_MAX_RPC_SIZE = "hbase.ipc.max.rpc.size";
+  public static final String CONF_MAX_RPC_SIZE = "hbase.ipc.max.rpc.size";
 
   protected int slowCallLimit;
   protected long incrementPeriod;
@@ -287,6 +288,7 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
 
     protected User user;
     protected InetAddress remoteAddress;
+    private RpcCallback callback;
 
     public Call(int id, final BlockingService service, final MethodDescriptor md,
         RequestHeader header, Message param, CellScanner cellScanner, Connection connection,
@@ -338,6 +340,11 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
     @Override
     public VersionInfo getClientVersionInfo() {
       return connection.getVersionInfo();
+    }
+
+    @Override
+    public void setCallBack(RpcCallback callback) {
+      this.callback = callback;
     }
 
     public TraceInfo getTinfo() {
@@ -442,14 +449,10 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
         }
         Message header = headerBuilder.build();
 
-        // Organize the response as a set of bytebuffers rather than collect it all together inside
-        // one big byte array; save on allocations.
-        ByteBuffer bbHeader = IPCUtil.getDelimitedMessageAsByteBuffer(header);
-        ByteBuffer bbResult = IPCUtil.getDelimitedMessageAsByteBuffer(result);
-        int totalSize = bbHeader.capacity() + (bbResult == null? 0: bbResult.limit()) +
-          (this.cellBlock == null? 0: this.cellBlock.limit());
-        ByteBuffer bbTotalSize = ByteBuffer.wrap(Bytes.toBytes(totalSize));
-        bc = new BufferChain(bbTotalSize, bbHeader, bbResult, this.cellBlock);
+        byte[] b = createHeaderAndMessageBytes(result, header);
+
+        bc = new BufferChain(ByteBuffer.wrap(b), this.cellBlock);
+
         if (connection.useWrap) {
           bc = wrapWithSasl(bc);
         }
@@ -457,6 +460,54 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
         LOG.warn("Exception while creating response " + e);
       }
       this.response = bc;
+      // Once a response message is created and set to this.response, this Call can be treated as
+      // done. The Responder thread will do the n/w write of this message back to client.
+      if (this.callback != null) {
+        try {
+          this.callback.run();
+        } catch (Exception e) {
+          // Don't allow any exception here to kill this handler thread.
+          LOG.warn("Exception while running the Rpc Callback.", e);
+        }
+      }
+    }
+
+    private byte[] createHeaderAndMessageBytes(Message result, Message header)
+        throws IOException {
+      // Organize the response as a set of bytebuffers rather than collect it all together inside
+      // one big byte array; save on allocations.
+      int headerSerializedSize = 0, resultSerializedSize = 0, headerVintSize = 0,
+          resultVintSize = 0;
+      if (header != null) {
+        headerSerializedSize = header.getSerializedSize();
+        headerVintSize = CodedOutputStream.computeRawVarint32Size(headerSerializedSize);
+      }
+      if (result != null) {
+        resultSerializedSize = result.getSerializedSize();
+        resultVintSize = CodedOutputStream.computeRawVarint32Size(resultSerializedSize);
+      }
+      // calculate the total size
+      int totalSize = headerSerializedSize + headerVintSize
+          + (resultSerializedSize + resultVintSize)
+          + (this.cellBlock == null ? 0 : this.cellBlock.limit());
+      // The byte[] should also hold the totalSize of the header, message and the cellblock
+      byte[] b = new byte[headerSerializedSize + headerVintSize + resultSerializedSize
+          + resultVintSize + Bytes.SIZEOF_INT];
+      // The RpcClient expects the int to be in a format that code be decoded by
+      // the DataInputStream#readInt(). Hence going with the Bytes.toBytes(int)
+      // form of writing int.
+      Bytes.putInt(b, 0, totalSize);
+      CodedOutputStream cos = CodedOutputStream.newInstance(b, Bytes.SIZEOF_INT,
+          b.length - Bytes.SIZEOF_INT);
+      if (header != null) {
+        cos.writeMessageNoTag(header);
+      }
+      if (result != null) {
+        cos.writeMessageNoTag(result);
+      }
+      cos.flush();
+      cos.checkNoSpaceLeft();
+      return b;
     }
 
     BufferChain wrapWithSasl(BufferChain bc)

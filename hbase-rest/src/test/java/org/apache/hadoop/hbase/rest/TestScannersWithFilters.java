@@ -19,6 +19,10 @@
 
 package org.apache.hadoop.hbase.rest;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
 import java.io.ByteArrayInputStream;
 import java.io.StringWriter;
 import java.util.ArrayList;
@@ -32,16 +36,24 @@ import javax.xml.bind.Unmarshaller;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.*;
+import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HColumnDescriptor;
+import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Delete;
+import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.filter.BinaryComparator;
+import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.filter.FilterList;
+import org.apache.hadoop.hbase.filter.FilterList.Operator;
 import org.apache.hadoop.hbase.filter.FirstKeyOnlyFilter;
 import org.apache.hadoop.hbase.filter.InclusiveStopFilter;
 import org.apache.hadoop.hbase.filter.PageFilter;
@@ -52,8 +64,6 @@ import org.apache.hadoop.hbase.filter.RowFilter;
 import org.apache.hadoop.hbase.filter.SkipFilter;
 import org.apache.hadoop.hbase.filter.SubstringComparator;
 import org.apache.hadoop.hbase.filter.ValueFilter;
-import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
-import org.apache.hadoop.hbase.filter.FilterList.Operator;
 import org.apache.hadoop.hbase.rest.client.Client;
 import org.apache.hadoop.hbase.rest.client.Cluster;
 import org.apache.hadoop.hbase.rest.client.Response;
@@ -63,9 +73,6 @@ import org.apache.hadoop.hbase.rest.model.RowModel;
 import org.apache.hadoop.hbase.rest.model.ScannerModel;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
-
-import static org.junit.Assert.*;
-
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -107,7 +114,7 @@ public class TestScannersWithFilters {
   };
 
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
-  private static final HBaseRESTTestingUtility REST_TEST_UTIL = 
+  private static final HBaseRESTTestingUtility REST_TEST_UTIL =
     new HBaseRESTTestingUtility();
   private static Client client;
   private static JAXBContext context;
@@ -127,7 +134,7 @@ public class TestScannersWithFilters {
         ScannerModel.class);
     marshaller = context.createMarshaller();
     unmarshaller = context.createUnmarshaller();
-    client = new Client(new Cluster().add("localhost", 
+    client = new Client(new Cluster().add("localhost",
       REST_TEST_UTIL.getServletPort()));
     Admin admin = TEST_UTIL.getHBaseAdmin();
     if (!admin.tableExists(TABLE)) {
@@ -153,7 +160,7 @@ public class TestScannersWithFilters {
         }
         table.put(p);
       }
-      
+
       // Insert second half (reverse families)
       for(byte [] ROW : ROWS_ONE) {
         Put p = new Put(ROW);
@@ -171,14 +178,14 @@ public class TestScannersWithFilters {
         }
         table.put(p);
       }
-      
+
       // Delete the second qualifier from all rows and families
       for(byte [] ROW : ROWS_ONE) {
         Delete d = new Delete(ROW);
         d.deleteColumns(FAMILIES[0], QUALIFIERS_ONE[1]);
         d.deleteColumns(FAMILIES[1], QUALIFIERS_ONE[1]);
         table.delete(d);
-      }    
+      }
       for(byte [] ROW : ROWS_TWO) {
         Delete d = new Delete(ROW);
         d.deleteColumns(FAMILIES[0], QUALIFIERS_TWO[1]);
@@ -186,7 +193,7 @@ public class TestScannersWithFilters {
         table.delete(d);
       }
       colsPerRow -= 2;
-      
+
       // Delete the second rows from both groups, one column at a time
       for(byte [] QUALIFIER : QUALIFIERS_ONE) {
         Delete d = new Delete(ROWS_ONE[1]);
@@ -211,7 +218,7 @@ public class TestScannersWithFilters {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  private static void verifyScan(Scan s, long expectedRows, long expectedKeys) 
+  private static void verifyScan(Scan s, long expectedRows, long expectedKeys)
       throws Exception {
     ScannerModel model = ScannerModel.fromScan(s);
     model.setBatch(Integer.MAX_VALUE); // fetch it all at once
@@ -233,7 +240,7 @@ public class TestScannersWithFilters {
       unmarshaller.unmarshal(new ByteArrayInputStream(response.getBody()));
 
     int rows = cells.getRows().size();
-    assertTrue("Scanned too many rows! Only expected " + expectedRows + 
+    assertTrue("Scanned too many rows! Only expected " + expectedRows +
         " total but scanned " + rows, expectedRows == rows);
     for (RowModel row: cells.getRows()) {
       int count = row.getCells().size();
@@ -246,7 +253,7 @@ public class TestScannersWithFilters {
     assertEquals(response.getCode(), 200);
   }
 
-  private static void verifyScanFull(Scan s, KeyValue [] kvs) 
+  private static void verifyScanFull(Scan s, KeyValue [] kvs)
       throws Exception {
     ScannerModel model = ScannerModel.fromScan(s);
     model.setBatch(Integer.MAX_VALUE); // fetch it all at once
@@ -280,19 +287,19 @@ public class TestScannersWithFilters {
       RowModel rowModel = i.next();
       List<CellModel> cells = rowModel.getCells();
       if (cells.isEmpty()) break;
-      assertTrue("Scanned too many keys! Only expected " + kvs.length + 
-        " total but already scanned " + (cells.size() + idx), 
+      assertTrue("Scanned too many keys! Only expected " + kvs.length +
+        " total but already scanned " + (cells.size() + idx),
         kvs.length >= idx + cells.size());
       for (CellModel cell: cells) {
-        assertTrue("Row mismatch", 
-            Bytes.equals(rowModel.getKey(), kvs[idx].getRow()));
+        assertTrue("Row mismatch",
+            Bytes.equals(rowModel.getKey(), CellUtil.cloneRow(kvs[idx])));
         byte[][] split = KeyValue.parseColumn(cell.getColumn());
-        assertTrue("Family mismatch", 
-            Bytes.equals(split[0], kvs[idx].getFamily()));
-        assertTrue("Qualifier mismatch", 
-            Bytes.equals(split[1], kvs[idx].getQualifier()));
-        assertTrue("Value mismatch", 
-            Bytes.equals(cell.getValue(), kvs[idx].getValue()));
+        assertTrue("Family mismatch",
+            Bytes.equals(split[0], CellUtil.cloneFamily(kvs[idx])));
+        assertTrue("Qualifier mismatch",
+            Bytes.equals(split[1], CellUtil.cloneQualifier(kvs[idx])));
+        assertTrue("Value mismatch",
+            Bytes.equals(cell.getValue(), CellUtil.cloneValue(kvs[idx])));
         idx++;
       }
     }
@@ -308,7 +315,7 @@ public class TestScannersWithFilters {
     marshaller.marshal(model, writer);
     LOG.debug(writer.toString());
     byte[] body = Bytes.toBytes(writer.toString());
-    Response response = client.put("/" + TABLE + "/scanner", 
+    Response response = client.put("/" + TABLE + "/scanner",
       Constants.MIMETYPE_XML, body);
     assertEquals(response.getCode(), 201);
     String scannerURI = response.getLocation();
@@ -333,7 +340,7 @@ public class TestScannersWithFilters {
       RowModel rowModel = i.next();
       List<CellModel> cells = rowModel.getCells();
       if (cells.isEmpty()) break;
-      assertTrue("Scanned too many rows! Only expected " + expectedRows + 
+      assertTrue("Scanned too many rows! Only expected " + expectedRows +
         " total but already scanned " + (j+1), expectedRows > j);
       assertEquals("Expected " + expectedKeys + " keys per row but " +
         "returned " + cells.size(), expectedKeys, cells.size());
@@ -347,7 +354,7 @@ public class TestScannersWithFilters {
     // No filter
     long expectedRows = numRows;
     long expectedKeys = colsPerRow;
-    
+
     // Both families
     Scan s = new Scan();
     verifyScan(s, expectedRows, expectedKeys);
@@ -415,7 +422,7 @@ public class TestScannersWithFilters {
       new KeyValue(ROWS_TWO[3], FAMILIES[1], QUALIFIERS_TWO[2], VALUES[1]),
       new KeyValue(ROWS_TWO[3], FAMILIES[1], QUALIFIERS_TWO[3], VALUES[1])
     };
-    
+
     // Grab all 6 rows
     long expectedRows = 6;
     long expectedKeys = colsPerRow;
@@ -424,7 +431,7 @@ public class TestScannersWithFilters {
     verifyScan(s, expectedRows, expectedKeys);
     s.setFilter(new PageFilter(expectedRows));
     verifyScanFull(s, expectedKVs);
-    
+
     // Grab first 4 rows (6 cols per row)
     expectedRows = 4;
     expectedKeys = colsPerRow;
@@ -433,7 +440,7 @@ public class TestScannersWithFilters {
     verifyScan(s, expectedRows, expectedKeys);
     s.setFilter(new PageFilter(expectedRows));
     verifyScanFull(s, Arrays.copyOf(expectedKVs, 24));
-    
+
     // Grab first 2 rows
     expectedRows = 2;
     expectedKeys = colsPerRow;
@@ -450,20 +457,20 @@ public class TestScannersWithFilters {
     s.setFilter(new PageFilter(expectedRows));
     verifyScan(s, expectedRows, expectedKeys);
     s.setFilter(new PageFilter(expectedRows));
-    verifyScanFull(s, Arrays.copyOf(expectedKVs, 6));    
+    verifyScanFull(s, Arrays.copyOf(expectedKVs, 6));
   }
 
   @Test
   public void testInclusiveStopFilter() throws Exception {
     // Grab rows from group one
-    
+
     // If we just use start/stop row, we get total/2 - 1 rows
     long expectedRows = (numRows / 2) - 1;
     long expectedKeys = colsPerRow;
-    Scan s = new Scan(Bytes.toBytes("testRowOne-0"), 
+    Scan s = new Scan(Bytes.toBytes("testRowOne-0"),
         Bytes.toBytes("testRowOne-3"));
     verifyScan(s, expectedRows, expectedKeys);
-    
+
     // Now use start row with inclusive stop filter
     expectedRows = numRows / 2;
     s = new Scan(Bytes.toBytes("testRowOne-0"));
@@ -471,14 +478,14 @@ public class TestScannersWithFilters {
     verifyScan(s, expectedRows, expectedKeys);
 
     // Grab rows from group two
-    
+
     // If we just use start/stop row, we get total/2 - 1 rows
     expectedRows = (numRows / 2) - 1;
     expectedKeys = colsPerRow;
-    s = new Scan(Bytes.toBytes("testRowTwo-0"), 
+    s = new Scan(Bytes.toBytes("testRowTwo-0"),
         Bytes.toBytes("testRowTwo-3"));
     verifyScan(s, expectedRows, expectedKeys);
-    
+
     // Now use start row with inclusive stop filter
     expectedRows = numRows / 2;
     s = new Scan(Bytes.toBytes("testRowTwo-0"));
@@ -496,7 +503,7 @@ public class TestScannersWithFilters {
     Scan s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match keys less than same qualifier
     // Expect only two keys (one from each family) in half the rows
     expectedRows = numRows / 2;
@@ -506,7 +513,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match keys less than or equal
     // Expect four keys (two from each family) in half the rows
     expectedRows = numRows / 2;
@@ -516,7 +523,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match keys not equal
     // Expect four keys (two from each family)
     // Only look in first group of rows
@@ -527,7 +534,7 @@ public class TestScannersWithFilters {
     s = new Scan(HConstants.EMPTY_START_ROW, Bytes.toBytes("testRowTwo"));
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match keys greater or equal
     // Expect four keys (two from each family)
     // Only look in first group of rows
@@ -538,7 +545,7 @@ public class TestScannersWithFilters {
     s = new Scan(HConstants.EMPTY_START_ROW, Bytes.toBytes("testRowTwo"));
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match keys greater
     // Expect two keys (one from each family)
     // Only look in first group of rows
@@ -549,7 +556,7 @@ public class TestScannersWithFilters {
     s = new Scan(HConstants.EMPTY_START_ROW, Bytes.toBytes("testRowTwo"));
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match keys not equal to
     // Look across rows and fully validate the keys and ordering
     // Expect varied numbers of keys, 4 per row in group one, 6 per row in
@@ -558,7 +565,7 @@ public class TestScannersWithFilters {
         new BinaryComparator(QUALIFIERS_ONE[2]));
     s = new Scan();
     s.setFilter(f);
-    
+
     KeyValue [] kvs = {
         // testRowOne-0
         new KeyValue(ROWS_ONE[0], FAMILIES[0], QUALIFIERS_ONE[0], VALUES[0]),
@@ -598,7 +605,7 @@ public class TestScannersWithFilters {
         new KeyValue(ROWS_TWO[3], FAMILIES[1], QUALIFIERS_TWO[3], VALUES[1]),
     };
     verifyScanFull(s, kvs);
-     
+
     // Test across rows and groups with a regex
     // Filter out "test*-2"
     // Expect 4 keys per row across both groups
@@ -606,7 +613,7 @@ public class TestScannersWithFilters {
         new RegexStringComparator("test.+-2"));
     s = new Scan();
     s.setFilter(f);
-    
+
     kvs = new KeyValue [] {
         // testRowOne-0
         new KeyValue(ROWS_ONE[0], FAMILIES[0], QUALIFIERS_ONE[0], VALUES[0]),
@@ -652,7 +659,7 @@ public class TestScannersWithFilters {
     Scan s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match a two rows, one from each group, using regex
     expectedRows = 2;
     expectedKeys = colsPerRow;
@@ -661,7 +668,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match rows less than
     // Expect all keys in one row
     expectedRows = 1;
@@ -671,7 +678,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match rows less than or equal
     // Expect all keys in two rows
     expectedRows = 2;
@@ -681,7 +688,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match rows not equal
     // Expect all keys in all but one row
     expectedRows = numRows - 1;
@@ -691,7 +698,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match keys greater or equal
     // Expect all keys in all but one row
     expectedRows = numRows - 1;
@@ -701,7 +708,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match keys greater
     // Expect all keys in all but two rows
     expectedRows = numRows - 2;
@@ -711,7 +718,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match rows not equal to testRowTwo-2
     // Look across rows and fully validate the keys and ordering
     // Should see all keys in all rows but testRowTwo-2
@@ -719,7 +726,7 @@ public class TestScannersWithFilters {
         new BinaryComparator(Bytes.toBytes("testRowOne-2")));
     s = new Scan();
     s.setFilter(f);
-    
+
     KeyValue [] kvs = {
         // testRowOne-0
         new KeyValue(ROWS_ONE[0], FAMILIES[0], QUALIFIERS_ONE[0], VALUES[0]),
@@ -758,7 +765,7 @@ public class TestScannersWithFilters {
         new KeyValue(ROWS_TWO[3], FAMILIES[1], QUALIFIERS_TWO[3], VALUES[1]),
     };
     verifyScanFull(s, kvs);
-    
+
     // Test across rows and groups with a regex
     // Filter out everything that doesn't match "*-2"
     // Expect all keys in two rows
@@ -766,7 +773,7 @@ public class TestScannersWithFilters {
         new RegexStringComparator(".+-2"));
     s = new Scan();
     s.setFilter(f);
-    
+
     kvs = new KeyValue [] {
         // testRowOne-2
         new KeyValue(ROWS_ONE[2], FAMILIES[0], QUALIFIERS_ONE[0], VALUES[0]),
@@ -824,7 +831,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match values less than or equal
     // Expect all rows
     expectedRows = numRows;
@@ -844,7 +851,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match values not equal
     // Expect half the rows
     expectedRows = numRows / 2;
@@ -854,7 +861,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match values greater or equal
     // Expect all rows
     expectedRows = numRows;
@@ -864,7 +871,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match values greater
     // Expect half rows
     expectedRows = numRows / 2;
@@ -874,7 +881,7 @@ public class TestScannersWithFilters {
     s = new Scan();
     s.setFilter(f);
     verifyScanNoEarlyOut(s, expectedRows, expectedKeys);
-    
+
     // Match values not equal to testValueOne
     // Look across rows and fully validate the keys and ordering
     // Should see all keys in all group two rows
@@ -882,7 +889,7 @@ public class TestScannersWithFilters {
         new BinaryComparator(Bytes.toBytes("testValueOne")));
     s = new Scan();
     s.setFilter(f);
-    
+
     KeyValue [] kvs = {
         // testRowTwo-0
         new KeyValue(ROWS_TWO[0], FAMILIES[0], QUALIFIERS_TWO[0], VALUES[1]),
@@ -917,7 +924,7 @@ public class TestScannersWithFilters {
         new BinaryComparator(Bytes.toBytes("testQualifierOne-2"))));
     Scan s = new Scan();
     s.setFilter(f);
-    
+
     KeyValue [] kvs = {
         // testRowTwo-0
         new KeyValue(ROWS_TWO[0], FAMILIES[0], QUALIFIERS_TWO[0], VALUES[1]),
@@ -946,7 +953,7 @@ public class TestScannersWithFilters {
 
   @Test
   public void testFilterList() throws Exception {
-    // Test getting a single row, single key using Row, Qualifier, and Value 
+    // Test getting a single row, single key using Row, Qualifier, and Value
     // regular expression and substring filters
     // Use must pass all
     List<Filter> filters = new ArrayList<Filter>();

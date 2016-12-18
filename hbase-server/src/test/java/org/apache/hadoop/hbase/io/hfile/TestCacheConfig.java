@@ -32,10 +32,13 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.MultiByteBuff;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
+import org.apache.hadoop.hbase.io.hfile.Cacheable.MemoryType;
 import org.apache.hadoop.hbase.io.hfile.bucket.BucketCache;
 import org.apache.hadoop.hbase.util.Threads;
 import org.junit.After;
@@ -70,13 +73,13 @@ public class TestCacheConfig {
     }
 
     @Override
-    public Cacheable deserialize(ByteBuffer b, boolean reuse) throws IOException {
+    public Cacheable deserialize(ByteBuff b, boolean reuse, MemoryType memType) throws IOException {
       LOG.info("Deserialized " + b + ", reuse=" + reuse);
       return cacheable;
     }
 
     @Override
-    public Cacheable deserialize(ByteBuffer b) throws IOException {
+    public Cacheable deserialize(ByteBuff b) throws IOException {
       LOG.info("Deserialized " + b);
       return cacheable;
     }
@@ -136,6 +139,11 @@ public class TestCacheConfig {
     @Override
     public BlockType getBlockType() {
       return BlockType.DATA;
+    }
+
+    @Override
+    public MemoryType getMemoryType() {
+      return MemoryType.EXCLUSIVE;
     }
   };
 

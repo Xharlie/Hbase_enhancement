@@ -23,10 +23,11 @@ import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.io.WritableUtils;
@@ -47,14 +48,14 @@ public class CopyKeyDataBlockEncoder extends BufferedDataBlockEncoder {
     out.writeInt(klength);
     out.writeInt(vlength);
     CellUtil.writeFlatKey(cell, out);
-    out.write(cell.getValueArray(), cell.getValueOffset(), vlength);
+    CellUtil.writeValue(out, cell, vlength);
     int size = klength + vlength + KeyValue.KEYVALUE_INFRASTRUCTURE_SIZE;
     // Write the additional tag into the stream
     if (encodingContext.getHFileContext().isIncludesTags()) {
       int tagsLength = cell.getTagsLength();
       out.writeShort(tagsLength);
       if (tagsLength > 0) {
-        out.write(cell.getTagsArray(), cell.getTagsOffset(), tagsLength);
+        CellUtil.writeTags(out, cell, tagsLength);
       }
       size += tagsLength + KeyValue.TAGS_LENGTH_SIZE;
     }
@@ -66,13 +67,11 @@ public class CopyKeyDataBlockEncoder extends BufferedDataBlockEncoder {
   }
 
   @Override
-  public ByteBuffer getFirstKeyInBlock(ByteBuffer block) {
-    int keyLength = block.getInt(Bytes.SIZEOF_INT);
-    ByteBuffer dup = block.duplicate();
+  public Cell getFirstKeyCellInBlock(ByteBuff block) {
+    int keyLength = block.getIntAfterPosition(Bytes.SIZEOF_INT);
     int pos = 3 * Bytes.SIZEOF_INT;
-    dup.position(pos);
-    dup.limit(pos + keyLength);
-    return dup.slice();
+    ByteBuffer key = block.asSubByteBuffer(pos + keyLength).duplicate();
+    return createFirstKeyCell(key, keyLength);
   }
 
   @Override
@@ -81,7 +80,7 @@ public class CopyKeyDataBlockEncoder extends BufferedDataBlockEncoder {
   }
 
   @Override
-  public EncodedSeeker createSeeker(KVComparator comparator,
+  public EncodedSeeker createSeeker(CellComparator comparator,
       final HFileBlockDecodingContext decodingCtx) {
     return new BufferedEncodedSeeker<SeekerState>(comparator, decodingCtx) {
       @Override
@@ -91,14 +90,14 @@ public class CopyKeyDataBlockEncoder extends BufferedDataBlockEncoder {
         current.ensureSpaceForKey();
         currentBuffer.get(current.keyBuffer, 0, current.keyLength);
         current.valueOffset = currentBuffer.position();
-        ByteBufferUtils.skip(currentBuffer, current.valueLength);
+        currentBuffer.skip(current.valueLength);
         if (includesTags()) {
           // Read short as unsigned, high byte first
           current.tagsLength = ((currentBuffer.get() & 0xff) << 8) ^ (currentBuffer.get() & 0xff);
-          ByteBufferUtils.skip(currentBuffer, current.tagsLength);
+          currentBuffer.skip(current.tagsLength);
         }
         if (includesMvcc()) {
-          current.memstoreTS = ByteBufferUtils.readVLong(currentBuffer);
+          current.memstoreTS = ByteBuff.readVLong(currentBuffer);
         } else {
           current.memstoreTS = 0;
         }
@@ -107,7 +106,7 @@ public class CopyKeyDataBlockEncoder extends BufferedDataBlockEncoder {
 
       @Override
       protected void decodeFirst() {
-        ByteBufferUtils.skip(currentBuffer, Bytes.SIZEOF_INT);
+        currentBuffer.skip(Bytes.SIZEOF_INT);
         current.lastCommonPrefix = 0;
         decodeNext();
       }

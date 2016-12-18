@@ -35,12 +35,15 @@ import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.io.compress.Compression;
+import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.io.hfile.HFile.FileInfo;
-import org.apache.hadoop.hbase.io.hfile.HFileWriterV2;
+import org.apache.hadoop.hbase.regionserver.CellSink;
 import org.apache.hadoop.hbase.regionserver.HStore;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
+import org.apache.hadoop.hbase.regionserver.KeyValueScanner;
 import org.apache.hadoop.hbase.regionserver.ScanType;
 import org.apache.hadoop.hbase.regionserver.ScannerContext;
+import org.apache.hadoop.hbase.regionserver.ShipperListener;
 import org.apache.hadoop.hbase.regionserver.Store;
 import org.apache.hadoop.hbase.regionserver.StoreFile;
 import org.apache.hadoop.hbase.regionserver.StoreFileScanner;
@@ -57,6 +60,7 @@ import org.apache.hadoop.util.StringUtils.TraditionalBinaryPrefix;
 @InterfaceAudience.Private
 public abstract class Compactor {
   private static final Log LOG = LogFactory.getLog(Compactor.class);
+  private static final long COMPACTION_PROGRESS_LOG_INTERVAL = 60 * 1000;
   protected CompactionProgress progress;
   protected Configuration conf;
   protected Store store;
@@ -77,10 +81,6 @@ public abstract class Compactor {
         Compression.Algorithm.NONE : this.store.getFamily().getCompactionCompression();
     this.keepSeqIdPeriod = Math.max(this.conf.getInt(HConstants.KEEP_SEQID_PERIOD, 
       HConstants.MIN_KEEP_SEQID_PERIOD), HConstants.MIN_KEEP_SEQID_PERIOD);
-  }
-
-  public interface CellSink {
-    void append(Cell cell) throws IOException;
   }
 
   public CompactionProgress getProgress() {
@@ -144,7 +144,7 @@ public abstract class Compactor {
         fd.maxMVCCReadpoint = Math.max(fd.maxMVCCReadpoint, r.getSequenceID());
       }
       else {
-        tmp = fileInfo.get(HFileWriterV2.MAX_MEMSTORE_TS_KEY);
+        tmp = fileInfo.get(HFile.Writer.MAX_MEMSTORE_TS_KEY);
         if (tmp != null) {
           fd.maxMVCCReadpoint = Math.max(fd.maxMVCCReadpoint, Bytes.toLong(tmp));
         }
@@ -258,12 +258,14 @@ public abstract class Compactor {
   protected boolean performCompaction(InternalScanner scanner, CellSink writer,
       long smallestReadPoint, boolean cleanSeqId,
       ThroughputController throughputController) throws IOException {
-    long bytesWritten = 0;
-    long bytesWrittenProgress = 0;
+    assert writer instanceof ShipperListener;
+    long bytesWrittenProgressForCloseCheck = 0;
+    long bytesWrittenProgressForLog = 0;
+    long bytesWrittenProgressForShippedCall = 0;
     // Since scanner.next() can return 'false' but still be delivering data,
     // we have to use a do/while loop.
     List<Cell> cells = new ArrayList<Cell>();
-    long closeCheckInterval = HStore.getCloseCheckInterval();
+    long closeCheckSizeLimit = HStore.getCloseCheckInterval();
     long lastMillis = 0;
     if (LOG.isDebugEnabled()) {
       lastMillis = EnvironmentEdgeManager.currentTime();
@@ -275,6 +277,11 @@ public abstract class Compactor {
         ScannerContext.newBuilder().setBatchLimit(compactionKVMax).build();
 
     throughputController.start(compactionName);
+    KeyValueScanner kvs = (scanner instanceof KeyValueScanner)? (KeyValueScanner)scanner : null;
+    int minFilesToCompact = Math.max(2,
+        conf.getInt(CompactionConfiguration.HBASE_HSTORE_COMPACTION_MIN_KEY,
+            /* old name */ conf.getInt("hbase.hstore.compactionThreshold", 3)));
+    long shippedCallSizeLimit = minFilesToCompact * HConstants.DEFAULT_BLOCKSIZE;
     try {
       do {
         hasMore = scanner.next(cells, scannerContext);
@@ -290,35 +297,49 @@ public abstract class Compactor {
           int len = KeyValueUtil.length(c);
           ++progress.currentCompactedKVs;
           progress.totalCompactedSize += len;
+          bytesWrittenProgressForShippedCall += len;
           if (LOG.isDebugEnabled()) {
-            bytesWrittenProgress += len;
+            bytesWrittenProgressForLog += len;
           }
           throughputController.control(compactionName, len);
           // check periodically to see if a system stop is requested
-          if (closeCheckInterval > 0) {
-            bytesWritten += len;
-            if (bytesWritten > closeCheckInterval) {
-              bytesWritten = 0;
+          if (closeCheckSizeLimit > 0) {
+            bytesWrittenProgressForCloseCheck += len;
+            if (bytesWrittenProgressForCloseCheck > closeCheckSizeLimit) {
+              bytesWrittenProgressForCloseCheck = 0;
               if (!store.areWritesEnabled()) {
                 progress.cancel();
                 return false;
               }
             }
           }
+          if (kvs != null && bytesWrittenProgressForShippedCall > shippedCallSizeLimit) {
+            // Clone the cells that are in the writer so that they are freed of references,
+            // if they are holding any.
+            ((ShipperListener) writer).beforeShipped();
+            // The SHARED block references, being read for compaction, will be kept in prevBlocks
+            // list(See HFileScannerImpl#prevBlocks). In case of scan flow, after each set of cells
+            // being returned to client, we will call shipped() which can clear this list. Here by
+            // we are doing the similar thing. In between the compaction (after every N cells
+            // written with collective size of 'shippedCallSizeLimit') we will call shipped which
+            // may clear prevBlocks list.
+            kvs.shipped();
+            bytesWrittenProgressForShippedCall = 0;
+          }
         }
         // Log the progress of long running compactions every minute if
         // logging at DEBUG level
         if (LOG.isDebugEnabled()) {
-          if ((now - lastMillis) >= 60 * 1000) {
+          if ((now - lastMillis) >= COMPACTION_PROGRESS_LOG_INTERVAL) {
             LOG.debug("Compaction progress: "
                 + compactionName
                 + " "
                 + progress
-                + String.format(", rate=%.2f kB/sec", (bytesWrittenProgress / 1024.0)
+                + String.format(", rate=%.2f kB/sec", (bytesWrittenProgressForLog / 1024.0)
                     / ((now - lastMillis) / 1000.0)) + ", throughputController is "
                 + throughputController);
             lastMillis = now;
-            bytesWrittenProgress = 0;
+            bytesWrittenProgressForLog = 0;
           }
         }
         cells.clear();

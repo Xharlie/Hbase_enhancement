@@ -19,8 +19,10 @@
 package org.apache.hadoop.hbase.codec.prefixtree.timestamp;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Collection;
 
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.codec.prefixtree.PrefixTreeBlockMeta;
 import org.apache.hadoop.hbase.codec.prefixtree.decode.timestamp.TimestampDecoder;
@@ -61,7 +63,7 @@ public class TestTimestampEncoder {
     blockMeta.setTimestampFields(encoder);
     bytes = encoder.getByteArray();
     decoder = new TimestampDecoder();
-    decoder.initOnBlock(blockMeta, bytes);
+    decoder.initOnBlock(blockMeta, new SingleByteBuff(ByteBuffer.wrap(bytes)));
   }
 
   @Test

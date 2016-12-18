@@ -35,6 +35,8 @@ import org.apache.hadoop.hbase.protobuf.generated.AdminProtos.AdminService;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ClientService;
 import org.apache.hadoop.hbase.protobuf.generated.MasterProtos.MasterService;
 
+import com.google.protobuf.RpcCallback;
+
 /** Internal methods on HConnection that should not be used by user code. */
 @InterfaceAudience.Private
 // NOTE: Although this class is public, this class is meant to be used directly from internal
@@ -227,6 +229,16 @@ public interface ClusterConnection extends HConnection {
   ClientService.BlockingInterface getClient(final ServerName serverName) throws IOException;
 
   /**
+   * Establishes a connection to the region server at the specified address, and returns an
+   * non-blocking region client protocol.
+   * @param serverName
+   * @return Non-blocking proxy for RegionServer
+   * @throws IOException if a remote or network exception occurs
+   */
+  @Override
+  ClientService.Interface getAsyncClient(final ServerName serverName) throws IOException;
+
+  /**
    * Find region location hosting passed row
    * @param tableName table name
    * @param row Row to find.
@@ -306,4 +318,9 @@ public interface ClusterConnection extends HConnection {
    *         supports cell blocks rather than Protobuffed Cells.
    */
   boolean supportsCellBlock();
+
+  /**
+   * @return true when this client supports non-blocking interface with {@link RpcCallback}
+   */
+  boolean supportsNonBlockingInterface();
 }

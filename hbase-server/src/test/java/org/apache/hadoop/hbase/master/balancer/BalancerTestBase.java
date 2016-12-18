@@ -38,6 +38,7 @@ import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.RegionReplicaUtil;
+import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.master.RackManager;
 import org.apache.hadoop.hbase.master.RegionPlan;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -107,6 +108,39 @@ public class BalancerTestBase {
       assertTrue(server.getLoad() >= 0);
       assertTrue(server.getLoad() <= max);
       assertTrue(server.getLoad() >= min);
+    }
+  }
+
+  /**
+   * Invariant is that all servers have between acceptable range
+   * number of regions.
+   */
+  public void assertClusterOverallAsBalanced(List<ServerAndLoad> servers, int tablenum) {
+    int numServers = servers.size();
+    int numRegions = 0;
+    int maxRegions = 0;
+    int minRegions = Integer.MAX_VALUE;
+    for (ServerAndLoad server : servers) {
+      int nr = server.getLoad();
+      if (nr > maxRegions) {
+        maxRegions = nr;
+      }
+      if (nr < minRegions) {
+        minRegions = nr;
+      }
+      numRegions += nr;
+    }
+    if (maxRegions - minRegions < 2) {
+      // less than 2 between max and min, can't balance
+      return;
+    }
+    int min = numRegions / numServers;
+    int max = numRegions % numServers == 0 ? min : min + 1;
+
+    for (ServerAndLoad server : servers) {
+      assertTrue(server.getLoad() >= 0);
+      assertTrue(server.getLoad() <= max + tablenum/2 );
+      assertTrue(server.getLoad() >= min - tablenum/2 );
     }
   }
 
@@ -254,6 +288,33 @@ public class BalancerTestBase {
       servers.put(sal.getServerName(), regions);
     }
     return servers;
+  }
+
+  protected HashMap<TableName, TreeMap<ServerName, List<HRegionInfo>>> mockClusterServersWithTables(Map<ServerName, List<HRegionInfo>> clusterServers) {
+    HashMap<TableName, TreeMap<ServerName, List<HRegionInfo>>> result = new HashMap<>();
+    for (Map.Entry<ServerName, List<HRegionInfo>> entry : clusterServers.entrySet()) {
+      ServerName sal = entry.getKey();
+      List<HRegionInfo> regions = entry.getValue();
+      for (HRegionInfo hri : regions){
+        TreeMap<ServerName, List<HRegionInfo>> servers = result.get(hri.getTable());
+        if (servers == null) {
+          servers = new TreeMap<ServerName, List<HRegionInfo>>();
+          result.put(hri.getTable(), servers);
+        }
+        List<HRegionInfo> hrilist = servers.get(sal);
+        if (hrilist == null) {
+          hrilist = new ArrayList<HRegionInfo>();
+          servers.put(sal, hrilist);
+        }
+        hrilist.add(hri);
+      }
+    }
+    for(Map.Entry<TableName, TreeMap<ServerName, List<HRegionInfo>>> entry : result.entrySet()){
+      for(ServerName srn : clusterServers.keySet()){
+        if (!entry.getValue().containsKey(srn)) entry.getValue().put(srn, new ArrayList<HRegionInfo>());
+      }
+    }
+    return result;
   }
 
   private Queue<HRegionInfo> regionQueue = new LinkedList<HRegionInfo>();

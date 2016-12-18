@@ -18,57 +18,59 @@ package org.apache.hadoop.hbase.io.encoding;
 
 import java.nio.ByteBuffer;
 
+import org.apache.hadoop.hbase.ByteBufferedCell;
+import org.apache.hadoop.hbase.ByteBufferedKeyOnlyKeyValue;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
-import org.apache.hadoop.hbase.NoTagsKeyValue;
+import org.apache.hadoop.hbase.OffheapKeyValue;
+import org.apache.hadoop.hbase.SizeCachedKeyValue;
+import org.apache.hadoop.hbase.SizeCachedNoTagsKeyValue;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.io.encoding.DataBlockEncoder.EncodedSeeker;
+import org.apache.hadoop.hbase.io.encoding.AbstractDataBlockEncoder.AbstractEncodedSeeker;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.SimpleMutableByteRange;
+import org.apache.hadoop.hbase.util.ObjectIntPair;
 import org.apache.hadoop.io.WritableUtils;
 
 @InterfaceAudience.Private
-public class RowIndexSeekerV1 implements EncodedSeeker {
+public class RowIndexSeekerV1 extends AbstractEncodedSeeker {
 
-  private HFileBlockDecodingContext decodingCtx;
-  private final KVComparator comparator;
+  // A temp pair object which will be reused by ByteBuff#asSubByteBuffer calls. This avoids too
+  // many object creations.
+  protected final ObjectIntPair<ByteBuffer> tmpPair = new ObjectIntPair<ByteBuffer>();
 
-  private ByteBuffer currentBuffer;
+  private ByteBuff currentBuffer;
   private SeekerState current = new SeekerState(); // always valid
   private SeekerState previous = new SeekerState(); // may not be valid
 
   private int rowNumber;
-  private ByteBuffer rowOffsets = null;
+  private ByteBuff rowOffsets = null;
 
-  public RowIndexSeekerV1(KVComparator comparator,
+  public RowIndexSeekerV1(CellComparator comparator,
       HFileBlockDecodingContext decodingCtx) {
-    this.comparator = comparator;
-    this.decodingCtx = decodingCtx;
+    super(comparator, decodingCtx);
   }
 
   @Override
-  public void setCurrentBuffer(ByteBuffer buffer) {
-    int onDiskSize = Bytes.toIntUnsafe(buffer.array(), buffer.arrayOffset()
-        + buffer.limit() - Bytes.SIZEOF_INT);
-    // int onDiskSize = buffer.getInt(buffer.limit() - Bytes.SIZEOF_INT);
+  public void setCurrentBuffer(ByteBuff buffer) {
+    int onDiskSize = buffer.getInt(buffer.limit() - Bytes.SIZEOF_INT);
 
     // Data part
-    ByteBuffer dup = buffer.duplicate();
+    ByteBuff dup = buffer.duplicate();
     dup.position(buffer.position());
     dup.limit(buffer.position() + onDiskSize);
     currentBuffer = dup.slice();
     current.currentBuffer = currentBuffer;
-    ByteBufferUtils.skip(buffer, onDiskSize);
+    buffer.skip(onDiskSize);
 
     // Row offset
     rowNumber = buffer.getInt();
-    // equals Bytes.SIZEOF_INT * rowNumber
-    int totalRowOffsetsLength = rowNumber << 2;
-    ByteBuffer rowDup = buffer.duplicate();
+    int totalRowOffsetsLength = Bytes.SIZEOF_INT * rowNumber;
+    ByteBuff rowDup = buffer.duplicate();
     rowDup.position(buffer.position());
     rowDup.limit(buffer.position() + totalRowOffsetsLength);
     rowOffsets = rowDup.slice();
@@ -77,19 +79,26 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
   }
 
   @Override
-  public ByteBuffer getKeyDeepCopy() {
-    ByteBuffer keyBuffer = ByteBuffer.allocate(current.keyLength);
-    keyBuffer.put(current.keyBuffer.getBytes(), current.keyBuffer.getOffset(),
-        current.keyLength);
-    keyBuffer.rewind();
-    return keyBuffer;
+  public Cell getKey() {
+    if (current.keyBuffer.hasArray()) {
+      return new KeyValue.KeyOnlyKeyValue(current.keyBuffer.array(),
+          current.keyBuffer.arrayOffset() + current.keyBuffer.position(),
+          current.keyLength);
+    } else {
+      byte[] key = new byte[current.keyLength];
+      ByteBufferUtils.copyFromBufferToArray(key, current.keyBuffer,
+          current.keyBuffer.position(), 0, current.keyLength);
+      return new KeyValue.KeyOnlyKeyValue(key, 0, current.keyLength);
+    }
   }
 
   @Override
   public ByteBuffer getValueShallowCopy() {
-    ByteBuffer dup = currentBuffer.duplicate();
-    dup.position(current.valueOffset);
-    dup.limit(current.valueOffset + current.valueLength);
+    currentBuffer.asSubByteBuffer(current.valueOffset, current.valueLength,
+        tmpPair);
+    ByteBuffer dup = tmpPair.getFirst().duplicate();
+    dup.position(tmpPair.getSecond());
+    dup.limit(tmpPair.getSecond() + current.valueLength);
     return dup.slice();
   }
 
@@ -99,24 +108,23 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
   }
 
   ByteBuffer getKeyValueBuffer(boolean addMvcc) {
+    Cell cell = current.toCell();
     ByteBuffer kvBuffer = createKVBuffer(addMvcc);
     kvBuffer.putInt(current.keyLength);
     kvBuffer.putInt(current.valueLength);
-    kvBuffer.put(current.keyBuffer.getBytes(), current.keyBuffer.getOffset(),
-        current.keyLength);
-    ByteBufferUtils.copyFromBufferToBuffer(kvBuffer, currentBuffer,
-        current.valueOffset, current.valueLength);
+    ByteBufferUtils.copyFromBufferToBuffer(current.keyBuffer, kvBuffer,
+      current.keyBuffer.position(), current.keyLength);
+    kvBuffer.put(CellUtil.cloneValue(cell));
     if (current.tagsLength > 0) {
       // Put short as unsigned
       kvBuffer.put((byte) (current.tagsLength >> 8 & 0xff));
       kvBuffer.put((byte) (current.tagsLength & 0xff));
       if (current.tagsOffset != -1) {
-        ByteBufferUtils.copyFromBufferToBuffer(kvBuffer, currentBuffer,
-            current.tagsOffset, current.tagsLength);
+        kvBuffer.put(CellUtil.cloneTags(cell));
       }
     }
     if (addMvcc && includesMvcc()) {
-      ByteBufferUtils.writeVLong(kvBuffer, current.getSequenceId());
+      ByteBufferUtils.writeVLong(kvBuffer, cell.getSequenceId());
     }
     kvBuffer.rewind();
     return kvBuffer;
@@ -127,14 +135,14 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
         (int) KeyValue.getKeyValueDataStructureSize(current.keyLength, current.valueLength,
           current.tagsLength);
     if (addMvcc && includesMvcc()) {
-      kvBufSize += WritableUtils.getVIntSize(current.getSequenceId());
+      kvBufSize += WritableUtils.getVIntSize(current.memstoreTS);
     }
     ByteBuffer kvBuffer = ByteBuffer.allocate(kvBufSize);
     return kvBuffer;
   }
 
   @Override
-  public Cell getKeyValue() {
+  public Cell getCell() {
     return current.toCell();
   }
 
@@ -154,25 +162,15 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
     return true;
   }
 
-  @Override
-  public int seekToKeyInBlock(byte[] key, int offset, int length,
-      boolean seekBefore) {
-    return seekToKeyInBlock(new KeyValue.KeyOnlyKeyValue(key, offset, length),
-        seekBefore);
-  }
-
   private int binarySearch(Cell seekCell, boolean seekBefore) {
     int low = 0;
     int high = rowNumber - 1;
     int mid = (low + high) >>> 1;
     int comp = 0;
-    SimpleMutableByteRange row = new SimpleMutableByteRange();
     while (low <= high) {
       mid = (low + high) >>> 1;
-      getRow(mid, row);
-      comp = comparator.compareRows(row.getBytes(), row.getOffset(),
-          row.getLength(), seekCell.getRowArray(), seekCell.getRowOffset(),
-          seekCell.getRowLength());
+      ByteBuffer row = getRow(mid);
+      comp = compareRows(row, seekCell);
       if (comp < 0) {
         low = mid + 1;
       } else if (comp > 0) {
@@ -194,12 +192,28 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
     }
   }
 
-  private void getRow(int index, SimpleMutableByteRange row) {
-    int offset = Bytes.toIntUnsafe(rowOffsets.array(), rowOffsets.arrayOffset()
-        + (index << 2)); // index * Bytes.SIZEOF_INT
-    int position = currentBuffer.arrayOffset() + offset + Bytes.SIZEOF_LONG;
-    short rowLen = Bytes.toShortUnsafe(currentBuffer.array(), position);
-    row.set(currentBuffer.array(), position + Bytes.SIZEOF_SHORT, rowLen);
+  private int compareRows(ByteBuffer row, Cell seekCell) {
+    if (seekCell instanceof ByteBufferedCell) {
+      return ByteBufferUtils.compareTo(row, row.position(), row.remaining(),
+          ((ByteBufferedCell) seekCell).getRowByteBuffer(),
+          ((ByteBufferedCell) seekCell).getRowPosition(),
+          seekCell.getRowLength());
+    } else {
+      return ByteBufferUtils.compareTo(row, row.position(), row.remaining(),
+          seekCell.getRowArray(), seekCell.getRowOffset(),
+          seekCell.getRowLength());
+    }
+  }
+
+  private ByteBuffer getRow(int index) {
+    int offset = rowOffsets.getIntAfterPosition(index * Bytes.SIZEOF_INT);
+    ByteBuff block = currentBuffer.duplicate();
+    block.position(offset + Bytes.SIZEOF_LONG);
+    short rowLen = block.getShort();
+    block.asSubByteBuffer(block.position(), rowLen, tmpPair);
+    ByteBuffer row = tmpPair.getFirst();
+    row.position(tmpPair.getSecond()).limit(tmpPair.getSecond() + rowLen);
+    return row;
   }
 
   @Override
@@ -209,15 +223,14 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
     if (index < 0) {
       return HConstants.INDEX_KEY_MAGIC; // using optimized index key
     } else {
-      int offset = Bytes.toIntUnsafe(rowOffsets.array(),
-          rowOffsets.arrayOffset() + (index << 2));
+      int offset = rowOffsets.getIntAfterPosition(index * Bytes.SIZEOF_INT);
       if (offset != 0) {
         decodeAtPosition(offset);
       }
     }
     do {
       int comp;
-      comp = comparator.compareOnlyKeyPortion(seekCell, current.currentKey);
+      comp = comparator.compareKeyIgnoresMvcc(seekCell, current.currentKey);
       if (comp == 0) { // exact match
         if (seekBefore) {
           if (!previous.isValid()) {
@@ -257,8 +270,7 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
 
   private void moveToPrevious() {
     if (!previous.isValid()) {
-      throw new IllegalStateException(
-          "Can move back only once and not in first key in the block.");
+      throw new IllegalStateException("Can move back only once and not in first key in the block.");
     }
 
     SeekerState tmp = previous;
@@ -271,18 +283,8 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
   }
 
   @Override
-  public int compareKey(KVComparator comparator, byte[] key, int offset,
-      int length) {
-    return comparator.compareFlatKey(key, offset, length,
-        current.keyBuffer.getBytes(), current.keyBuffer.getOffset(),
-        current.keyBuffer.getLength());
-  }
-
-  @Override
-  public int compareKey(KVComparator comparator, Cell key) {
-    return comparator.compareOnlyKeyPortion(key, new KeyValue.KeyOnlyKeyValue(
-        current.keyBuffer.getBytes(), current.keyBuffer.getOffset(),
-        current.keyBuffer.getLength()));
+  public int compareKey(CellComparator comparator, Cell key) {
+    return comparator.compareKeyIgnoresMvcc(key, current.currentKey);
   }
 
   protected void decodeFirst() {
@@ -298,54 +300,50 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
 
   protected void decodeNext() {
     current.startOffset = currentBuffer.position();
-    int p = currentBuffer.position() + currentBuffer.arrayOffset();
-    long ll = Bytes.toLong(currentBuffer.array(), p);
+    long ll = currentBuffer.getLongAfterPosition(0);
     // Read top half as an int of key length and bottom int as value length
     current.keyLength = (int) (ll >> Integer.SIZE);
     current.valueLength = (int) (Bytes.MASK_FOR_LOWER_INT_IN_LONG ^ ll);
-    ByteBufferUtils.skip(currentBuffer, Bytes.SIZEOF_LONG);
+    currentBuffer.skip(Bytes.SIZEOF_LONG);
     // key part
-    current.keyBuffer.set(currentBuffer.array(), currentBuffer.arrayOffset()
-        + currentBuffer.position(), current.keyLength);
-    ByteBufferUtils.skip(currentBuffer, current.keyLength);
+    currentBuffer.asSubByteBuffer(currentBuffer.position(), current.keyLength,
+        tmpPair);
+    ByteBuffer key = tmpPair.getFirst().duplicate();
+    key.position(tmpPair.getSecond()).limit(
+        tmpPair.getSecond() + current.keyLength);
+    current.keyBuffer = key;
+    currentBuffer.skip(current.keyLength);
     // value part
     current.valueOffset = currentBuffer.position();
-    ByteBufferUtils.skip(currentBuffer, current.valueLength);
+    currentBuffer.skip(current.valueLength);
     if (includesTags()) {
       decodeTags();
     }
     if (includesMvcc()) {
-      current.memstoreTS = ByteBufferUtils.readVLong(currentBuffer);
+      current.memstoreTS = ByteBuff.readVLong(currentBuffer);
     } else {
       current.memstoreTS = 0;
     }
     current.nextKvOffset = currentBuffer.position();
-    current.setKey(current.keyBuffer.getBytes(), current.keyBuffer.getOffset(),
-        current.keyBuffer.getLength());
-  }
-
-  protected boolean includesMvcc() {
-    return this.decodingCtx.getHFileContext().isIncludesMvcc();
-  }
-
-  protected boolean includesTags() {
-    return this.decodingCtx.getHFileContext().isIncludesTags();
+    current.currentKey.setKey(current.keyBuffer, tmpPair.getSecond(),
+        current.keyLength);
   }
 
   protected void decodeTags() {
-    current.tagsLength = currentBuffer.getShort();
+    current.tagsLength = currentBuffer.getShortAfterPosition(0);
+    currentBuffer.skip(Bytes.SIZEOF_SHORT);
     current.tagsOffset = currentBuffer.position();
-    ByteBufferUtils.skip(currentBuffer, current.tagsLength);
+    currentBuffer.skip(current.tagsLength);
   }
 
-  protected class SeekerState {
+  private class SeekerState {
     /**
      * The size of a (key length, value length) tuple that prefixes each entry
      * in a data block.
      */
     public final static int KEY_VALUE_LEN_SIZE = 2 * Bytes.SIZEOF_INT;
 
-    protected ByteBuffer currentBuffer;
+    protected ByteBuff currentBuffer;
     protected int startOffset = -1;
     protected int valueOffset = -1;
     protected int keyLength;
@@ -353,10 +351,11 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
     protected int tagsLength = 0;
     protected int tagsOffset = -1;
 
-    protected SimpleMutableByteRange keyBuffer = new SimpleMutableByteRange();
+    protected ByteBuffer keyBuffer = null;
     protected long memstoreTS;
     protected int nextKvOffset;
-    protected KeyValue.KeyOnlyKeyValue currentKey = new KeyValue.KeyOnlyKeyValue();
+    // buffer backed keyonlyKV
+    private ByteBufferedKeyOnlyKeyValue currentKey = new ByteBufferedKeyOnlyKeyValue();
 
     protected boolean isValid() {
       return valueOffset != -1;
@@ -364,28 +363,19 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
 
     protected void invalidate() {
       valueOffset = -1;
-      currentKey = new KeyValue.KeyOnlyKeyValue();
+      currentKey = new ByteBufferedKeyOnlyKeyValue();
       currentBuffer = null;
     }
 
-    protected void setKey(byte[] key, int offset, int length) {
-      currentKey.setKey(key, offset, length);
-    }
-
-    protected long getSequenceId() {
-      return memstoreTS;
-    }
-
     /**
-     * Copy the state from the next one into this instance (the previous state
-     * placeholder). Used to save the previous state when we are advancing the
-     * seeker to the next key/value.
+     * Copy the state from the next one into this instance (the previous state placeholder). Used to
+     * save the previous state when we are advancing the seeker to the next key/value.
      */
     protected void copyFromNext(SeekerState nextState) {
-      keyBuffer.set(nextState.keyBuffer.getBytes(),
-          nextState.keyBuffer.getOffset(), nextState.keyBuffer.getLength());
-      currentKey.setKey(nextState.keyBuffer.getBytes(),
-          nextState.keyBuffer.getOffset(), nextState.keyBuffer.getLength());
+      keyBuffer = nextState.keyBuffer;
+      currentKey.setKey(nextState.keyBuffer,
+          nextState.currentKey.getRowPosition() - Bytes.SIZEOF_SHORT,
+          nextState.keyLength);
 
       startOffset = nextState.startOffset;
       valueOffset = nextState.valueOffset;
@@ -411,26 +401,40 @@ public class RowIndexSeekerV1 implements EncodedSeeker {
       return kvBufSize;
     }
 
-    protected Cell formNoTagsKeyValue() {
-      NoTagsKeyValue ret = new NoTagsKeyValue(currentBuffer.array(),
-          currentBuffer.arrayOffset() + startOffset, getCellBufSize());
+    public Cell toCell() {
+      Cell ret;
+      int cellBufSize = getCellBufSize();
+      long seqId = 0l;
       if (includesMvcc()) {
-        ret.setSequenceId(memstoreTS);
+        seqId = memstoreTS;
+      }
+      if (currentBuffer.hasArray()) {
+        // TODO : reduce the varieties of KV here. Check if based on a boolean
+        // we can handle the 'no tags' case.
+        if (tagsLength > 0) {
+          ret = new SizeCachedKeyValue(currentBuffer.array(),
+              currentBuffer.arrayOffset() + startOffset, cellBufSize, seqId);
+        } else {
+          ret = new SizeCachedNoTagsKeyValue(currentBuffer.array(),
+              currentBuffer.arrayOffset() + startOffset, cellBufSize, seqId);
+        }
+      } else {
+        currentBuffer.asSubByteBuffer(startOffset, cellBufSize, tmpPair);
+        ByteBuffer buf = tmpPair.getFirst();
+        if (buf.isDirect()) {
+          ret = new OffheapKeyValue(buf, tmpPair.getSecond(), cellBufSize,
+              tagsLength > 0, seqId);
+        } else {
+          if (tagsLength > 0) {
+            ret = new SizeCachedKeyValue(buf.array(), buf.arrayOffset()
+                + tmpPair.getSecond(), cellBufSize, seqId);
+          } else {
+            ret = new SizeCachedNoTagsKeyValue(buf.array(), buf.arrayOffset()
+                + tmpPair.getSecond(), cellBufSize, seqId);
+          }
+        }
       }
       return ret;
-    }
-
-    public Cell toCell() {
-      if (tagsOffset > 0) {
-        KeyValue ret = new KeyValue(currentBuffer.array(),
-            currentBuffer.arrayOffset() + startOffset, getCellBufSize());
-        if (includesMvcc()) {
-          ret.setSequenceId(memstoreTS);
-        }
-        return ret;
-      } else {
-        return formNoTagsKeyValue();
-      }
     }
   }
 

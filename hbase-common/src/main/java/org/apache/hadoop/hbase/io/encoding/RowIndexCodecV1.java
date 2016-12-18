@@ -24,13 +24,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
+import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.io.hfile.BlockType;
-import org.apache.hadoop.hbase.io.hfile.HFileContext;
+import org.apache.hadoop.hbase.io.ByteArrayOutputStream;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.io.WritableUtils;
 
 /**
  * Store cells following every row's start offset, so we can binary search to a row's cells.
@@ -45,7 +48,7 @@ import org.apache.hadoop.hbase.util.Bytes;
  *
 */
 @InterfaceAudience.Private
-public class RowIndexCodecV1 implements DataBlockEncoder {
+public class RowIndexCodecV1 extends AbstractDataBlockEncoder {
 
   private static class RowIndexEncodingState extends EncodingState {
     RowIndexEncoderV1 encoder = null;
@@ -86,20 +89,16 @@ public class RowIndexCodecV1 implements DataBlockEncoder {
         .getEncodingState();
     RowIndexEncoderV1 encoder = state.encoder;
     encoder.flush();
-    if (encodingCtx.getDataBlockEncoding() != DataBlockEncoding.NONE) {
-      encodingCtx.postEncoding(BlockType.ENCODED_DATA);
-    } else {
-      encodingCtx.postEncoding(BlockType.DATA);
-    }
+    postEncoding(encodingCtx);
   }
 
   @Override
   public ByteBuffer decodeKeyValues(DataInputStream source,
       HFileBlockDecodingContext decodingCtx) throws IOException {
+    ByteBuffer sourceAsBuffer = ByteBufferUtils
+        .drainInputStreamToBuffer(source);// waste
+    sourceAsBuffer.mark();
     if (!decodingCtx.getHFileContext().isIncludesTags()) {
-      ByteBuffer sourceAsBuffer = ByteBufferUtils
-          .drainInputStreamToBuffer(source);// waste
-      sourceAsBuffer.mark();
       sourceAsBuffer.position(sourceAsBuffer.limit() - Bytes.SIZEOF_INT);
       int onDiskSize = sourceAsBuffer.getInt();
       sourceAsBuffer.reset();
@@ -108,58 +107,44 @@ public class RowIndexCodecV1 implements DataBlockEncoder {
       dup.limit(sourceAsBuffer.position() + onDiskSize);
       return dup.slice();
     } else {
-      ByteBuffer sourceAsBuffer = ByteBufferUtils
-          .drainInputStreamToBuffer(source);// waste
-      sourceAsBuffer.mark();
-      RowIndexSeekerV1 seeker = new RowIndexSeekerV1(KeyValue.COMPARATOR,
+      RowIndexSeekerV1 seeker = new RowIndexSeekerV1(CellComparator.COMPARATOR,
           decodingCtx);
-      seeker.setCurrentBuffer(sourceAsBuffer);
-      List<ByteBuffer> kvs = new ArrayList<ByteBuffer>();
-      kvs.add(seeker.getKeyValueBuffer(true));
+      seeker.setCurrentBuffer(new SingleByteBuff(sourceAsBuffer));
+      List<Cell> kvs = new ArrayList<Cell>();
+      kvs.add(seeker.getCell());
       while (seeker.next()) {
-        kvs.add(seeker.getKeyValueBuffer(true));
+        kvs.add(seeker.getCell());
       }
-      int totalLength = 0;
-      for (ByteBuffer buf : kvs) {
-        totalLength += buf.remaining();
+      boolean includesMvcc = decodingCtx.getHFileContext().isIncludesMvcc();
+      ByteArrayOutputStream baos = new ByteArrayOutputStream();
+      DataOutputStream out = new DataOutputStream(baos);
+      for (Cell cell : kvs) {
+        KeyValue currentCell = KeyValueUtil.copyToNewKeyValue(cell);
+        out.write(currentCell.getBuffer(), currentCell.getOffset(),
+            currentCell.getLength());
+        if (includesMvcc) {
+          WritableUtils.writeVLong(out, cell.getSequenceId());
+        }
       }
-      byte[] keyValueBytes = new byte[totalLength];
-      ByteBuffer result = ByteBuffer.wrap(keyValueBytes);
-      for (ByteBuffer buf : kvs) {
-        result.put(buf);
-      }
-      return result;
+      out.flush();
+      return ByteBuffer.wrap(baos.getBuffer(), 0, baos.size());
     }
   }
 
   @Override
-  public ByteBuffer getFirstKeyInBlock(ByteBuffer block) {
+  public Cell getFirstKeyCellInBlock(ByteBuff block) {
     block.mark();
     int keyLength = block.getInt();
     block.getInt();
-    int pos = block.position();
+    ByteBuffer key = block.asSubByteBuffer(keyLength).duplicate();
     block.reset();
-    ByteBuffer dup = block.duplicate();
-    dup.position(pos);
-    dup.limit(pos + keyLength);
-    return dup.slice();
+    return createFirstKeyCell(key, keyLength);
   }
 
   @Override
-  public EncodedSeeker createSeeker(KVComparator comparator,
+  public EncodedSeeker createSeeker(CellComparator comparator,
       HFileBlockDecodingContext decodingCtx) {
     return new RowIndexSeekerV1(comparator, decodingCtx);
-  }
-
-  @Override
-  public HFileBlockEncodingContext newDataBlockEncodingContext(
-      DataBlockEncoding encoding, byte[] header, HFileContext meta) {
-    return new HFileBlockDefaultEncodingContext(encoding, header, meta);
-  }
-
-  @Override
-  public HFileBlockDecodingContext newDataBlockDecodingContext(HFileContext meta) {
-    return new HFileBlockDefaultDecodingContext(meta);
   }
 
 }

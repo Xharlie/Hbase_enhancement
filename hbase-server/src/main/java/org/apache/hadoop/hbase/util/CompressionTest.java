@@ -35,7 +35,7 @@ import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.io.compress.Compression;
-import org.apache.hadoop.hbase.io.hfile.AbstractHFileWriter;
+import org.apache.hadoop.hbase.io.hfile.HFileWriterImpl;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.io.hfile.HFileContext;
@@ -120,7 +120,7 @@ public class CompressionTest {
   throws Exception {
     Configuration conf = HBaseConfiguration.create();
     HFileContext context = new HFileContextBuilder()
-                           .withCompression(AbstractHFileWriter.compressionByName(codec)).build();
+                           .withCompression(HFileWriterImpl.compressionByName(codec)).build();
     HFile.Writer writer = HFile.getWriterFactoryNoCache(conf)
         .withPath(fs, path)
         .withFileContext(context)
@@ -138,8 +138,8 @@ public class CompressionTest {
       HFileScanner scanner = reader.getScanner(false, true);
       scanner.seekTo(); // position to the start of file
       // Scanner does not do Cells yet. Do below for now till fixed.
-      cc = scanner.getKeyValue();
-      if (CellComparator.compareRows(c, cc) != 0) {
+      cc = scanner.getCell();
+      if (CellComparator.COMPARATOR.compareRows(c, cc) != 0) {
         throw new Exception("Read back incorrect result: " + c.toString() + " vs " + cc.toString());
       }
     } finally {

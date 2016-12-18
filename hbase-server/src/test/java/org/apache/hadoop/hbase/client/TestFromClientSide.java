@@ -81,6 +81,7 @@ import org.apache.hadoop.hbase.filter.RegexStringComparator;
 import org.apache.hadoop.hbase.filter.RowFilter;
 import org.apache.hadoop.hbase.filter.SingleColumnValueFilter;
 import org.apache.hadoop.hbase.filter.WhileMatchFilter;
+import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.BlockCache;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.ipc.CoprocessorRpcChannel;
@@ -183,7 +184,8 @@ public class TestFromClientSide {
      final byte[] T2 = Bytes.toBytes("T2");
      final byte[] T3 = Bytes.toBytes("T3");
      HColumnDescriptor hcd = new HColumnDescriptor(FAMILY)
-         .setKeepDeletedCells(true).setMaxVersions(3);
+         .setKeepDeletedCells(true)
+         .setDataBlockEncoding(DataBlockEncoding.PREFIX_TREE).setMaxVersions(3);
 
      HTableDescriptor desc = new HTableDescriptor(TABLENAME);
      desc.addFamily(hcd);
@@ -3839,11 +3841,11 @@ public class TestFromClientSide {
     // KeyValue v1 expectation.  Cast for now until we go all Cell all the time. TODO
     KeyValue kv = (KeyValue)put.getFamilyCellMap().get(CONTENTS_FAMILY).get(0);
 
-    assertTrue(Bytes.equals(kv.getFamily(), CONTENTS_FAMILY));
+    assertTrue(Bytes.equals(CellUtil.cloneFamily(kv), CONTENTS_FAMILY));
     // will it return null or an empty byte array?
-    assertTrue(Bytes.equals(kv.getQualifier(), new byte[0]));
+    assertTrue(Bytes.equals(CellUtil.cloneQualifier(kv), new byte[0]));
 
-    assertTrue(Bytes.equals(kv.getValue(), value));
+    assertTrue(Bytes.equals(CellUtil.cloneValue(kv), value));
 
     table.put(put);
 
@@ -4478,8 +4480,8 @@ public class TestFromClientSide {
     assertEquals(0, Bytes.compareTo(Bytes.add(v2,v1), r.getValue(FAMILY, QUALIFIERS[1])));
     // QUALIFIERS[2] previously not exist, verify both value and timestamp are correct
     assertEquals(0, Bytes.compareTo(v2, r.getValue(FAMILY, QUALIFIERS[2])));
-    assertEquals(r.getColumnLatest(FAMILY, QUALIFIERS[0]).getTimestamp(),
-        r.getColumnLatest(FAMILY, QUALIFIERS[2]).getTimestamp());
+    assertEquals(r.getColumnLatestCell(FAMILY, QUALIFIERS[0]).getTimestamp(),
+        r.getColumnLatestCell(FAMILY, QUALIFIERS[2]).getTimestamp());
   }
 
   @Test
@@ -5566,9 +5568,12 @@ public class TestFromClientSide {
     int expectedIndex = 5;
     for (Result result : scanner) {
       assertEquals(result.size(), 1);
-      assertTrue(Bytes.equals(result.raw()[0].getRow(), ROWS[expectedIndex]));
-      assertTrue(Bytes.equals(result.raw()[0].getQualifier(),
-          QUALIFIERS[expectedIndex]));
+
+      Cell c = result.rawCells()[0];
+      assertTrue(Bytes.equals(c.getRowArray(), c.getRowOffset(), c.getRowLength(),
+        ROWS[expectedIndex], 0, ROWS[expectedIndex].length));
+      assertTrue(Bytes.equals(c.getQualifierArray(), c.getQualifierOffset(),
+        c.getQualifierLength(), QUALIFIERS[expectedIndex], 0, QUALIFIERS[expectedIndex].length));
       expectedIndex--;
     }
     assertEquals(expectedIndex, 0);
@@ -5605,8 +5610,8 @@ public class TestFromClientSide {
     int count = 0;
     for (Result result : ht.getScanner(scan)) {
       assertEquals(result.size(), 1);
-      assertEquals(result.raw()[0].getValueLength(), Bytes.SIZEOF_INT);
-      assertEquals(Bytes.toInt(result.raw()[0].getValue()), VALUE.length);
+      assertEquals(result.rawCells()[0].getValueLength(), Bytes.SIZEOF_INT);
+      assertEquals(Bytes.toInt(CellUtil.cloneValue(result.rawCells()[0])), VALUE.length);
       count++;
     }
     assertEquals(count, 10);
@@ -5888,15 +5893,15 @@ public class TestFromClientSide {
     result = scanner.next();
     assertTrue("Expected 2 keys but received " + result.size(),
         result.size() == 2);
-    assertTrue(Bytes.equals(result.raw()[0].getRow(), ROWS[4]));
-    assertTrue(Bytes.equals(result.raw()[1].getRow(), ROWS[4]));
-    assertTrue(Bytes.equals(result.raw()[0].getValue(), VALUES[1]));
-    assertTrue(Bytes.equals(result.raw()[1].getValue(), VALUES[2]));
+    assertTrue(Bytes.equals(CellUtil.cloneRow(result.rawCells()[0]), ROWS[4]));
+    assertTrue(Bytes.equals(CellUtil.cloneRow(result.rawCells()[1]), ROWS[4]));
+    assertTrue(Bytes.equals(CellUtil.cloneValue(result.rawCells()[0]), VALUES[1]));
+    assertTrue(Bytes.equals(CellUtil.cloneValue(result.rawCells()[1]), VALUES[2]));
     result = scanner.next();
     assertTrue("Expected 1 key but received " + result.size(),
         result.size() == 1);
-    assertTrue(Bytes.equals(result.raw()[0].getRow(), ROWS[3]));
-    assertTrue(Bytes.equals(result.raw()[0].getValue(), VALUES[0]));
+    assertTrue(Bytes.equals(CellUtil.cloneRow(result.rawCells()[0]), ROWS[3]));
+    assertTrue(Bytes.equals(CellUtil.cloneValue(result.rawCells()[0]), VALUES[0]));
     scanner.close();
     ht.close();
   }

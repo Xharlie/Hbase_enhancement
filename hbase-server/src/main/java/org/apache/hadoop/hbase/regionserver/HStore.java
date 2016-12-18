@@ -59,6 +59,7 @@ import org.apache.hadoop.hbase.RemoteExceptionHandler;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagType;
+import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.conf.ConfigurationManager;
@@ -179,7 +180,7 @@ public class HStore implements Store {
   private int bytesPerChecksum;
 
   // Comparing KeyValues
-  private final KeyValue.KVComparator comparator;
+  private final CellComparator comparator;
 
   final StoreEngine<?, ?, ?, ?> storeEngine;
 
@@ -244,7 +245,7 @@ public class HStore implements Store {
     this.dataBlockEncoder =
         new HFileDataBlockEncoderImpl(family.getDataBlockEncoding());
 
-    this.comparator = info.getComparator();
+    this.comparator = region.getCellCompartor();
     // used by ScanQueryMatcher
     long timeToPurgeDeletes =
         Math.max(conf.getLong("hbase.hstore.time.to.purge.deletes", 0), 0);
@@ -257,7 +258,7 @@ public class HStore implements Store {
     scanInfo = new ScanInfo(conf, family, ttl, timeToPurgeDeletes, this.comparator);
     String className = conf.get(MEMSTORE_CLASS_NAME, DefaultMemStore.class.getName());
     this.memstore = ReflectionUtils.instantiateWithCustomCtor(className, new Class[] {
-        Configuration.class, KeyValue.KVComparator.class }, new Object[] { conf, this.comparator });
+        Configuration.class, CellComparator.class }, new Object[] { conf, this.comparator });
     this.offPeakHours = OffPeakHours.getInstance(conf);
 
     // Setting up cache configuration for this family
@@ -733,9 +734,9 @@ public class HStore implements Store {
 
       byte[] firstKey = reader.getFirstRowKey();
       Preconditions.checkState(firstKey != null, "First key can not be null");
-      byte[] lk = reader.getLastKey();
+      Cell lk = reader.getLastKey();
       Preconditions.checkState(lk != null, "Last key can not be null");
-      byte[] lastKey =  KeyValue.createKeyValueFromKey(lk).getRow();
+      byte[] lastKey =  CellUtil.cloneRow(lk);
 
       LOG.debug("HFile bounds: first=" + Bytes.toStringBinary(firstKey) +
           " last=" + Bytes.toStringBinary(lastKey));
@@ -762,9 +763,9 @@ public class HStore implements Store {
         HFileScanner scanner = reader.getScanner(false, false, false);
         scanner.seekTo();
         do {
-          Cell cell = scanner.getKeyValue();
+          Cell cell = scanner.getCell();
           if (prevCell != null) {
-            if (CellComparator.compareRows(prevCell, cell) > 0) {
+            if (comparator.compareRows(prevCell, cell) > 0) {
               throw new InvalidHFileException("Previous row is greater than"
                   + " current row: path=" + srcPath + " previous="
                   + CellUtil.getCellKeyAsString(prevCell) + " current="
@@ -1782,31 +1783,27 @@ public class HStore implements Store {
    * @return true if the cell is expired
    */
   static boolean isCellTTLExpired(final Cell cell, final long oldestTimestamp, final long now) {
-    // Do not create an Iterator or Tag objects unless the cell actually has tags.
-    // TODO: This check for tags is really expensive. We decode an int for key and value. Costs.
-    if (cell.getTagsLength() > 0) {
-      // Look for a TTL tag first. Use it instead of the family setting if
-      // found. If a cell has multiple TTLs, resolve the conflict by using the
-      // first tag encountered.
-      Iterator<Tag> i = CellUtil.tagsIterator(cell.getTagsArray(), cell.getTagsOffset(),
-        cell.getTagsLength());
-      while (i.hasNext()) {
-        Tag t = i.next();
-        if (TagType.TTL_TAG_TYPE == t.getType()) {
-          // Unlike in schema cell TTLs are stored in milliseconds, no need
-          // to convert
-          long ts = cell.getTimestamp();
-          assert t.getTagLength() == Bytes.SIZEOF_LONG;
-          long ttl = Bytes.toLong(t.getBuffer(), t.getTagOffset(), t.getTagLength());
-          if (ts + ttl < now) {
-            return true;
-          }
-          // Per cell TTLs cannot extend lifetime beyond family settings, so
-          // fall through to check that
-          break;
-        }
+    // Look for a TTL tag first. Use it instead of the family setting if
+    // found. If a cell has multiple TTLs, resolve the conflict by using the
+    // first tag encountered.
+    Iterator<Tag> i = CellUtil.tagsIterator(cell);
+    while (i.hasNext()) {
+      Tag t = i.next();
+      if (TagType.TTL_TAG_TYPE == t.getType()) {
+        // Unlike in schema cell TTLs are stored in milliseconds, no need
+        // to convert
+        long ts = cell.getTimestamp();
+        assert t.getValueLength() == Bytes.SIZEOF_LONG;
+        long ttl = TagUtil.getValueAsLong(t);
+        if (ts + ttl < now) {
+          return true;
+         }
+        // Per cell TTLs cannot extend lifetime beyond family settings, so
+        // fall through to check that
+        break;
       }
     }
+
     return false;
   }
 
@@ -1872,19 +1869,17 @@ public class HStore implements Store {
       return false;
     }
     // TODO: Cache these keys rather than make each time?
-    byte [] fk = r.getFirstKey();
-    if (fk == null) return false;
-    KeyValue firstKV = KeyValue.createKeyValueFromKey(fk, 0, fk.length);
-    byte [] lk = r.getLastKey();
-    KeyValue lastKV = KeyValue.createKeyValueFromKey(lk, 0, lk.length);
-    KeyValue firstOnRow = state.getTargetKey();
+    Cell  firstKV = r.getFirstKey();
+    if (firstKV == null) return false;
+    Cell lastKV = r.getLastKey();
+    Cell firstOnRow = state.getTargetKey();
     if (this.comparator.compareRows(lastKV, firstOnRow) < 0) {
       // If last key in file is not of the target table, no candidates in this
       // file.  Return.
       if (!state.isTargetTable(lastKV)) return false;
       // If the row we're looking for is past the end of file, set search key to
       // last key. TODO: Cache last and first key rather than make each time.
-      firstOnRow = new KeyValue(lastKV.getRow(), HConstants.LATEST_TIMESTAMP);
+      firstOnRow = CellUtil.createFirstOnRow(lastKV);
     }
     // Get a scanner that caches blocks and that uses pread.
     HFileScanner scanner = r.getScanner(true, true, false);
@@ -1894,13 +1889,12 @@ public class HStore implements Store {
     // Unlikely that there'll be an instance of actual first row in table.
     if (walkForwardInSingleRow(scanner, firstOnRow, state)) return true;
     // If here, need to start backing up.
-    while (scanner.seekBefore(firstOnRow.getBuffer(), firstOnRow.getKeyOffset(),
-       firstOnRow.getKeyLength())) {
-      Cell kv = scanner.getKeyValue();
+    while (scanner.seekBefore(firstOnRow)) {
+      Cell kv = scanner.getCell();
       if (!state.isTargetTable(kv)) break;
       if (!state.isBetterCandidate(kv)) break;
       // Make new first on row.
-      firstOnRow = new KeyValue(kv.getRow(), HConstants.LATEST_TIMESTAMP);
+      firstOnRow = CellUtil.createFirstOnRow(kv);
       // Seek scanner.  If can't seek it, break.
       if (!seekToScanner(scanner, firstOnRow, firstKV)) return false;
       // If we find something, break;
@@ -1918,10 +1912,10 @@ public class HStore implements Store {
    * @throws IOException
    */
   private boolean seekToScanner(final HFileScanner scanner,
-                                final KeyValue firstOnRow,
-                                final KeyValue firstKV)
+                                final Cell firstOnRow,
+                                final Cell firstKV)
       throws IOException {
-    KeyValue kv = firstOnRow;
+    Cell kv = firstOnRow;
     // If firstOnRow < firstKV, set to firstKV
     if (this.comparator.compareRows(firstKV, firstOnRow) == 0) kv = firstKV;
     int result = scanner.seekTo(kv);
@@ -1939,12 +1933,12 @@ public class HStore implements Store {
    * @throws IOException
    */
   private boolean walkForwardInSingleRow(final HFileScanner scanner,
-                                         final KeyValue firstOnRow,
+                                         final Cell firstOnRow,
                                          final GetClosestRowBeforeTracker state)
       throws IOException {
     boolean foundCandidate = false;
     do {
-      Cell kv = scanner.getKeyValue();
+      Cell kv = scanner.getCell();
       // If we are not in the row, skip.
       if (this.comparator.compareRows(kv, firstOnRow) < 0) continue;
       // Did we go beyond the target row? If so break.
@@ -2344,7 +2338,7 @@ public class HStore implements Store {
   }
 
   @Override
-  public KeyValue.KVComparator getComparator() {
+  public CellComparator getComparator() {
     return comparator;
   }
 

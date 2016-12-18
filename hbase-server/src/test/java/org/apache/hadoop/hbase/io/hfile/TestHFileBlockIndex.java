@@ -42,9 +42,13 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.MultiByteBuff;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
@@ -164,6 +168,10 @@ public class TestHFileBlockIndex {
     }
 
     @Override
+    public void returnBlock(HFileBlock block) {
+    }
+
+    @Override
     public HFileBlock readBlock(long offset, long onDiskSize,
         boolean cacheBlock, boolean pread, boolean isCompaction,
         boolean updateCacheMetrics, BlockType expectedBlockType,
@@ -202,8 +210,8 @@ public class TestHFileBlockIndex {
 
     BlockReaderWrapper brw = new BlockReaderWrapper(blockReader);
     HFileBlockIndex.BlockIndexReader indexReader =
-        new HFileBlockIndex.BlockIndexReader(
-            KeyValue.RAW_COMPARATOR, numLevels, brw);
+        new HFileBlockIndex.CellBasedKeyBlockIndexReader(
+            CellComparator.COMPARATOR, numLevels, brw);
 
     indexReader.readRootIndex(blockReader.blockRange(rootIndexOffset,
         fileSize).nextBlockWithBlockType(BlockType.ROOT_INDEX), numRootEntries);
@@ -216,10 +224,12 @@ public class TestHFileBlockIndex {
     for (byte[] key : keys) {
       assertTrue(key != null);
       assertTrue(indexReader != null);
+      KeyValue.KeyOnlyKeyValue keyOnlyKey = new KeyValue.KeyOnlyKeyValue(key, 0, key.length);
       HFileBlock b =
-          indexReader.seekToDataBlock(new KeyValue.KeyOnlyKeyValue(key, 0, key.length), null, true,
+          indexReader.seekToDataBlock(keyOnlyKey, null, true,
             true, false, null);
-      if (KeyValue.COMPARATOR.compareFlatKey(key, firstKeyInFile) < 0) {
+      if (CellComparator.COMPARATOR.compare(keyOnlyKey, firstKeyInFile,
+          0, firstKeyInFile.length) < 0) {
         assertTrue(b == null);
         ++i;
         continue;
@@ -363,7 +373,7 @@ public class TestHFileBlockIndex {
 
     // Make sure the keys are increasing.
     for (int i = 0; i < keys.size() - 1; ++i)
-      assertTrue(KeyValue.COMPARATOR.compare(
+      assertTrue(CellComparator.COMPARATOR.compare(
           new KeyValue.KeyOnlyKeyValue(keys.get(i), 0, keys.get(i).length),
           new KeyValue.KeyOnlyKeyValue(keys.get(i + 1), 0, keys.get(i + 1).length)) < 0);
 
@@ -402,7 +412,7 @@ public class TestHFileBlockIndex {
       KeyValue.KeyOnlyKeyValue cell = new KeyValue.KeyOnlyKeyValue(
           arrayHoldingKey, searchKey.length / 2, searchKey.length);
       int searchResult = BlockIndexReader.binarySearchNonRootIndex(cell,
-          nonRootIndex, KeyValue.COMPARATOR);
+          new MultiByteBuff(nonRootIndex), CellComparator.COMPARATOR);
       String lookupFailureMsg = "Failed to look up key #" + i + " ("
           + Bytes.toStringBinary(searchKey) + ")";
 
@@ -427,8 +437,8 @@ public class TestHFileBlockIndex {
       // Now test we can get the offset and the on-disk-size using a
       // higher-level API function.s
       boolean locateBlockResult =
-          (BlockIndexReader.locateNonRootIndexEntry(nonRootIndex, cell,
-          KeyValue.COMPARATOR) != -1);
+          (BlockIndexReader.locateNonRootIndexEntry(new MultiByteBuff(nonRootIndex), cell,
+          CellComparator.COMPARATOR) != -1);
 
       if (i == 0) {
         assertFalse(locateBlockResult);
@@ -488,16 +498,17 @@ public class TestHFileBlockIndex {
     long expected = ClassSize.estimateBase(cl, false);
 
     HFileBlockIndex.BlockIndexReader bi =
-        new HFileBlockIndex.BlockIndexReader(KeyValue.RAW_COMPARATOR, 1);
+        new HFileBlockIndex.ByteArrayKeyBlockIndexReader(1);
     long actual = bi.heapSize();
 
     // Since the arrays in BlockIndex(byte [][] blockKeys, long [] blockOffsets,
     // int [] blockDataSizes) are all null they are not going to show up in the
     // HeapSize calculation, so need to remove those array costs from expected.
-    expected -= ClassSize.align(3 * ClassSize.ARRAY);
+    // Already the block keys are not there in this case
+    expected -= ClassSize.align(2 * ClassSize.ARRAY);
 
     if (expected != actual) {
-      ClassSize.estimateBase(cl, true);
+      expected = ClassSize.estimateBase(cl, true);
       assertEquals(expected, actual);
     }
   }
@@ -556,8 +567,8 @@ public class TestHFileBlockIndex {
           values[i] = CellUtil.cloneValue(kv);
           keyStrSet.add(Bytes.toStringBinary(k));
           if (i > 0) {
-            assertTrue(KeyValue.COMPARATOR.compareFlatKey(keys[i - 1],
-                keys[i]) < 0);
+            assertTrue((CellComparator.COMPARATOR.compare(kv, keys[i - 1],
+                0, keys[i - 1].length)) > 0);
           }
         }
 
@@ -569,27 +580,27 @@ public class TestHFileBlockIndex {
       assertEquals(expectedNumLevels,
           reader.getTrailer().getNumDataIndexLevels());
 
-      assertTrue(Bytes.equals(keys[0], reader.getFirstKey()));
-      assertTrue(Bytes.equals(keys[NUM_KV - 1], reader.getLastKey()));
+      assertTrue(Bytes.equals(keys[0], ((KeyValue)reader.getFirstKey()).getKey()));
+      assertTrue(Bytes.equals(keys[NUM_KV - 1], ((KeyValue)reader.getLastKey()).getKey()));
       LOG.info("Last key: " + Bytes.toStringBinary(keys[NUM_KV - 1]));
 
       for (boolean pread : new boolean[] { false, true }) {
         HFileScanner scanner = reader.getScanner(true, pread);
         for (int i = 0; i < NUM_KV; ++i) {
           checkSeekTo(keys, scanner, i);
-          checkKeyValue("i=" + i, keys[i], values[i], scanner.getKey(),
-              scanner.getValue());
+          checkKeyValue("i=" + i, keys[i], values[i],
+              ByteBuffer.wrap(((KeyValue) scanner.getKey()).getKey()), scanner.getValue());
         }
         assertTrue(scanner.seekTo());
         for (int i = NUM_KV - 1; i >= 0; --i) {
           checkSeekTo(keys, scanner, i);
-          checkKeyValue("i=" + i, keys[i], values[i], scanner.getKey(),
-              scanner.getValue());
+          checkKeyValue("i=" + i, keys[i], values[i],
+              ByteBuffer.wrap(((KeyValue) scanner.getKey()).getKey()), scanner.getValue());
         }
       }
 
       // Manually compute the mid-key and validate it.
-      HFileReaderV2 reader2 = (HFileReaderV2) reader;
+      HFile.Reader reader2 = reader;
       HFileBlock.FSReader fsReader = reader2.getUncachedBlockReader();
 
       HFileBlock.BlockIterator iter = fsReader.blockRange(0,
@@ -599,15 +610,15 @@ public class TestHFileBlockIndex {
       while ((block = iter.nextBlock()) != null) {
         if (block.getBlockType() != BlockType.LEAF_INDEX)
           return;
-        ByteBuffer b = block.getBufferReadOnly();
-        int n = b.getInt();
+        ByteBuff b = block.getBufferReadOnly();
+        int n = b.getIntAfterPosition(0);
         // One int for the number of items, and n + 1 for the secondary index.
         int entriesOffset = Bytes.SIZEOF_INT * (n + 2);
 
         // Get all the keys from the leaf index block. S
         for (int i = 0; i < n; ++i) {
-          int keyRelOffset = b.getInt(Bytes.SIZEOF_INT * (i + 1));
-          int nextKeyRelOffset = b.getInt(Bytes.SIZEOF_INT * (i + 2));
+          int keyRelOffset = b.getIntAfterPosition(Bytes.SIZEOF_INT * (i + 1));
+          int nextKeyRelOffset = b.getIntAfterPosition(Bytes.SIZEOF_INT * (i + 2));
           int keyLen = nextKeyRelOffset - keyRelOffset;
           int keyOffset = b.arrayOffset() + entriesOffset + keyRelOffset +
               HFileBlockIndex.SECONDARY_INDEX_ENTRY_OVERHEAD;
@@ -626,7 +637,7 @@ public class TestHFileBlockIndex {
       // Validate the mid-key.
       assertEquals(
           Bytes.toStringBinary(blockKeys.get((blockKeys.size() - 1) / 2)),
-          Bytes.toStringBinary(reader.midkey()));
+          reader.midkey());
 
       assertEquals(UNCOMPRESSED_INDEX_SIZES[testI],
           reader.getTrailer().getUncompressedDataIndexSize());
@@ -639,7 +650,7 @@ public class TestHFileBlockIndex {
   private void checkSeekTo(byte[][] keys, HFileScanner scanner, int i)
       throws IOException {
     assertEquals("Failed to seek to key #" + i + " (" + Bytes.toStringBinary(keys[i]) + ")", 0,
-        scanner.seekTo(KeyValue.createKeyValueFromKey(keys[i])));
+        scanner.seekTo(KeyValueUtil.createKeyValueFromKey(keys[i])));
   }
 
   private void assertArrayEqualsBuffer(String msgPrefix, byte[] arr,

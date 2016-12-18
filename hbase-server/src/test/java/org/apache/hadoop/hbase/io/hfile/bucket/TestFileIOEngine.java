@@ -20,6 +20,8 @@ package org.apache.hadoop.hbase.io.hfile.bucket;
 
 import static org.junit.Assert.assertTrue;
 
+import org.apache.hadoop.hbase.io.hfile.bucket.TestByteBufferIOEngine.BufferGrabbingDeserializer;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -46,11 +48,12 @@ public class TestFileIOEngine {
         for (int j = 0; j < data1.length; ++j) {
           data1[j] = (byte) (Math.random() * 255);
         }
-        byte[] data2 = new byte[len];
         fileIOEngine.write(ByteBuffer.wrap(data1), offset);
-        fileIOEngine.read(ByteBuffer.wrap(data2), offset);
+        BufferGrabbingDeserializer deserializer = new BufferGrabbingDeserializer();
+        fileIOEngine.read(offset, len, deserializer);
+        ByteBuff data2 = deserializer.getDeserializedByteBuff();
         for (int j = 0; j < data1.length; ++j) {
-          assertTrue(data1[j] == data2[j]);
+          assertTrue(data1[j] == data2.get(j));
         }
       }
     } finally {

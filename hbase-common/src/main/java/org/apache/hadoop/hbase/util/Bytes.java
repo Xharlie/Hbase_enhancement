@@ -24,14 +24,10 @@ import static com.google.common.base.Preconditions.checkPositionIndex;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.Charset;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Collection;
@@ -44,6 +40,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.io.RawComparator;
 import org.apache.hadoop.io.WritableComparator;
@@ -53,8 +50,6 @@ import sun.misc.Unsafe;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
-
-import org.apache.hadoop.hbase.util.Bytes.LexicographicalComparerHolder.UnsafeComparer;
 
 /**
  * Utility class that handles byte arrays, conversions to/from other types,
@@ -455,12 +450,12 @@ public class Bytes {
     // Just in case we are passed a 'len' that is > buffer length...
     if (off >= b.length) return result.toString();
     if (off + len > b.length) len = b.length - off;
-    for (int i = off; i < off + len ; ++i ) {
+    for (int i = off; i < off + len ; ++i) {
       int ch = b[i] & 0xFF;
       if ( (ch >= '0' && ch <= '9')
           || (ch >= 'A' && ch <= 'Z')
           || (ch >= 'a' && ch <= 'z')
-          || " `~!@#$%^&*()-_=+[]{}|;:'\",.<>/?".indexOf(ch) >= 0 ) {
+          || " `~!@#$%^&*()-_=+[]{}|;:'\",.<>/?".indexOf(ch) >= 0) {
         result.append((char)ch);
       } else {
         result.append(String.format("\\x%02X", ch));
@@ -482,7 +477,7 @@ public class Bytes {
    * @return The converted hex value as a byte.
    */
   public static byte toBinaryFromHex(byte ch) {
-    if ( ch >= 'A' && ch <= 'F' )
+    if (ch >= 'A' && ch <= 'F')
       return (byte) ((byte)10 + (byte) (ch - 'A'));
     // else
     return (byte) (ch - '0');
@@ -604,8 +599,8 @@ public class Bytes {
     if (length != SIZEOF_LONG || offset + length > bytes.length) {
       throw explainWrongLengthOrOffset(bytes, offset, length, SIZEOF_LONG);
     }
-    if (UnsafeComparer.isAvailable()) {
-      return toLongUnsafe(bytes, offset);
+    if (UnsafeAccess.unaligned()) {
+      return UnsafeAccess.toLong(bytes, offset);
     } else {
       long l = 0;
       for(int i = offset; i < offset + length; i++) {
@@ -645,8 +640,8 @@ public class Bytes {
       throw new IllegalArgumentException("Not enough room to put a long at"
           + " offset " + offset + " in a " + bytes.length + " byte array");
     }
-    if (UnsafeComparer.isAvailable()) {
-      return putLongUnsafe(bytes, offset, val);
+    if (UnsafeAccess.unaligned()) {
+      return UnsafeAccess.putLong(bytes, offset, val);
     } else {
       for(int i = offset + 7; i > offset; i--) {
         bytes[i] = (byte) val;
@@ -663,15 +658,11 @@ public class Bytes {
    * @param offset position in the array
    * @param val long to write out
    * @return incremented offset
+   * @deprecated As of release 2.0.0, this will be removed in HBase 3.0.0.
    */
-  public static int putLongUnsafe(byte[] bytes, int offset, long val)
-  {
-    if (UnsafeComparer.littleEndian) {
-      val = Long.reverseBytes(val);
-    }
-    UnsafeComparer.theUnsafe.putLong(bytes, (long) offset +
-      UnsafeComparer.BYTE_ARRAY_BASE_OFFSET , val);
-    return offset + SIZEOF_LONG;
+  @Deprecated
+  public static int putLongUnsafe(byte[] bytes, int offset, long val) {
+    return UnsafeAccess.putLong(bytes, offset, val);
   }
 
   /**
@@ -800,8 +791,8 @@ public class Bytes {
     if (length != SIZEOF_INT || offset + length > bytes.length) {
       throw explainWrongLengthOrOffset(bytes, offset, length, SIZEOF_INT);
     }
-    if (UnsafeComparer.isAvailable()) {
-      return toIntUnsafe(bytes, offset);
+    if (UnsafeAccess.unaligned()) {
+      return UnsafeAccess.toInt(bytes, offset);
     } else {
       int n = 0;
       for(int i = offset; i < (offset + length); i++) {
@@ -817,15 +808,11 @@ public class Bytes {
    * @param bytes byte array
    * @param offset offset into array
    * @return the int value
+   * @deprecated As of release 2.0.0, this will be removed in HBase 3.0.0.
    */
+  @Deprecated
   public static int toIntUnsafe(byte[] bytes, int offset) {
-    if (UnsafeComparer.littleEndian) {
-      return Integer.reverseBytes(UnsafeComparer.theUnsafe.getInt(bytes,
-        (long) offset + UnsafeComparer.BYTE_ARRAY_BASE_OFFSET));
-    } else {
-      return UnsafeComparer.theUnsafe.getInt(bytes,
-        (long) offset + UnsafeComparer.BYTE_ARRAY_BASE_OFFSET);
-    }
+    return UnsafeAccess.toInt(bytes, offset);
   }
 
   /**
@@ -833,15 +820,11 @@ public class Bytes {
    * @param bytes byte array
    * @param offset offset into array
    * @return the short value
+   * @deprecated As of release 2.0.0, this will be removed in HBase 3.0.0.
    */
+  @Deprecated
   public static short toShortUnsafe(byte[] bytes, int offset) {
-    if (UnsafeComparer.littleEndian) {
-      return Short.reverseBytes(UnsafeComparer.theUnsafe.getShort(bytes,
-        (long) offset + UnsafeComparer.BYTE_ARRAY_BASE_OFFSET));
-    } else {
-      return UnsafeComparer.theUnsafe.getShort(bytes,
-        (long) offset + UnsafeComparer.BYTE_ARRAY_BASE_OFFSET);
-    }
+    return UnsafeAccess.toShort(bytes, offset);
   }
 
   /**
@@ -849,15 +832,11 @@ public class Bytes {
    * @param bytes byte array
    * @param offset offset into array
    * @return the long value
+   * @deprecated As of release 2.0.0, this will be removed in HBase 3.0.0.
    */
+  @Deprecated
   public static long toLongUnsafe(byte[] bytes, int offset) {
-    if (UnsafeComparer.littleEndian) {
-      return Long.reverseBytes(UnsafeComparer.theUnsafe.getLong(bytes,
-        (long) offset + UnsafeComparer.BYTE_ARRAY_BASE_OFFSET));
-    } else {
-      return UnsafeComparer.theUnsafe.getLong(bytes,
-        (long) offset + UnsafeComparer.BYTE_ARRAY_BASE_OFFSET);
-    }
+    return UnsafeAccess.toLong(bytes, offset);
   }
 
   /**
@@ -896,8 +875,8 @@ public class Bytes {
       throw new IllegalArgumentException("Not enough room to put an int at"
           + " offset " + offset + " in a " + bytes.length + " byte array");
     }
-    if (UnsafeComparer.isAvailable()) {
-      return putIntUnsafe(bytes, offset, val);
+    if (UnsafeAccess.unaligned()) {
+      return UnsafeAccess.putInt(bytes, offset, val);
     } else {
       for(int i= offset + 3; i > offset; i--) {
         bytes[i] = (byte) val;
@@ -914,15 +893,11 @@ public class Bytes {
    * @param offset position in the array
    * @param val int to write out
    * @return incremented offset
+   * @deprecated As of release 2.0.0, this will be removed in HBase 3.0.0.
    */
-  public static int putIntUnsafe(byte[] bytes, int offset, int val)
-  {
-    if (UnsafeComparer.littleEndian) {
-      val = Integer.reverseBytes(val);
-    }
-    UnsafeComparer.theUnsafe.putInt(bytes, (long) offset +
-      UnsafeComparer.BYTE_ARRAY_BASE_OFFSET , val);
-    return offset + SIZEOF_INT;
+  @Deprecated
+  public static int putIntUnsafe(byte[] bytes, int offset, int val) {
+    return UnsafeAccess.putInt(bytes, offset, val);
   }
 
   /**
@@ -970,8 +945,8 @@ public class Bytes {
     if (length != SIZEOF_SHORT || offset + length > bytes.length) {
       throw explainWrongLengthOrOffset(bytes, offset, length, SIZEOF_SHORT);
     }
-    if (UnsafeComparer.isAvailable()) {
-      return toShortUnsafe(bytes, offset);
+    if (UnsafeAccess.unaligned()) {
+      return UnsafeAccess.toShort(bytes, offset);
     } else {
       short n = 0;
       n ^= bytes[offset] & 0xFF;
@@ -1008,8 +983,8 @@ public class Bytes {
       throw new IllegalArgumentException("Not enough room to put a short at"
           + " offset " + offset + " in a " + bytes.length + " byte array");
     }
-    if (UnsafeComparer.isAvailable()) {
-      return putShortUnsafe(bytes, offset, val);
+    if (UnsafeAccess.unaligned()) {
+      return UnsafeAccess.putShort(bytes, offset, val);
     } else {
       bytes[offset+1] = (byte) val;
       val >>= 8;
@@ -1024,15 +999,11 @@ public class Bytes {
    * @param offset position in the array
    * @param val short to write out
    * @return incremented offset
+   * @deprecated As of release 2.0.0, this will be removed in HBase 3.0.0.
    */
-  public static int putShortUnsafe(byte[] bytes, int offset, short val)
-  {
-    if (UnsafeComparer.littleEndian) {
-      val = Short.reverseBytes(val);
-    }
-    UnsafeComparer.theUnsafe.putShort(bytes, (long) offset +
-      UnsafeComparer.BYTE_ARRAY_BASE_OFFSET , val);
-    return offset + SIZEOF_SHORT;
+  @Deprecated
+  public static int putShortUnsafe(byte[] bytes, int offset, short val) {
+    return UnsafeAccess.putShort(bytes, offset, val);
   }
 
   /**
@@ -1315,39 +1286,20 @@ public class Bytes {
       INSTANCE;
 
       static final Unsafe theUnsafe;
-
-      /** The offset to the first element in a byte array. */
-      static final int BYTE_ARRAY_BASE_OFFSET;
-
       static {
-        theUnsafe = (Unsafe) AccessController.doPrivileged(
-            new PrivilegedAction<Object>() {
-              @Override
-              public Object run() {
-                try {
-                  Field f = Unsafe.class.getDeclaredField("theUnsafe");
-                  f.setAccessible(true);
-                  return f.get(null);
-                } catch (NoSuchFieldException e) {
-                  // It doesn't matter what we throw;
-                  // it's swallowed in getBestComparer().
-                  throw new Error();
-                } catch (IllegalAccessException e) {
-                  throw new Error();
-                }
-              }
-            });
-
-        BYTE_ARRAY_BASE_OFFSET = theUnsafe.arrayBaseOffset(byte[].class);
+        if (UnsafeAccess.unaligned()) {
+          theUnsafe = UnsafeAccess.theUnsafe;
+        } else {
+          // It doesn't matter what we throw;
+          // it's swallowed in getBestComparer().
+          throw new Error();
+        }
 
         // sanity check - this should never fail
         if (theUnsafe.arrayIndexScale(byte[].class) != 1) {
           throw new AssertionError();
         }
       }
-
-      static final boolean littleEndian =
-        ByteOrder.nativeOrder().equals(ByteOrder.LITTLE_ENDIAN);
 
       /**
        * Returns true if x1 is less than x2, when both values are treated as
@@ -1357,7 +1309,7 @@ public class Bytes {
        * Big Endian format.
        */
       static boolean lessThanUnsignedLong(long x1, long x2) {
-        if (littleEndian) {
+        if (UnsafeAccess.littleEndian) {
           x1 = Long.reverseBytes(x1);
           x2 = Long.reverseBytes(x2);
         }
@@ -1372,7 +1324,7 @@ public class Bytes {
        * Big Endian format.
        */
       static boolean lessThanUnsignedInt(int x1, int x2) {
-        if (littleEndian) {
+        if (UnsafeAccess.littleEndian) {
           x1 = Integer.reverseBytes(x1);
           x2 = Integer.reverseBytes(x2);
         }
@@ -1387,20 +1339,11 @@ public class Bytes {
        * Big Endian format.
        */
       static boolean lessThanUnsignedShort(short x1, short x2) {
-        if (littleEndian) {
+        if (UnsafeAccess.littleEndian) {
           x1 = Short.reverseBytes(x1);
           x2 = Short.reverseBytes(x2);
         }
         return (x1 & 0xffff) < (x2 & 0xffff);
-      }
-
-      /**
-       * Checks if Unsafe is available
-       * @return true, if available, false - otherwise
-       */
-      public static boolean isAvailable()
-      {
-        return theUnsafe != null;
       }
 
       /**
@@ -1426,8 +1369,8 @@ public class Bytes {
         }
         final int minLength = Math.min(length1, length2);
         final int minWords = minLength / SIZEOF_LONG;
-        final long offset1Adj = offset1 + BYTE_ARRAY_BASE_OFFSET;
-        final long offset2Adj = offset2 + BYTE_ARRAY_BASE_OFFSET;
+        final long offset1Adj = offset1 + UnsafeAccess.BYTE_ARRAY_BASE_OFFSET;
+        final long offset2Adj = offset2 + UnsafeAccess.BYTE_ARRAY_BASE_OFFSET;
 
         /*
          * Compare 8 bytes at a time. Benchmarking shows comparing 8 bytes at a
@@ -1897,18 +1840,77 @@ public class Bytes {
    *         arr[-1] = -Inf and arr[N] = Inf for an N-element array. The above
    *         means that this function can return 2N + 1 different values
    *         ranging from -(N + 1) to N - 1.
+   * @deprecated {@link Bytes#binarySearch(byte[][], byte[], int, int)}
    */
+  @Deprecated
   public static int binarySearch(byte [][]arr, byte []key, int offset,
       int length, RawComparator<?> comparator) {
+    return binarySearch(arr, key, offset, length);
+  }
+
+  /**
+   * Binary search for keys in indexes using Bytes.BYTES_RAWCOMPARATOR.
+   *
+   * @param arr array of byte arrays to search for
+   * @param key the key you want to find
+   * @param offset the offset in the key you want to find
+   * @param length the length of the key
+   * @return zero-based index of the key, if the key is present in the array.
+   *         Otherwise, a value -(i + 1) such that the key is between arr[i -
+   *         1] and arr[i] non-inclusively, where i is in [0, i], if we define
+   *         arr[-1] = -Inf and arr[N] = Inf for an N-element array. The above
+   *         means that this function can return 2N + 1 different values
+   *         ranging from -(N + 1) to N - 1.
+   */
+  public static int binarySearch(byte[][] arr, byte[] key, int offset, int length) {
     int low = 0;
     int high = arr.length - 1;
 
     while (low <= high) {
+      int mid = (low + high) >>> 1;
+      // we have to compare in this order, because the comparator order
+      // has special logic when the 'left side' is a special key.
+      int cmp = Bytes.BYTES_RAWCOMPARATOR
+          .compare(key, offset, length, arr[mid], 0, arr[mid].length);
+      // key lives above the midpoint
+      if (cmp > 0)
+        low = mid + 1;
+      // key lives below the midpoint
+      else if (cmp < 0)
+        high = mid - 1;
+      // BAM. how often does this really happen?
+      else
+        return mid;
+    }
+    return - (low+1);
+  }
+
+  /**
+   * Binary search for keys in indexes.
+   *
+   * @param arr array of byte arrays to search for
+   * @param key the key you want to find
+   * @param comparator a comparator to compare.
+   * @return zero-based index of the key, if the key is present in the array.
+   *         Otherwise, a value -(i + 1) such that the key is between arr[i -
+   *         1] and arr[i] non-inclusively, where i is in [0, i], if we define
+   *         arr[-1] = -Inf and arr[N] = Inf for an N-element array. The above
+   *         means that this function can return 2N + 1 different values
+   *         ranging from -(N + 1) to N - 1.
+   * @return the index of the block
+   * @deprecated Use {@link Bytes#binarySearch(Cell[], Cell, CellComparator)}
+   */
+  @Deprecated
+  public static int binarySearch(byte[][] arr, Cell key, RawComparator<Cell> comparator) {
+    int low = 0;
+    int high = arr.length - 1;
+    KeyValue.KeyOnlyKeyValue r = new KeyValue.KeyOnlyKeyValue();
+    while (low <= high) {
       int mid = (low+high) >>> 1;
       // we have to compare in this order, because the comparator order
       // has special logic when the 'left side' is a special key.
-      int cmp = comparator.compare(key, offset, length,
-          arr[mid], 0, arr[mid].length);
+      r.setKey(arr[mid], 0, arr[mid].length);
+      int cmp = comparator.compare(key, r);
       // key lives above the midpoint
       if (cmp > 0)
         low = mid + 1;
@@ -1936,16 +1938,14 @@ public class Bytes {
    *         ranging from -(N + 1) to N - 1.
    * @return the index of the block
    */
-  public static int binarySearch(byte[][] arr, Cell key, RawComparator<Cell> comparator) {
+  public static int binarySearch(Cell[] arr, Cell key, CellComparator comparator) {
     int low = 0;
     int high = arr.length - 1;
-    KeyValue.KeyOnlyKeyValue r = new KeyValue.KeyOnlyKeyValue();
     while (low <= high) {
       int mid = (low+high) >>> 1;
       // we have to compare in this order, because the comparator order
       // has special logic when the 'left side' is a special key.
-      r.setKey(arr[mid], 0, arr[mid].length);
-      int cmp = comparator.compare(key, r);
+      int cmp = comparator.compare(key, arr[mid]);
       // key lives above the midpoint
       if (cmp > 0)
         low = mid + 1;
@@ -1956,7 +1956,7 @@ public class Bytes {
       else
         return mid;
     }
-    return - (low+1);
+    return -(low + 1);
   }
 
   /**
@@ -2367,4 +2367,56 @@ public class Bytes {
     return b;
   }
 
+  /**
+   * @param b
+   * @param delimiter
+   * @return Index of delimiter having started from start of <code>b</code> moving rightward.
+   */
+  public static int searchDelimiterIndex(final byte[] b, int offset, final int length,
+      final int delimiter) {
+    if (b == null) {
+      throw new IllegalArgumentException("Passed buffer is null");
+    }
+    int result = -1;
+    for (int i = offset; i < length + offset; i++) {
+      if (b[i] == delimiter) {
+        result = i;
+        break;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Find index of passed delimiter walking from end of buffer backwards.
+   * 
+   * @param b
+   * @param delimiter
+   * @return Index of delimiter
+   */
+  public static int searchDelimiterIndexInReverse(final byte[] b, final int offset,
+      final int length, final int delimiter) {
+    if (b == null) {
+      throw new IllegalArgumentException("Passed buffer is null");
+    }
+    int result = -1;
+    for (int i = (offset + length) - 1; i >= offset; i--) {
+      if (b[i] == delimiter) {
+        result = i;
+        break;
+      }
+    }
+    return result;
+    }
+  
+    public static int findCommonPrefix(byte[] left, byte[] right, int leftLength, int rightLength,
+        int leftOffset, int rightOffset) {
+      int length = Math.min(leftLength, rightLength);
+      int result = 0;
+  
+      while (result < length && left[leftOffset + result] == right[rightOffset + result]) {
+        result++;
+      }
+      return result;
+    }
 }

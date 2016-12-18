@@ -987,6 +987,10 @@ public class RegionStates {
       (double)totalLoad / (double)numServers;
   }
 
+  protected Map<TableName, Map<ServerName, List<HRegionInfo>>>
+    getAssignmentsByTable() {
+    return getAssignmentsByTable(false, false);
+  }
   /**
    * This is an EXPENSIVE clone.  Cloning though is the safest thing to do.
    * Can't let out original since it can change and at least the load balancer
@@ -995,39 +999,14 @@ public class RegionStates {
    *
    * @return A clone of current assignments by table.
    */
-  protected Map<TableName, Map<ServerName, List<HRegionInfo>>>
-      getAssignmentsByTable() {
+  protected Map<TableName, Map<ServerName, List<HRegionInfo>>> getAssignmentsByTable(
+          boolean simpleLoadBalancerOverall, boolean forceByCluster) {
     Map<TableName, Map<ServerName, List<HRegionInfo>>> result =
       new HashMap<TableName, Map<ServerName,List<HRegionInfo>>>();
     synchronized (this) {
-      if (!server.getConfiguration().getBoolean("hbase.master.loadbalance.bytable", false)) {
-        Map<ServerName, List<HRegionInfo>> svrToRegions =
-          new HashMap<ServerName, List<HRegionInfo>>(serverHoldings.size());
-        for (Map.Entry<ServerName, Set<HRegionInfo>> e: serverHoldings.entrySet()) {
-          svrToRegions.put(e.getKey(), new ArrayList<HRegionInfo>(e.getValue()));
-        }
-        result.put(TableName.valueOf("ensemble"), svrToRegions);
-      } else {
-        for (Map.Entry<ServerName, Set<HRegionInfo>> e: serverHoldings.entrySet()) {
-          for (HRegionInfo hri: e.getValue()) {
-            if (hri.isMetaRegion()) continue;
-            TableName tablename = hri.getTable();
-            Map<ServerName, List<HRegionInfo>> svrToRegions = result.get(tablename);
-            if (svrToRegions == null) {
-              svrToRegions = new HashMap<ServerName, List<HRegionInfo>>(serverHoldings.size());
-              result.put(tablename, svrToRegions);
-            }
-            List<HRegionInfo> regions = svrToRegions.get(e.getKey());
-            if (regions == null) {
-              regions = new ArrayList<HRegionInfo>();
-              svrToRegions.put(e.getKey(), regions);
-            }
-            regions.add(hri);
-          }
-        }
-      }
+      result = getTableRSRegionMap((simpleLoadBalancerOverall || server.getConfiguration()
+              .getBoolean("hbase.master.loadbalance.bytable",false)) && !forceByCluster);
     }
-
     Map<ServerName, ServerLoad>
       onlineSvrs = serverManager.getOnlineServers();
     // Take care of servers w/o assignments, and remove servers in draining mode
@@ -1039,6 +1018,29 @@ public class RegionStates {
         }
       }
       map.keySet().removeAll(drainingServers);
+    }
+    return result;
+  }
+
+  private Map<TableName, Map<ServerName, List<HRegionInfo>>> getTableRSRegionMap(Boolean bytable){
+    Map<TableName, Map<ServerName, List<HRegionInfo>>> result =
+            new HashMap<TableName, Map<ServerName,List<HRegionInfo>>>();
+    for (Map.Entry<ServerName, Set<HRegionInfo>> e: serverHoldings.entrySet()) {
+      for (HRegionInfo hri: e.getValue()) {
+        if (hri.isMetaRegion()) continue;
+        TableName tablename = bytable ? hri.getTable() : TableName.valueOf("ensemble");
+        Map<ServerName, List<HRegionInfo>> svrToRegions = result.get(tablename);
+        if (svrToRegions == null) {
+          svrToRegions = new HashMap<ServerName, List<HRegionInfo>>(serverHoldings.size());
+          result.put(tablename, svrToRegions);
+        }
+        List<HRegionInfo> regions = svrToRegions.get(e.getKey());
+        if (regions == null) {
+          regions = new ArrayList<HRegionInfo>();
+          svrToRegions.put(e.getKey(), regions);
+        }
+        regions.add(hri);
+      }
     }
     return result;
   }

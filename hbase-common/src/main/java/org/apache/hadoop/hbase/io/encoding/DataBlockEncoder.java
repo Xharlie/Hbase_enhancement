@@ -23,8 +23,9 @@ import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.io.hfile.HFileContext;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 
 /**
  * Encoding of KeyValue. It aims to be fast and efficient using assumptions:
@@ -83,14 +84,14 @@ public interface DataBlockEncoder {
       throws IOException;
 
   /**
-   * Return first key in block. Useful for indexing. Typically does not make
+   * Return first key in block as a cell. Useful for indexing. Typically does not make
    * a deep copy but returns a buffer wrapping a segment of the actual block's
    * byte array. This is because the first key in block is usually stored
    * unencoded.
    * @param block encoded block we want index, the position will not change
-   * @return First key in block.
+   * @return First key in block as a cell.
    */
-  ByteBuffer getFirstKeyInBlock(ByteBuffer block);
+  Cell getFirstKeyCellInBlock(ByteBuff block);
 
   /**
    * Create a HFileBlock seeker which find KeyValues within a block.
@@ -98,7 +99,7 @@ public interface DataBlockEncoder {
    * @param decodingCtx
    * @return A newly created seeker.
    */
-  EncodedSeeker createSeeker(KVComparator comparator, 
+  EncodedSeeker createSeeker(CellComparator comparator, 
       HFileBlockDecodingContext decodingCtx);
 
   /**
@@ -130,21 +131,21 @@ public interface DataBlockEncoder {
    * An interface which enable to seek while underlying data is encoded.
    *
    * It works on one HFileBlock, but it is reusable. See
-   * {@link #setCurrentBuffer(ByteBuffer)}.
+   * {@link #setCurrentBuffer(ByteBuff)}.
    */
   interface EncodedSeeker {
     /**
      * Set on which buffer there will be done seeking.
      * @param buffer Used for seeking.
      */
-    void setCurrentBuffer(ByteBuffer buffer);
+    void setCurrentBuffer(ByteBuff buffer);
 
     /**
-     * Does a deep copy of the key at the current position. A deep copy is
-     * necessary because buffers are reused in the decoder.
+     * From the current position creates a cell using the key part
+     * of the current buffer
      * @return key at current position
      */
-    ByteBuffer getKeyDeepCopy();
+    Cell getKey();
 
     /**
      * Does a shallow copy of the value at the current position. A shallow
@@ -159,10 +160,9 @@ public interface DataBlockEncoder {
     ByteBuffer getKeyValueBuffer();
 
     /**
-     * @return the KeyValue object at the current position. Includes memstore
-     *         timestamp.
+     * @return the Cell at the current position. Includes memstore timestamp.
      */
-    Cell getKeyValue();
+    Cell getCell();
 
     /** Set position to beginning of given block */
     void rewind();
@@ -173,27 +173,6 @@ public interface DataBlockEncoder {
      */
     boolean next();
 
-    /**
-     * Moves the seeker position within the current block to:
-     * <ul>
-     * <li>the last key that that is less than or equal to the given key if
-     * <code>seekBefore</code> is false</li>
-     * <li>the last key that is strictly less than the given key if <code>
-     * seekBefore</code> is true. The caller is responsible for loading the
-     * previous block if the requested key turns out to be the first key of the
-     * current block.</li>
-     * </ul>
-     * @param key byte array containing the key
-     * @param offset key position the array
-     * @param length key length in bytes
-     * @param seekBefore find the key strictly less than the given key in case
-     *          of an exact match. Does not matter in case of an inexact match.
-     * @return 0 on exact match, 1 on inexact match.
-     */
-    @Deprecated
-    int seekToKeyInBlock(
-      byte[] key, int offset, int length, boolean seekBefore
-    );
     /**
      * Moves the seeker position within the current block to:
      * <ul>
@@ -215,12 +194,8 @@ public interface DataBlockEncoder {
      * Compare the given key against the current key
      * @param comparator
      * @param key
-     * @param offset
-     * @param length
      * @return -1 is the passed key is smaller than the current key, 0 if equal and 1 if greater
      */
-    public int compareKey(KVComparator comparator, byte[] key, int offset, int length);
-
-    public int compareKey(KVComparator comparator, Cell key);
+    public int compareKey(CellComparator comparator, Cell key);
   }
 }

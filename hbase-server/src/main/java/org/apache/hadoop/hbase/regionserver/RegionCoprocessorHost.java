@@ -1381,14 +1381,12 @@ public class RegionCoprocessorHost
    * This will be called by the scan flow when the current scanned row is being filtered out by the
    * filter.
    * @param s the scanner
-   * @param currentRow The current rowkey which got filtered out
-   * @param offset offset to rowkey
-   * @param length length of rowkey
+   * @param curRowCell The cell in the current row which got filtered out
    * @return whether more rows are available for the scanner or not
    * @throws IOException
    */
-  public boolean postScannerFilterRow(final InternalScanner s, final byte[] currentRow,
-      final int offset, final short length) throws IOException {
+  public boolean postScannerFilterRow(final InternalScanner s, final Cell curRowCell)
+      throws IOException {
     // short circuit for performance
     if (!hasCustomPostScannerFilterRow) return true;
     return execOperationWithResult(true,
@@ -1396,7 +1394,7 @@ public class RegionCoprocessorHost
       @Override
       public void call(RegionObserver oserver, ObserverContext<RegionCoprocessorEnvironment> ctx)
           throws IOException {
-        setResult(oserver.postScannerFilterRow(ctx, s, currentRow, offset,length, getResult()));
+        setResult(oserver.postScannerFilterRow(ctx, s, curRowCell, getResult()));
       }
     });
   }

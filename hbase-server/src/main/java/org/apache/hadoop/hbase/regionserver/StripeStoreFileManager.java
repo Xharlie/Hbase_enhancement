@@ -33,9 +33,11 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
+import org.apache.hadoop.hbase.KeyValue.KeyOnlyKeyValue;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.regionserver.compactions.StripeCompactionPolicy;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -115,14 +117,14 @@ public class StripeStoreFileManager
    * we use it to compare by reference when we read from the map. */
   private static final byte[] INVALID_KEY_IN_MAP = new byte[0];
 
-  private final KVComparator kvComparator;
+  private final CellComparator cellComparator;
   private StripeStoreConfig config;
 
   private final int blockingFileCount;
 
   public StripeStoreFileManager(
-      KVComparator kvComparator, Configuration conf, StripeStoreConfig config) {
-    this.kvComparator = kvComparator;
+      CellComparator kvComparator, Configuration conf, StripeStoreConfig config) {
+    this.cellComparator = kvComparator;
     this.config = config;
     this.blockingFileCount = conf.getInt(
         HStore.BLOCKING_STOREFILES_KEY, HStore.DEFAULT_BLOCKING_STOREFILE_COUNT);
@@ -167,7 +169,7 @@ public class StripeStoreFileManager
     // Order matters for this call.
     result.addSublist(state.level0Files);
     if (!state.stripeFiles.isEmpty()) {
-      int lastStripeIndex = findStripeForRow(targetKey.getRow(), false);
+      int lastStripeIndex = findStripeForRow(CellUtil.cloneRow(targetKey), false);
       for (int stripeIndex = lastStripeIndex; stripeIndex >= 0; --stripeIndex) {
         result.addSublist(state.stripeFiles.get(stripeIndex));
       }
@@ -192,7 +194,7 @@ public class StripeStoreFileManager
       // level 0; we remove the stripe, and all subsequent ones, as soon as we find the
       // first one that cannot possibly have better candidates.
       if (!isInvalid(endKey) && !isOpen(endKey)
-          && (nonOpenRowCompare(endKey, targetKey.getRow()) <= 0)) {
+          && (nonOpenRowCompare(targetKey, endKey) >= 0)) {
         original.removeComponents(firstIrrelevant);
         break;
       }
@@ -256,7 +258,7 @@ public class StripeStoreFileManager
         + newRatio + " configured ratio " + config.getMaxSplitImbalance());
     // Ok, we may get better ratio, get it.
     return StoreUtils.getLargestFile(state.stripeFiles.get(
-        isRightLarger ? rightIndex : leftIndex)).getFileSplitPoint(this.kvComparator);
+        isRightLarger ? rightIndex : leftIndex)).getFileSplitPoint(this.cellComparator);
   }
 
   private byte[] getSplitPointFromAllFiles() throws IOException {
@@ -264,7 +266,7 @@ public class StripeStoreFileManager
     sfs.addSublist(state.level0Files);
     sfs.addAllSublists(state.stripeFiles);
     if (sfs.isEmpty()) return null;
-    return StoreUtils.getLargestFile(sfs).getFileSplitPoint(this.kvComparator);
+    return StoreUtils.getLargestFile(sfs).getFileSplitPoint(this.cellComparator);
   }
 
   private double getMidStripeSplitRatio(long smallerSize, long largerSize, long lastLargerSize) {
@@ -501,6 +503,10 @@ public class StripeStoreFileManager
     return key != null && key.length == 0;
   }
 
+  private static final boolean isOpen(Cell key) {
+    return key != null && key.getRowLength() == 0;
+  }
+
   /**
    * Checks whether the key is invalid (e.g. from an L0 file, or non-stripe-compacted files).
    */
@@ -512,7 +518,7 @@ public class StripeStoreFileManager
    * Compare two keys for equality.
    */
   private final boolean rowEquals(byte[] k1, byte[] k2) {
-    return kvComparator.matchingRows(k1, 0, k1.length, k2, 0, k2.length);
+    return Bytes.equals(k1, 0, k1.length, k2, 0, k2.length);
   }
 
   /**
@@ -520,7 +526,12 @@ public class StripeStoreFileManager
    */
   private final int nonOpenRowCompare(byte[] k1, byte[] k2) {
     assert !isOpen(k1) && !isOpen(k2);
-    return kvComparator.compareRows(k1, 0, k1.length, k2, 0, k2.length);
+    return cellComparator.compareRows(new KeyOnlyKeyValue(k1), k2, 0, k2.length);
+  }
+
+  private final int nonOpenRowCompare(Cell k1, byte[] k2) {
+    assert !isOpen(k1) && !isOpen(k2);
+    return cellComparator.compareRows(k1, k2, 0, k2.length);
   }
 
   /**

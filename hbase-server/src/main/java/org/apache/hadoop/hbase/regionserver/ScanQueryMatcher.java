@@ -25,6 +25,7 @@ import java.util.NavigableSet;
 import org.apache.hadoop.hbase.KeyValue.Type;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeepDeletedCells;
@@ -44,7 +45,7 @@ import com.google.common.base.Preconditions;
  * A query matcher that is specifically designed for the scan case.
  */
 @InterfaceAudience.Private
-public class ScanQueryMatcher {
+public class ScanQueryMatcher implements ShipperListener {
   // Optimization so we can skip lots of compares when we decide to skip
   // to the next row.
   private boolean stickyNextRow;
@@ -86,13 +87,11 @@ public class ScanQueryMatcher {
   private final Cell startKey;
 
   /** Row comparator for the region this query is for */
-  private final KeyValue.KVComparator rowComparator;
+  private final CellComparator rowComparator;
 
   /* row is not private for tests */
   /** Row the query is on */
-  byte [] row;
-  int rowOffset;
-  short rowLength;
+  Cell curCell;
   
   /**
    * Oldest put in any of the involved store files
@@ -165,7 +164,7 @@ public class ScanQueryMatcher {
     this.regionCoprocessorHost = regionCoprocessorHost;
     this.deletes =  instantiateDeleteTracker();
     this.stopRow = scan.getStopRow();
-    this.startKey = KeyValueUtil.createFirstDeleteFamilyOnRow(scan.getStartRow(),
+    this.startKey = CellUtil.createFirstDeleteFamilyCellOnRow(scan.getStartRow(),
         scanInfo.getFamily());
     this.filter = scan.getFilter();
     this.earliestPutTs = earliestPutTs;
@@ -278,8 +277,7 @@ public class ScanQueryMatcher {
     if (filter != null && filter.filterAllRemaining()) {
       return MatchCode.DONE_SCAN;
     }
-    int ret = this.rowComparator.compareRows(row, this.rowOffset, this.rowLength,
-        cell.getRowArray(), cell.getRowOffset(), cell.getRowLength());
+    int ret = this.rowComparator.compareRows(curCell, cell);
     if (!this.isReversed) {
       if (ret <= -1) {
         return MatchCode.DONE;
@@ -306,14 +304,10 @@ public class ScanQueryMatcher {
       return MatchCode.SEEK_NEXT_ROW;
     }
 
-    int qualifierOffset = cell.getQualifierOffset();
-    int qualifierLength = cell.getQualifierLength();
-
     long timestamp = cell.getTimestamp();
     // check for early out based on timestamp alone
     if (columns.isDone(timestamp)) {
-      return columns.getNextRowOrNextColumn(cell.getQualifierArray(), qualifierOffset,
-          qualifierLength);
+      return columns.getNextRowOrNextColumn(cell);
     }
     // check if the cell is expired by cell TTL
     if (HStore.isCellTTLExpired(cell, this.oldestUnexpiredTS, this.now)) {
@@ -334,7 +328,7 @@ public class ScanQueryMatcher {
      *    they affect
      */
     byte typeByte = cell.getTypeByte();
-    long mvccVersion = cell.getMvccVersion();
+    long mvccVersion = cell.getSequenceId();
     if (CellUtil.isDelete(cell)) {
       if (keepDeletedCells == KeepDeletedCells.FALSE
           || (keepDeletedCells == KeepDeletedCells.TTL && timestamp < ttl)) {
@@ -372,8 +366,7 @@ public class ScanQueryMatcher {
         if (timestamp < earliestPutTs) {
           // keeping delete rows, but there are no puts older than
           // this delete in the store files.
-          return columns.getNextRowOrNextColumn(cell.getQualifierArray(),
-              qualifierOffset, qualifierLength);
+          return columns.getNextRowOrNextColumn(cell);
         }
         // else: fall through and do version counting on the
         // delete markers
@@ -387,8 +380,7 @@ public class ScanQueryMatcher {
       switch (deleteResult) {
         case FAMILY_DELETED:
         case COLUMN_DELETED:
-          return columns.getNextRowOrNextColumn(cell.getQualifierArray(),
-              qualifierOffset, qualifierLength);
+          return columns.getNextRowOrNextColumn(cell);
         case VERSION_DELETED:
         case FAMILY_VERSION_DELETED:
           return MatchCode.SKIP;
@@ -403,13 +395,11 @@ public class ScanQueryMatcher {
     if (timestampComparison >= 1) {
       return MatchCode.SKIP;
     } else if (timestampComparison <= -1) {
-      return columns.getNextRowOrNextColumn(cell.getQualifierArray(), qualifierOffset,
-          qualifierLength);
+      return columns.getNextRowOrNextColumn(cell);
     }
 
     // STEP 1: Check if the column is part of the requested columns
-    MatchCode colChecker = columns.checkColumn(cell.getQualifierArray(), 
-        qualifierOffset, qualifierLength, typeByte);
+    MatchCode colChecker = columns.checkColumn(cell, typeByte);
     if (colChecker == MatchCode.INCLUDE) {
       ReturnCode filterResponse = ReturnCode.SKIP;
       // STEP 2: Yes, the column is part of the requested columns. Check if filter is present
@@ -420,8 +410,7 @@ public class ScanQueryMatcher {
         case SKIP:
           return MatchCode.SKIP;
         case NEXT_COL:
-          return columns.getNextRowOrNextColumn(cell.getQualifierArray(), 
-              qualifierOffset, qualifierLength);
+          return columns.getNextRowOrNextColumn(cell);
         case NEXT_ROW:
           stickyNextRow = true;
           return MatchCode.SEEK_NEXT_ROW;
@@ -451,10 +440,8 @@ public class ScanQueryMatcher {
        * In all the above scenarios, we return the column checker return value except for
        * FilterResponse (INCLUDE_AND_SEEK_NEXT_COL) and ColumnChecker(INCLUDE)
        */
-      colChecker =
-          columns.checkVersions(cell.getQualifierArray(), qualifierOffset,
-              qualifierLength, timestamp, typeByte,
-            mvccVersion > maxReadPointToTrackVersions);
+      colChecker = columns.checkVersions(cell, timestamp, typeByte,
+          mvccVersion > maxReadPointToTrackVersions);
       //Optimize with stickyNextRow
       stickyNextRow = colChecker == MatchCode.INCLUDE_AND_SEEK_NEXT_ROW ? true : stickyNextRow;
       return (filterResponse == ReturnCode.INCLUDE_AND_NEXT_COL &&
@@ -469,14 +456,14 @@ public class ScanQueryMatcher {
   /** Handle partial-drop-deletes. As we match keys in order, when we have a range from which
    * we can drop deletes, we can set retainDeletesInOutput to false for the duration of this
    * range only, and maintain consistency. */
-  private void checkPartialDropDeleteRange(byte [] row, int offset, short length) {
+  private void checkPartialDropDeleteRange(Cell curCell) {
     // If partial-drop-deletes are used, initially, dropDeletesFromRow and dropDeletesToRow
     // are both set, and the matcher is set to retain deletes. We assume ordered keys. When
     // dropDeletesFromRow is leq current kv, we start dropping deletes and reset
     // dropDeletesFromRow; thus the 2nd "if" starts to apply.
     if ((dropDeletesFromRow != null)
         && ((dropDeletesFromRow == HConstants.EMPTY_START_ROW)
-          || (Bytes.compareTo(row, offset, length,
+          || (CellComparator.COMPARATOR.compareRows(curCell,
               dropDeletesFromRow, 0, dropDeletesFromRow.length) >= 0))) {
       retainDeletesInOutput = false;
       dropDeletesFromRow = null;
@@ -486,7 +473,7 @@ public class ScanQueryMatcher {
     // and reset dropDeletesToRow so that we don't do any more compares.
     if ((dropDeletesFromRow == null)
         && (dropDeletesToRow != null) && (dropDeletesToRow != HConstants.EMPTY_END_ROW)
-        && (Bytes.compareTo(row, offset, length,
+        && (CellComparator.COMPARATOR.compareRows(curCell,
             dropDeletesToRow, 0, dropDeletesToRow.length) >= 0)) {
       retainDeletesInOutput = true;
       dropDeletesToRow = null;
@@ -495,16 +482,14 @@ public class ScanQueryMatcher {
 
   public boolean moreRowsMayExistAfter(Cell kv) {
     if (this.isReversed) {
-      if (rowComparator.compareRows(kv.getRowArray(), kv.getRowOffset(),
-          kv.getRowLength(), stopRow, 0, stopRow.length) <= 0) {
+      if (rowComparator.compareRows(kv, stopRow, 0, stopRow.length) <= 0) {
         return false;
       } else {
         return true;
       }
     }
     if (!Bytes.equals(stopRow , HConstants.EMPTY_END_ROW) &&
-        rowComparator.compareRows(kv.getRowArray(),kv.getRowOffset(),
-            kv.getRowLength(), stopRow, 0, stopRow.length) >= 0) {
+        rowComparator.compareRows(kv, stopRow, 0, stopRow.length) >= 0) {
       // KV >= STOPROW
       // then NO there is nothing left.
       return false;
@@ -514,14 +499,12 @@ public class ScanQueryMatcher {
   }
 
   /**
-   * Set current row
-   * @param row
+   * Set the row when there is change in row
+   * @param curCell
    */
-  public void setRow(byte [] row, int offset, short length) {
-    checkPartialDropDeleteRange(row, offset, length);
-    this.row = row;
-    this.rowOffset = offset;
-    this.rowLength = length;
+  public void setToNewRow(Cell curCell) {
+    checkPartialDropDeleteRange(curCell);
+    this.curCell = curCell;
     reset();
   }
 
@@ -559,23 +542,15 @@ public class ScanQueryMatcher {
   public Cell getKeyForNextColumn(Cell kv) {
     ColumnCount nextColumn = columns.getColumnHint();
     if (nextColumn == null) {
-      return KeyValueUtil.createLastOnRow(
-          kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-          kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength(),
-          kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength());
+      return CellUtil.createLastOnRowCol(kv);
     } else {
-      return KeyValueUtil.createFirstOnRow(
-          kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-          kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength(),
-          nextColumn.getBuffer(), nextColumn.getOffset(), nextColumn.getLength());
+      return CellUtil.createFirstOnRowCol(kv, nextColumn.getBuffer(), nextColumn.getOffset(),
+          nextColumn.getLength());
     }
   }
 
-  public Cell getKeyForNextRow(Cell kv) {
-    return KeyValueUtil.createLastOnRow(
-        kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-        null, 0, 0,
-        null, 0, 0);
+  public Cell getKeyForNextRow(Cell c) {
+    return CellUtil.createLastOnRow(c);
   }
 
   /**
@@ -584,32 +559,25 @@ public class ScanQueryMatcher {
    * @return result of the compare between the indexed key and the key portion of the passed cell
    */
   public int compareKeyForNextRow(Cell nextIndexed, Cell kv) {
-    return rowComparator.compareKey(nextIndexed,
-      kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-      null, 0, 0,
-      null, 0, 0,
-      HConstants.OLDEST_TIMESTAMP, Type.Minimum.getCode());
+    return rowComparator.compareKeyBasedOnColHint(nextIndexed, kv, 0, 0, null, 0, 0,
+        HConstants.OLDEST_TIMESTAMP, Type.Minimum.getCode());
   }
 
   /**
    * @param nextIndexed the key of the next entry in the block index (if any)
-   * @param kv The Cell we're using to calculate the seek key
+   * @param currentCell The Cell we're using to calculate the seek key
    * @return result of the compare between the indexed key and the key portion of the passed cell
    */
-  public int compareKeyForNextColumn(Cell nextIndexed, Cell kv) {
+  public int compareKeyForNextColumn(Cell nextIndexed, Cell currentCell) {
     ColumnCount nextColumn = columns.getColumnHint();
     if (nextColumn == null) {
-      return rowComparator.compareKey(nextIndexed,
-        kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-        kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength(),
-        kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength(),
-        HConstants.OLDEST_TIMESTAMP, Type.Minimum.getCode());
+      return rowComparator.compareKeyBasedOnColHint(nextIndexed, currentCell, 0, 0, null, 0, 0,
+          HConstants.OLDEST_TIMESTAMP, Type.Minimum.getCode());
     } else {
-      return rowComparator.compareKey(nextIndexed,
-        kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(),
-        kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength(),
-        nextColumn.getBuffer(), nextColumn.getOffset(), nextColumn.getLength(),
-        HConstants.LATEST_TIMESTAMP, Type.Maximum.getCode());
+      return rowComparator.compareKeyBasedOnColHint(nextIndexed, currentCell,
+          currentCell.getFamilyOffset(), currentCell.getFamilyLength(), nextColumn.getBuffer(),
+          nextColumn.getOffset(), nextColumn.getLength(), HConstants.LATEST_TIMESTAMP,
+          Type.Maximum.getCode());
     }
   }
 
@@ -620,11 +588,23 @@ public class ScanQueryMatcher {
   //Used only for testing purposes
   static MatchCode checkColumn(ColumnTracker columnTracker, byte[] bytes, int offset,
       int length, long ttl, byte type, boolean ignoreCount) throws IOException {
-    MatchCode matchCode = columnTracker.checkColumn(bytes, offset, length, type);
+    KeyValue kv = KeyValueUtil.createFirstOnRow(HConstants.EMPTY_BYTE_ARRAY, 0, 0,
+        HConstants.EMPTY_BYTE_ARRAY, 0, 0, bytes, offset, length);
+    MatchCode matchCode = columnTracker.checkColumn(kv, type);
     if (matchCode == MatchCode.INCLUDE) {
-      return columnTracker.checkVersions(bytes, offset, length, ttl, type, ignoreCount);
+      return columnTracker.checkVersions(kv, ttl, type, ignoreCount);
     }
     return matchCode;
+  }
+
+  @Override
+  public void beforeShipped() throws IOException {
+    if (this.curCell != null) {
+      this.curCell = CellUtil.createFirstOnRow(CellUtil.copyRow(this.curCell));
+    }
+    if (columns != null) {
+      columns.beforeShipped();
+    }
   }
 
   /**

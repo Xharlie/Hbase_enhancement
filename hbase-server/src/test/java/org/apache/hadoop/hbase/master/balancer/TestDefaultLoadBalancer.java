@@ -17,18 +17,23 @@
  */
 package org.apache.hadoop.hbase.master.balancer;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.master.LoadBalancer;
 import org.apache.hadoop.hbase.master.RegionPlan;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.net.DNSToSwitchMapping;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -100,19 +105,19 @@ public class TestDefaultLoadBalancer extends BalancerTestBase {
       new int[] { 1, 1, 1, 1, 1, 1, 1, 1, 1, 155 },
       new int[] { 0, 0, 144, 1, 1, 1, 1, 1123, 133, 138, 12, 1444 },
       new int[] { 0, 0, 144, 1, 0, 4, 1, 1123, 133, 138, 12, 1444 },
-      new int[] { 1538, 1392, 1561, 1557, 1535, 1553, 1385, 1542, 1619 } };
+      new int[] { 1538, 1392, 1561, 1557, 1535, 1553, 1385, 1542, 1619 }};
 
   /**
    * Test the load balancing algorithm.
    *
    * Invariant is that all servers should be hosting either floor(average) or
-   * ceiling(average)
+   * ceiling(average) at cluster level
    *
    * @throws Exception
    */
   @Test (timeout=60000)
-  public void testBalanceCluster() throws Exception {
-
+  public void testBalanceClusterByCluster() throws Exception {
+    ((SimpleLoadBalancer)loadBalancer).setBalanceOverall(false);
     for (int[] mockCluster : clusterStateMocks) {
       Map<ServerName, List<HRegionInfo>> servers = mockClusterServers(mockCluster);
       List<ServerAndLoad> list = convertToList(servers);
@@ -125,6 +130,74 @@ public class TestDefaultLoadBalancer extends BalancerTestBase {
         returnRegions(entry.getValue());
         returnServer(entry.getKey());
       }
+    }
+  }
+
+  /**
+   * Test the load balancing algorithm.
+   *
+   * Invariant is that all servers should be hosting either floor(average) or
+   * ceiling(average) at table level
+   *
+   * @throws Exception
+   */
+  @Test (timeout=60000)
+  public void testBalanceClusterBytable() throws Exception {
+    ((SimpleLoadBalancer)loadBalancer).setBalanceOverall(false);
+    for (int[] mockCluster : clusterStateMocks) {
+      Map<ServerName, List<HRegionInfo>> clusterServers = mockClusterServers(mockCluster, 2);
+      HashMap<TableName, TreeMap<ServerName, List<HRegionInfo>>> result = mockClusterServersWithTables(clusterServers);
+      for(TreeMap<ServerName, List<HRegionInfo>> servers : result.values()){
+        List<ServerAndLoad> list = convertToList(servers);
+        LOG.info("Mock Cluster : " + printMock(list) + " " + printStats(list));
+        List<RegionPlan> plans = loadBalancer.balanceCluster(servers);
+        List<ServerAndLoad> balancedClusterPerTable = reconcile(list, plans, servers);
+        LOG.info("Mock Balance : " + printMock(balancedClusterPerTable));
+        assertClusterAsBalanced(balancedClusterPerTable);
+        for (Map.Entry<ServerName, List<HRegionInfo>> entry : servers.entrySet()) {
+          returnRegions(entry.getValue());
+          returnServer(entry.getKey());
+        }
+      }
+    }
+  }
+
+  /**
+   * Test the load balancing algorithm.
+   *
+   * Invariant is that all servers should be hosting either floor(average) or
+   * ceiling(average) at both table level and cluster level
+   *
+   * @throws Exception
+   */
+  @Test (timeout=60000)
+  public void testBalanceClusterOverall() throws Exception {
+    ((SimpleLoadBalancer)loadBalancer).setBalanceOverall(true);
+    Map<TableName, Map<ServerName, List<HRegionInfo>>> clusterLoad
+            = new TreeMap<TableName, Map<ServerName, List<HRegionInfo>>>();
+    for (int[] mockCluster : clusterStateMocks) {
+      Map<ServerName, List<HRegionInfo>> clusterServers = mockClusterServers(mockCluster, 50);
+      List<ServerAndLoad> clusterList = convertToList(clusterServers);
+      clusterLoad.put(TableName.valueOf("ensemble"), clusterServers);
+      HashMap<TableName, TreeMap<ServerName, List<HRegionInfo>>> result = mockClusterServersWithTables(clusterServers);
+      ((SimpleLoadBalancer)loadBalancer).setClusterLoad(clusterLoad);
+      List<RegionPlan> clusterplans = new ArrayList<RegionPlan>();
+      List<Pair<TableName, Integer>> regionAmountList = new ArrayList<Pair<TableName, Integer>>();
+      for(TreeMap<ServerName, List<HRegionInfo>> servers : result.values()){
+        List<ServerAndLoad> list = convertToList(servers);
+        LOG.info("Mock Cluster : " + printMock(list) + " " + printStats(list));
+        List<RegionPlan> partialplans = loadBalancer.balanceCluster(servers);
+        if(partialplans != null) clusterplans.addAll(partialplans);
+        List<ServerAndLoad> balancedClusterPerTable = reconcile(list, partialplans, servers);
+        LOG.info("Mock Balance : " + printMock(balancedClusterPerTable));
+        assertClusterAsBalanced(balancedClusterPerTable);
+        for (Map.Entry<ServerName, List<HRegionInfo>> entry : servers.entrySet()) {
+          returnRegions(entry.getValue());
+          returnServer(entry.getKey());
+        }
+      }
+      List<ServerAndLoad> balancedCluster = reconcile(clusterList, clusterplans, clusterServers);
+      assertClusterOverallAsBalanced(balancedCluster, result.keySet().size());
     }
   }
 }

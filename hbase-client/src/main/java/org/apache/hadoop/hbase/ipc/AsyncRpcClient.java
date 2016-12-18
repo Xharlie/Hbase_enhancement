@@ -49,6 +49,8 @@ import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.client.AsyncRpcCallback;
+import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.JVM;
 import org.apache.hadoop.hbase.util.Pair;
@@ -223,7 +225,7 @@ public class AsyncRpcClient extends AbstractRpcClient {
     if (pcrc == null) {
       pcrc = new PayloadCarryingRpcController();
     }
-    final AsyncRpcChannel connection = createRpcChannel(md.getService().getName(), addr, ticket);
+    final AsyncRpcChannel connection = createRpcChannel(md.getService().getName(), addr, ticket, null);
 
     Promise<Message> promise = connection.callMethod(md, pcrc, param, returnType);
     long timeout = pcrc.hasCallTimeout() ? pcrc.getCallTimeout() : 0;
@@ -246,10 +248,10 @@ public class AsyncRpcClient extends AbstractRpcClient {
    */
   private void callMethod(Descriptors.MethodDescriptor md, final PayloadCarryingRpcController pcrc,
       Message param, Message returnType, User ticket, InetSocketAddress addr,
-      final RpcCallback<Message> done) {
+      final RpcCallback<Message> callback) {
     final AsyncRpcChannel connection;
     try {
-      connection = createRpcChannel(md.getService().getName(), addr, ticket);
+      connection = createRpcChannel(md.getService().getName(), addr, ticket, callback);
 
       connection.callMethod(md, pcrc, param, returnType).addListener(
           new GenericFutureListener<Future<Message>>() {
@@ -257,14 +259,16 @@ public class AsyncRpcClient extends AbstractRpcClient {
         public void operationComplete(Future<Message> future) throws Exception {
           if(!future.isSuccess()){
             Throwable cause = future.cause();
+            IOException toThrow;
             if (cause instanceof IOException) {
-              pcrc.setFailed((IOException) cause);
-            }else{
-              pcrc.setFailed(new IOException(cause));
+              toThrow = (IOException) cause;
+            } else {
+              toThrow = new IOException(cause);
             }
+            pcrc.setFailed(toThrow);
           }else{
             try {
-              done.run(future.get());
+              callback.run(future.get());
             }catch (ExecutionException e){
               Throwable cause = e.getCause();
               if (cause instanceof IOException) {
@@ -336,12 +340,14 @@ public class AsyncRpcClient extends AbstractRpcClient {
    * @param serviceName    name of servicce
    * @param location       to connect to
    * @param ticket         for current user
+   * @param callback       the callback for non-blocking call, or null for blocking call
    * @return new RpcChannel
    * @throws StoppedRpcClientException when Rpc client is stopped
    * @throws FailedServerException if server failed
    */
   private AsyncRpcChannel createRpcChannel(String serviceName, InetSocketAddress location,
-      User ticket) throws StoppedRpcClientException, FailedServerException {
+      User ticket, RpcCallback<Message> callback) throws StoppedRpcClientException,
+      FailedServerException {
     // Check if server is failed
     if (this.failedServers.isFailedServer(location)) {
       if (LOG.isDebugEnabled()) {
@@ -352,7 +358,7 @@ public class AsyncRpcClient extends AbstractRpcClient {
           "This server is in the failed servers list: " + location);
     }
 
-    int hashCode = ConnectionId.hashCode(ticket,serviceName,location);
+    int hashCode = ConnectionId.hashCode(ticket, serviceName, location);
 
     AsyncRpcChannel rpcChannel;
     synchronized (connections) {
@@ -360,8 +366,17 @@ public class AsyncRpcClient extends AbstractRpcClient {
         throw new StoppedRpcClientException();
       }
       rpcChannel = connections.get(hashCode);
-      if (rpcChannel == null || !rpcChannel.isAlive()) {
+      // don't check whether channel is open here because the connect action is asynchronous in
+      // netty and it's possible that socket is in progress of opening when we reach here
+      if (rpcChannel == null) {
         rpcChannel = new AsyncRpcChannel(this.bootstrap, this, ticket, serviceName, location);
+        // make sure there's no hash code divergence
+        if (hashCode != rpcChannel.hashCode()) {
+          RuntimeException e = new RuntimeException(
+              "Unexpected exception: Inconsistent AsyncRpcChannel hash code before/after creation");
+          rpcChannel.close(e);
+          throw e;
+        }
         connections.put(hashCode, rpcChannel);
       }
     }
@@ -383,9 +398,10 @@ public class AsyncRpcClient extends AbstractRpcClient {
   public void cancelConnections(ServerName sn) {
     synchronized (connections) {
       for (AsyncRpcChannel rpcChannel : connections.values()) {
-        if (rpcChannel.isAlive() &&
-            rpcChannel.address.getPort() == sn.getPort() &&
-            rpcChannel.address.getHostName().contentEquals(sn.getHostname())) {
+        // don't check whether channel is open here because the connect action is asynchronous in
+        // netty and it's possible that socket is in progress of opening when we reach here
+        if (rpcChannel.address.getPort() == sn.getPort()
+            && rpcChannel.address.getHostName().contentEquals(sn.getHostname())) {
           LOG.info("The server on " + sn.toString() +
               " is dead - stopping the connection " + rpcChannel.toString());
           rpcChannel.close(null);
@@ -451,7 +467,7 @@ public class AsyncRpcClient extends AbstractRpcClient {
 
     @Override
     public void callMethod(Descriptors.MethodDescriptor md, RpcController controller,
-        Message param, Message returnType, RpcCallback<Message> done) {
+        Message param, Message returnType, RpcCallback<Message> callback) {
       PayloadCarryingRpcController pcrc;
       if (controller != null) {
         pcrc = (PayloadCarryingRpcController) controller;
@@ -463,11 +479,16 @@ public class AsyncRpcClient extends AbstractRpcClient {
         pcrc.setCallTimeout(channelOperationTimeout);
       }
 
-      this.rpcClient.callMethod(md, pcrc, param, returnType, this.ticket, this.isa, done);
+      this.rpcClient.callMethod(md, pcrc, param, returnType, this.ticket, this.isa, callback);
     }
   }
 
   Timeout newTimeout(TimerTask task, long delay, TimeUnit unit) {
     return WHEEL_TIMER.newTimeout(task, delay, unit);
+  }
+
+  @Override
+  public boolean supportsNonBlockingInterface() {
+    return true;
   }
 }

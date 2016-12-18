@@ -25,6 +25,7 @@ import java.util.Random;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
@@ -52,7 +53,6 @@ public class TestPrefetch {
   @Before
   public void setUp() throws IOException {
     conf = TEST_UTIL.getConfiguration();
-    conf.setInt(HFile.FORMAT_VERSION_KEY, 3);
     conf.setBoolean(CacheConfig.PREFETCH_BLOCKS_ON_OPEN_KEY, true);
     fs = HFileSystem.get(conf);
     CacheConfig.blockCacheDisabled = false;
@@ -67,10 +67,9 @@ public class TestPrefetch {
 
   private void readStoreFile(Path storeFilePath) throws Exception {
     // Open the file
-    HFileReaderV2 reader = (HFileReaderV2) HFile.createReader(fs,
-      storeFilePath, cacheConf, conf);
+    HFile.Reader reader = HFile.createReader(fs, storeFilePath, cacheConf, conf);
 
-    while (!((HFileReaderV3)reader).prefetchComplete()) {
+    while (!reader.prefetchComplete()) {
       // Sleep for a bit
       Thread.sleep(1000);
     }
@@ -105,7 +104,7 @@ public class TestPrefetch {
       .build();
     StoreFile.Writer sfw = new StoreFile.WriterBuilder(conf, cacheConf, fs)
       .withOutputDir(storeFileParentDir)
-      .withComparator(KeyValue.COMPARATOR)
+      .withComparator(CellComparator.COMPARATOR)
       .withFileContext(meta)
       .build();
 

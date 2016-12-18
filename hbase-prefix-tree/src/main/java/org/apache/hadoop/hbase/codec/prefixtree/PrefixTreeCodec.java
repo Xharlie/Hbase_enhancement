@@ -25,10 +25,9 @@ import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
-import org.apache.hadoop.hbase.KeyValue.MetaComparator;
-import org.apache.hadoop.hbase.KeyValue.RawBytesComparator;
+import org.apache.hadoop.hbase.CellComparator.MetaCellComparator;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.codec.prefixtree.decode.DecoderFactory;
 import org.apache.hadoop.hbase.codec.prefixtree.decode.PrefixTreeArraySearcher;
@@ -44,6 +43,8 @@ import org.apache.hadoop.hbase.io.encoding.HFileBlockDefaultEncodingContext;
 import org.apache.hadoop.hbase.io.encoding.HFileBlockEncodingContext;
 import org.apache.hadoop.hbase.io.hfile.BlockType;
 import org.apache.hadoop.hbase.io.hfile.HFileContext;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.io.WritableUtils;
 
@@ -54,11 +55,12 @@ import org.apache.hadoop.io.WritableUtils;
  * PrefixTreeDataBlockEncoder implementation of DataBlockEncoder. This is the primary entry point
  * for PrefixTree encoding and decoding. Encoding is delegated to instances of
  * {@link PrefixTreeEncoder}, and decoding is delegated to instances of
- * {@link org.apache.hadoop.hbase.codec.prefixtree.scanner.CellSearcher}. Encoder and decoder instances are
+ * {@link org.apache.hadoop.hbase.codec.prefixtree.scanner.CellSearcher}.
+ * Encoder and decoder instances are
  * created and recycled by static PtEncoderFactory and PtDecoderFactory.
  */
 @InterfaceAudience.Private
-public class PrefixTreeCodec implements DataBlockEncoder{
+public class PrefixTreeCodec implements DataBlockEncoder {
 
   /**
    * no-arg constructor for reflection
@@ -81,7 +83,7 @@ public class PrefixTreeCodec implements DataBlockEncoder{
       int skipLastBytes, HFileBlockDecodingContext decodingCtx) throws IOException {
     ByteBuffer sourceAsBuffer = ByteBufferUtils.drainInputStreamToBuffer(source);// waste
     sourceAsBuffer.mark();
-    PrefixTreeBlockMeta blockMeta = new PrefixTreeBlockMeta(sourceAsBuffer);
+    PrefixTreeBlockMeta blockMeta = new PrefixTreeBlockMeta(new SingleByteBuff(sourceAsBuffer));
     sourceAsBuffer.rewind();
     int numV1BytesWithHeader = allocateHeaderLength + blockMeta.getNumKeyValueBytes();
     byte[] keyValueBytesWithHeader = new byte[numV1BytesWithHeader];
@@ -90,7 +92,7 @@ public class PrefixTreeCodec implements DataBlockEncoder{
     CellSearcher searcher = null;
     try {
       boolean includesMvcc = decodingCtx.getHFileContext().isIncludesMvcc();
-      searcher = DecoderFactory.checkOut(sourceAsBuffer, includesMvcc);
+      searcher = DecoderFactory.checkOut(new SingleByteBuff(sourceAsBuffer), includesMvcc);
       while (searcher.advance()) {
         KeyValue currentCell = KeyValueUtil.copyToNewKeyValue(searcher.current());
         // needs to be modified for DirectByteBuffers. no existing methods to
@@ -102,7 +104,7 @@ public class PrefixTreeCodec implements DataBlockEncoder{
         ByteBufferUtils.skip(result, keyValueLength);
         offset += keyValueLength;
         if (includesMvcc) {
-          ByteBufferUtils.writeVLong(result, currentCell.getMvccVersion());
+          ByteBufferUtils.writeVLong(result, currentCell.getSequenceId());
         }
       }
       result.position(result.limit());//make it appear as if we were appending
@@ -114,7 +116,7 @@ public class PrefixTreeCodec implements DataBlockEncoder{
 
 
   @Override
-  public ByteBuffer getFirstKeyInBlock(ByteBuffer block) {
+  public Cell getFirstKeyCellInBlock(ByteBuff block) {
     block.rewind();
     PrefixTreeArraySearcher searcher = null;
     try {
@@ -123,7 +125,7 @@ public class PrefixTreeCodec implements DataBlockEncoder{
       if (!searcher.positionAtFirstCell()) {
         return null;
       }
-      return KeyValueUtil.copyKeyToNewByteBuffer(searcher.current());
+      return searcher.current();
     } finally {
       DecoderFactory.checkIn(searcher);
     }
@@ -150,12 +152,11 @@ public class PrefixTreeCodec implements DataBlockEncoder{
    * the way to this point.
    */
   @Override
-  public EncodedSeeker createSeeker(KVComparator comparator, HFileBlockDecodingContext decodingCtx) {
-    if (comparator instanceof RawBytesComparator){
-      throw new IllegalArgumentException("comparator must be KeyValue.KeyComparator");
-    } else if (comparator instanceof MetaComparator){
-      throw new IllegalArgumentException("DataBlockEncoding.PREFIX_TREE not compatible with hbase:meta "
-          +"table");
+  public EncodedSeeker createSeeker(CellComparator comparator,
+      HFileBlockDecodingContext decodingCtx) {
+    if (comparator instanceof MetaCellComparator) {
+      throw new IllegalArgumentException(
+          "DataBlockEncoding.PREFIX_TREE not compatible with hbase:meta " + "table");
     }
 
     return new PrefixTreeSeeker(decodingCtx.getHFileContext().isIncludesMvcc());

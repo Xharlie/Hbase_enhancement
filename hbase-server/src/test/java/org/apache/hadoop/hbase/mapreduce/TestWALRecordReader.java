@@ -102,7 +102,7 @@ public class TestWALRecordReader {
     fs = TEST_UTIL.getDFSCluster().getFileSystem();
 
     hbaseDir = TEST_UTIL.createRootDir();
-    
+
     logDir = new Path(hbaseDir, HConstants.HREGION_LOGDIR_NAME);
 
     htd = new HTableDescriptor(tableName);
@@ -150,7 +150,7 @@ public class TestWALRecordReader {
     walfactory.shutdown();
     LOG.info("Closed WAL " + log.toString());
 
- 
+
     WALInputFormat input = new WALInputFormat();
     Configuration jobConf = new Configuration(conf);
     jobConf.set("mapreduce.input.fileinputformat.inputdir", logDir.toString());
@@ -253,9 +253,14 @@ public class TestWALRecordReader {
     for (byte[] column : columns) {
       assertTrue(reader.nextKeyValue());
       Cell cell = reader.getCurrentValue().getCells().get(0);
-      if (!Bytes.equals(column, cell.getQualifier())) {
-        assertTrue("expected [" + Bytes.toString(column) + "], actual ["
-            + Bytes.toString(cell.getQualifier()) + "]", false);
+      if (!Bytes.equals(column, 0, column.length, cell.getQualifierArray(),
+        cell.getQualifierOffset(), cell.getQualifierLength())) {
+        assertTrue(
+          "expected ["
+              + Bytes.toString(column)
+              + "], actual ["
+              + Bytes.toString(cell.getQualifierArray(), cell.getQualifierOffset(),
+                cell.getQualifierLength()) + "]", false);
       }
     }
     assertFalse(reader.nextKeyValue());

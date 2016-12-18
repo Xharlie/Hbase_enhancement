@@ -22,6 +22,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.io.hfile.Cacheable;
+import org.apache.hadoop.hbase.io.hfile.CacheableDeserializer;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 
 /**
  * A class implementing IOEngine interface supports data services for
@@ -35,13 +38,16 @@ public interface IOEngine {
   boolean isPersistent();
 
   /**
-   * Transfers data from IOEngine to the given byte buffer
-   * @param dstBuffer the given byte buffer into which bytes are to be written
+   * Transfers data from IOEngine to a Cacheable object.
+   * @param length How many bytes to be read from the offset
    * @param offset The offset in the IO engine where the first byte to be read
-   * @return number of bytes read
+   * @param deserializer The deserializer to be used to make a Cacheable from the data.
+   * @return Cacheable
    * @throws IOException
+   * @throws RuntimeException when the length of the ByteBuff read is less than 'len'
    */
-  int read(ByteBuffer dstBuffer, long offset) throws IOException;
+  Cacheable read(long offset, int length, CacheableDeserializer<Cacheable> deserializer)
+      throws IOException;
 
   /**
    * Transfers data from the given byte buffer to IOEngine
@@ -51,6 +57,14 @@ public interface IOEngine {
    * @throws IOException
    */
   void write(ByteBuffer srcBuffer, long offset) throws IOException;
+
+  /**
+   * Transfers the data from the given MultiByteBuffer to IOEngine
+   * @param srcBuffer the given MultiBytebufffers from which bytes are to be read
+   * @param offset the offset in the IO engine where the first byte to be written
+   * @throws IOException
+   */
+  void write(ByteBuff srcBuffer, long offset) throws IOException;
 
   /**
    * Sync the data to IOEngine after writing

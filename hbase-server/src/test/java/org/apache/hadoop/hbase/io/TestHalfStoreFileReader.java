@@ -31,6 +31,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
@@ -99,9 +101,8 @@ public class TestHalfStoreFileReader {
 
     HFile.Reader r = HFile.createReader(fs, p, cacheConf, conf);
     r.loadFileInfo();
-    byte [] midkey = r.midkey();
-    KeyValue midKV = KeyValue.createKeyValueFromKey(midkey);
-    midkey = midKV.getRow();
+    Cell midKV = r.midkey();
+    byte[] midkey = CellUtil.cloneRow(midKV);
 
     //System.out.println("midkey: " + midKV + " or: " + Bytes.toStringBinary(midkey));
 
@@ -125,7 +126,7 @@ public class TestHalfStoreFileReader {
     scanner.seekTo();
     Cell curr;
     do {
-      curr = scanner.getKeyValue();
+      curr = scanner.getCell();
       KeyValue reseekKv =
           getLastOnCol(curr);
       int ret = scanner.reseekTo(reseekKv);
@@ -165,9 +166,8 @@ public class TestHalfStoreFileReader {
 
       HFile.Reader r = HFile.createReader(fs, p, cacheConf, conf);
       r.loadFileInfo();
-      byte[] midkey = r.midkey();
-      KeyValue midKV = KeyValue.createKeyValueFromKey(midkey);
-      midkey = midKV.getRow();
+      Cell midKV = r.midkey();
+      byte[] midkey = CellUtil.cloneRow(midKV);
 
       Reference bottom = new Reference(midkey, Reference.Range.bottom);
       Reference top = new Reference(midkey, Reference.Range.top);
@@ -175,7 +175,7 @@ public class TestHalfStoreFileReader {
       // Ugly code to get the item before the midkey
       KeyValue beforeMidKey = null;
       for (KeyValue item : items) {
-          if (KeyValue.COMPARATOR.compare(item, midKV) >= 0) {
+          if (CellComparator.COMPARATOR.compare(item, midKV) >= 0) {
               break;
           }
           beforeMidKey = item;
@@ -215,7 +215,7 @@ public class TestHalfStoreFileReader {
       assertNull(foundKeyValue);
     }
 
-  private Cell doTestOfSeekBefore(Path p, FileSystem fs, Reference bottom, KeyValue seekBefore,
+  private Cell doTestOfSeekBefore(Path p, FileSystem fs, Reference bottom, Cell seekBefore,
                                         CacheConfig cacheConfig)
             throws IOException {
       final HalfStoreFileReader halfreader = new HalfStoreFileReader(fs, p,
@@ -223,7 +223,7 @@ public class TestHalfStoreFileReader {
       halfreader.loadFileInfo();
       final HFileScanner scanner = halfreader.getScanner(false, false);
       scanner.seekBefore(seekBefore);
-      return scanner.getKeyValue();
+      return scanner.getCell();
   }
 
   private KeyValue getLastOnCol(Cell curr) {

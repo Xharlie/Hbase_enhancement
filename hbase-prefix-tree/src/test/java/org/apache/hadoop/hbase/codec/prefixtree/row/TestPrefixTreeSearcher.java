@@ -26,15 +26,18 @@ import java.util.Collection;
 import java.util.List;
 
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.codec.prefixtree.decode.DecoderFactory;
 import org.apache.hadoop.hbase.codec.prefixtree.encode.PrefixTreeEncoder;
 import org.apache.hadoop.hbase.codec.prefixtree.row.data.TestRowDataSearchWithPrefix;
 import org.apache.hadoop.hbase.codec.prefixtree.scanner.CellScannerPosition;
 import org.apache.hadoop.hbase.codec.prefixtree.scanner.CellSearcher;
+import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.CollectionUtils;
 import org.junit.Assert;
 import org.junit.Test;
@@ -55,7 +58,7 @@ public class TestPrefixTreeSearcher {
   }
 
   protected TestRowData rows;
-  protected ByteBuffer block;
+  protected ByteBuff block;
 
   public TestPrefixTreeSearcher(TestRowData testRows) throws IOException {
     this.rows = testRows;
@@ -66,7 +69,10 @@ public class TestPrefixTreeSearcher {
     }
     kvBuilder.flush();
     byte[] outputBytes = os.toByteArray();
-    this.block = ByteBuffer.wrap(outputBytes);
+    ByteBuffer out = ByteBuffer.allocateDirect(outputBytes.length);
+    ByteBufferUtils.copyFromArrayToBuffer(out, outputBytes, 0, outputBytes.length);
+    out.position(0);
+    this.block = new SingleByteBuff(out);
   }
 
   @Test
@@ -84,7 +90,7 @@ public class TestPrefixTreeSearcher {
         // check all 3 permutations of equals()
         Assert.assertEquals(inputCell, outputCell);
         Assert.assertEquals(outputCell, inputCell);
-        Assert.assertTrue(CellComparator.equals(inputCell, outputCell));
+        Assert.assertTrue(CellUtil.equals(inputCell, outputCell));
       }
       Assert.assertEquals(rows.getInputs().size(), i + 1);
     } finally {
@@ -123,7 +129,7 @@ public class TestPrefixTreeSearcher {
         boolean hit = searcher.positionAt(kv);
         Assert.assertTrue(hit);
         Cell foundKv = searcher.current();
-        Assert.assertTrue(CellComparator.equals(kv, foundKv));
+        Assert.assertTrue(CellUtil.equals(kv, foundKv));
       }
     } finally {
       DecoderFactory.checkIn(searcher);
@@ -143,7 +149,7 @@ public class TestPrefixTreeSearcher {
           KeyValue kv = rows.getInputs().get(i);
 
           //nextRow
-          KeyValue inputNextRow = KeyValueUtil.createFirstKeyInNextRow(kv);
+          Cell inputNextRow = CellUtil.createFirstOnNextRow(kv);
 
           CellScannerPosition position = beforeVsAfterOnMiss
               ? searcher.positionAtOrBefore(inputNextRow)

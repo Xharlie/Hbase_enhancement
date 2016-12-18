@@ -469,4 +469,9 @@ abstract class ConnectionAdapter implements ClusterConnection {
   public boolean supportsCellBlock() {
     return wrappedConnection.supportsCellBlock();
   }
+
+  @Override
+  public boolean supportsNonBlockingInterface() {
+    return wrappedConnection.supportsNonBlockingInterface();
+  }
 }

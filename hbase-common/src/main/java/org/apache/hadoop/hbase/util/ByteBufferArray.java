@@ -19,12 +19,13 @@
 package org.apache.hadoop.hbase.util;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.MultiByteBuff;
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -38,7 +39,6 @@ public final class ByteBufferArray {
 
   static final int DEFAULT_BUFFER_SIZE = 4 * 1024 * 1024;
   private ByteBuffer buffers[];
-  private Lock locks[];
   private int bufferSize;
   private int bufferCount;
 
@@ -58,9 +58,7 @@ public final class ByteBufferArray {
         + ", sizePerBuffer=" + StringUtils.byteDesc(bufferSize) + ", count="
         + bufferCount + ", direct=" + directByteBuffer);
     buffers = new ByteBuffer[bufferCount + 1];
-    locks = new Lock[bufferCount + 1];
     for (int i = 0; i <= bufferCount; i++) {
-      locks[i] = new ReentrantLock();
       if (i < bufferCount) {
         buffers[i] = directByteBuffer ? ByteBuffer.allocateDirect(bufferSize)
             : ByteBuffer.allocate(bufferSize);
@@ -102,8 +100,8 @@ public final class ByteBufferArray {
 
   private final static Visitor GET_MULTIPLE_VISTOR = new Visitor() {
     @Override
-    public void visit(ByteBuffer bb, byte[] array, int arrayIdx, int len) {
-      bb.get(array, arrayIdx, len);
+    public void visit(ByteBuffer bb, int pos, byte[] array, int arrayIdx, int len) {
+      ByteBufferUtils.copyFromBufferToArray(array, bb, pos, arrayIdx, len);
     }
   };
 
@@ -131,8 +129,8 @@ public final class ByteBufferArray {
 
   private final static Visitor PUT_MULTIPLE_VISITOR = new Visitor() {
     @Override
-    public void visit(ByteBuffer bb, byte[] array, int arrayIdx, int len) {
-      bb.put(array, arrayIdx, len);
+    public void visit(ByteBuffer bb, int pos, byte[] array, int arrayIdx, int len) {
+      ByteBufferUtils.copyFromArrayToBuffer(bb, pos, array, arrayIdx, len);
     }
   };
 
@@ -142,11 +140,12 @@ public final class ByteBufferArray {
      * bytes from the buffer to the destination array, else if it is a write
      * action, we will transfer the bytes from the source array to the buffer
      * @param bb byte buffer
+     * @param pos Start position in ByteBuffer
      * @param array a source or destination byte array
      * @param arrayOffset offset of the byte array
      * @param len read/write length
      */
-    void visit(ByteBuffer bb, byte[] array, int arrayOffset, int len);
+    void visit(ByteBuffer bb, int pos, byte[] array, int arrayOffset, int len);
   }
 
   /**
@@ -169,7 +168,7 @@ public final class ByteBufferArray {
     assert startBuffer >= 0 && startBuffer < bufferCount;
     assert endBuffer >= 0 && endBuffer < bufferCount
         || (endBuffer == bufferCount && endOffset == 0);
-    if (startBuffer >= locks.length || startBuffer < 0) {
+    if (startBuffer >= buffers.length || startBuffer < 0) {
       String msg = "Failed multiple, start=" + start + ",startBuffer="
           + startBuffer + ",bufferSize=" + bufferSize;
       LOG.error(msg);
@@ -177,27 +176,75 @@ public final class ByteBufferArray {
     }
     int srcIndex = 0, cnt = -1;
     for (int i = startBuffer; i <= endBuffer; ++i) {
-      Lock lock = locks[i];
-      lock.lock();
-      try {
-        ByteBuffer bb = buffers[i];
-        if (i == startBuffer) {
-          cnt = bufferSize - startOffset;
-          if (cnt > len) cnt = len;
-          bb.limit(startOffset + cnt).position(startOffset);
-        } else if (i == endBuffer) {
-          cnt = endOffset;
-          bb.limit(cnt).position(0);
-        } else {
-          cnt = bufferSize;
-          bb.limit(cnt).position(0);
-        }
-        visitor.visit(bb, array, srcIndex + arrayOffset, cnt);
-        srcIndex += cnt;
-      } finally {
-        lock.unlock();
+      ByteBuffer bb = buffers[i].duplicate();
+      int pos = 0;
+      if (i == startBuffer) {
+        cnt = bufferSize - startOffset;
+        if (cnt > len) cnt = len;
+        pos = startOffset;
+      } else if (i == endBuffer) {
+        cnt = endOffset;
+      } else {
+        cnt = bufferSize;
       }
+      visitor.visit(bb, pos, array, srcIndex + arrayOffset, cnt);
+      srcIndex += cnt;
     }
     assert srcIndex == len;
+  }
+
+  /**
+   * Creates a ByteBuff from a given array of ByteBuffers from the given offset to the
+   * length specified. For eg, if there are 4 buffers forming an array each with length 10 and
+   * if we call asSubBuffer(5, 10) then we will create an MBB consisting of two BBs
+   * and the first one be a BB from 'position' 5 to a 'length' 5 and the 2nd BB will be from
+   * 'position' 0 to 'length' 5.
+   * @param offset
+   * @param len
+   * @return a ByteBuff formed from the underlying ByteBuffers
+   */
+  public ByteBuff asSubByteBuff(long offset, int len) {
+    assert len >= 0;
+    long end = offset + len;
+    int startBuffer = (int) (offset / bufferSize), startBufferOffset = (int) (offset % bufferSize);
+    int endBuffer = (int) (end / bufferSize), endBufferOffset = (int) (end % bufferSize);
+    // Last buffer in the array is a dummy one with 0 capacity. Avoid sending back that
+    if (endBuffer == this.bufferCount) {
+      endBuffer--;
+      endBufferOffset = bufferSize;
+    }
+    assert startBuffer >= 0 && startBuffer < bufferCount;
+    assert endBuffer >= 0 && endBuffer < bufferCount
+        || (endBuffer == bufferCount && endBufferOffset == 0);
+    if (startBuffer >= buffers.length || startBuffer < 0) {
+      String msg = "Failed subArray, start=" + offset + ",startBuffer=" + startBuffer
+          + ",bufferSize=" + bufferSize;
+      LOG.error(msg);
+      throw new RuntimeException(msg);
+    }
+    int srcIndex = 0, cnt = -1;
+    ByteBuffer[] mbb = new ByteBuffer[endBuffer - startBuffer + 1];
+    for (int i = startBuffer, j = 0; i <= endBuffer; ++i, j++) {
+      ByteBuffer bb = buffers[i].duplicate();
+      if (i == startBuffer) {
+        cnt = bufferSize - startBufferOffset;
+        if (cnt > len) cnt = len;
+        bb.limit(startBufferOffset + cnt).position(startBufferOffset);
+      } else if (i == endBuffer) {
+        cnt = endBufferOffset;
+        bb.position(0).limit(cnt);
+      } else {
+        cnt = bufferSize;
+        bb.position(0).limit(cnt);
+      }
+      mbb[j] = bb.slice();
+      srcIndex += cnt;
+    }
+    assert srcIndex == len;
+    if (mbb.length > 1) {
+      return new MultiByteBuff(mbb);
+    } else {
+      return new SingleByteBuff(mbb[0]);
+    }
   }
 }

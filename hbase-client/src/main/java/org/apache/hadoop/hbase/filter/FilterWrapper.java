@@ -104,17 +104,23 @@ final public class FilterWrapper extends Filter {
   @Deprecated
   public KeyValue getNextKeyHint(KeyValue currentKV) throws IOException {
     // This will never get called.
-    return KeyValueUtil.ensureKeyValue(this.filter.getNextCellHint((Cell)currentKV));
+    return KeyValueUtil.ensureKeyValue(this.filter.getNextCellHint((Cell) currentKV));
   }
 
   @Override
-  public Cell getNextCellHint(Cell currentKV) throws IOException {
-    return this.filter.getNextCellHint(currentKV);
+  public Cell getNextCellHint(Cell currentCell) throws IOException {
+    return this.filter.getNextCellHint(currentCell);
   }
 
   @Override
   public boolean filterRowKey(byte[] buffer, int offset, int length) throws IOException {
+    // No call to this.
     return this.filter.filterRowKey(buffer, offset, length);
+  }
+
+  @Override
+  public boolean filterRowKey(Cell cell) throws IOException {
+    return this.filter.filterRowKey(cell);
   }
 
   @Override
@@ -125,18 +131,6 @@ final public class FilterWrapper extends Filter {
   @Override
   public Cell transformCell(Cell v) throws IOException {
     return this.filter.transformCell(v);
-  }
-
-  /**
-   * WARNING: please to not override this method.  Instead override {@link #transformCell(Cell)}.
-   *
-   * This is for transition from 0.94 -> 0.96
-   */
-  @Override
-  @Deprecated
-  public KeyValue transform(KeyValue currentKV) throws IOException {
-    // This will never get called.
-    return KeyValueUtil.ensureKeyValue(this.filter.transformCell(currentKV));
   }
 
   @Override
@@ -187,5 +181,17 @@ final public class FilterWrapper extends Filter {
 
     FilterWrapper other = (FilterWrapper)o;
     return this.filter.areSerializedFieldsEqual(other.filter);
+  }
+
+  /**
+   * WARNING: please to not override this method. Instead override {@link #transformCell(Cell)}.
+   * <p/>
+   * This is for transition from 0.94 -> 0.96
+   */
+  @Override
+  @Deprecated
+  public KeyValue transform(KeyValue currentKV) throws IOException {
+    // This will never get called.
+    return KeyValueUtil.ensureKeyValue(this.filter.transformCell(currentKV));
   }
 }

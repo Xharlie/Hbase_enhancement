@@ -485,6 +485,8 @@ public final class HConstants {
    */
   public static final byte [] EMPTY_BYTE_ARRAY = new byte [0];
 
+  public static final ByteBuffer EMPTY_BYTE_BUFFER = ByteBuffer.wrap(EMPTY_BYTE_ARRAY);
+
   /**
    * Used by scanners, etc when they want to start at the beginning of a region
    */
@@ -749,7 +751,7 @@ public final class HConstants {
   /**
    * Default value of {@link #HBASE_META_VERSIONS}.
    */
-  public static int DEFAULT_HBASE_META_VERSIONS = 10;
+  public static int DEFAULT_HBASE_META_VERSIONS = 1;
 
   /**
    * Parameter name for number of versions, kept by meta table.

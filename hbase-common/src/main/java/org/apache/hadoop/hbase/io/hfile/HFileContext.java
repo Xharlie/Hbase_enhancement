@@ -57,6 +57,7 @@ public class HFileContext implements HeapSize, Cloneable {
   /** Encryption algorithm and key used */
   private Encryption.Context cryptoContext = Encryption.Context.NONE;
   private long fileCreateTime;
+  private String hfileName;
 
   //Empty constructor.  Go with setters
   public HFileContext() {
@@ -78,12 +79,13 @@ public class HFileContext implements HeapSize, Cloneable {
     this.encoding = context.encoding;
     this.cryptoContext = context.cryptoContext;
     this.fileCreateTime = context.fileCreateTime;
+    this.hfileName = context.hfileName;
   }
 
-  public HFileContext(boolean useHBaseChecksum, boolean includesMvcc, boolean includesTags,
+  HFileContext(boolean useHBaseChecksum, boolean includesMvcc, boolean includesTags,
       Compression.Algorithm compressAlgo, boolean compressTags, ChecksumType checksumType,
       int bytesPerChecksum, int blockSize, DataBlockEncoding encoding,
-      Encryption.Context cryptoContext, long fileCreateTime) {
+      Encryption.Context cryptoContext, long fileCreateTime, String hfileName) {
     this.usesHBaseChecksum = useHBaseChecksum;
     this.includesMvcc =  includesMvcc;
     this.includesTags = includesTags;
@@ -97,6 +99,7 @@ public class HFileContext implements HeapSize, Cloneable {
     }
     this.cryptoContext = cryptoContext;
     this.fileCreateTime = fileCreateTime;
+    this.hfileName = hfileName;
   }
 
   /**
@@ -118,10 +121,6 @@ public class HFileContext implements HeapSize, Cloneable {
 
   public Compression.Algorithm getCompression() {
     return compressAlgo;
-  }
-
-  public void setCompression(Compression.Algorithm compressAlgo) {
-    this.compressAlgo = compressAlgo;
   }
 
   public boolean isUseHBaseChecksum() {
@@ -176,16 +175,16 @@ public class HFileContext implements HeapSize, Cloneable {
     return encoding;
   }
 
-  public void setDataBlockEncoding(DataBlockEncoding encoding) {
-    this.encoding = encoding;
-  }
-
   public Encryption.Context getEncryptionContext() {
     return cryptoContext;
   }
 
   public void setEncryptionContext(Encryption.Context cryptoContext) {
     this.cryptoContext = cryptoContext;
+  }
+
+  public String getHFileName() {
+    return this.hfileName;
   }
 
   /**
@@ -197,11 +196,14 @@ public class HFileContext implements HeapSize, Cloneable {
   public long heapSize() {
     long size = ClassSize.align(ClassSize.OBJECT +
         // Algorithm reference, encodingon, checksumtype, Encryption.Context reference
-        4 * ClassSize.REFERENCE +
+        5 * ClassSize.REFERENCE +
         2 * Bytes.SIZEOF_INT +
         // usesHBaseChecksum, includesMvcc, includesTags and compressTags
         4 * Bytes.SIZEOF_BOOLEAN +
         Bytes.SIZEOF_LONG);
+    if (this.hfileName != null) {
+      size += ClassSize.STRING + this.hfileName.length();
+    }
     return size;
   }
 
@@ -228,6 +230,10 @@ public class HFileContext implements HeapSize, Cloneable {
     sb.append(" compressAlgo=");      sb.append(compressAlgo);
     sb.append(" compressTags=");      sb.append(compressTags);
     sb.append(" cryptoContext=[ ");   sb.append(cryptoContext);      sb.append(" ]");
+    if (hfileName != null) {
+      sb.append(" name=");
+      sb.append(hfileName);
+    }
     sb.append(" ]");
     return sb.toString();
   }

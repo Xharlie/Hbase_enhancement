@@ -88,6 +88,7 @@ import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.MasterNotRunningException;
 import org.apache.hadoop.hbase.RegionLocations;
 import org.apache.hadoop.hbase.ServerName;
@@ -403,7 +404,7 @@ public class HBaseFsck extends Configured implements Closeable {
           LOG.info("Failed to create lock file " + hbckLockFilePath.getName()
               + ", try=" + (retryCounter.getAttemptTimes() + 1) + " of "
               + retryCounter.getMaxAttempts());
-          LOG.debug("Failed to create lock file " + hbckLockFilePath.getName(), 
+          LOG.debug("Failed to create lock file " + hbckLockFilePath.getName(),
               ioe);
           try {
             exception = ioe;
@@ -781,13 +782,13 @@ public class HBaseFsck extends Configured implements Closeable {
                   getConf()), getConf());
               if ((reader.getFirstKey() != null)
                   && ((storeFirstKey == null) || (comparator.compare(storeFirstKey,
-                      reader.getFirstKey()) > 0))) {
-                storeFirstKey = reader.getFirstKey();
+                      ((KeyValue.KeyOnlyKeyValue) reader.getFirstKey()).getKey()) > 0))) {
+                storeFirstKey = ((KeyValue.KeyOnlyKeyValue)reader.getFirstKey()).getKey();
               }
               if ((reader.getLastKey() != null)
                   && ((storeLastKey == null) || (comparator.compare(storeLastKey,
-                      reader.getLastKey())) < 0)) {
-                storeLastKey = reader.getLastKey();
+                      ((KeyValue.KeyOnlyKeyValue)reader.getLastKey()).getKey())) < 0)) {
+                storeLastKey = ((KeyValue.KeyOnlyKeyValue)reader.getLastKey()).getKey();
               }
               reader.close();
             }
@@ -795,7 +796,7 @@ public class HBaseFsck extends Configured implements Closeable {
         }
         currentRegionBoundariesInformation.metaFirstKey = regionInfo.getStartKey();
         currentRegionBoundariesInformation.metaLastKey = regionInfo.getEndKey();
-        currentRegionBoundariesInformation.storesFirstKey = keyOnly(storeFirstKey);
+        currentRegionBoundariesInformation.storesFirstKey = storeFirstKey;
         currentRegionBoundariesInformation.storesLastKey = keyOnly(storeLastKey);
         if (currentRegionBoundariesInformation.metaFirstKey.length == 0)
           currentRegionBoundariesInformation.metaFirstKey = null;
@@ -884,10 +885,10 @@ public class HBaseFsck extends Configured implements Closeable {
           CacheConfig cacheConf = new CacheConfig(getConf());
           hf = HFile.createReader(fs, hfile.getPath(), cacheConf, getConf());
           hf.loadFileInfo();
-          KeyValue startKv = KeyValue.createKeyValueFromKey(hf.getFirstKey());
-          start = startKv.getRow();
-          KeyValue endKv = KeyValue.createKeyValueFromKey(hf.getLastKey());
-          end = endKv.getRow();
+          Cell startKv = hf.getFirstKey();
+          start = CellUtil.cloneRow(startKv);
+          Cell endKv = hf.getLastKey();
+          end = CellUtil.cloneRow(endKv);
         } catch (IOException ioe) {
           LOG.warn("Problem reading orphan file " + hfile + ", skipping");
           continue;

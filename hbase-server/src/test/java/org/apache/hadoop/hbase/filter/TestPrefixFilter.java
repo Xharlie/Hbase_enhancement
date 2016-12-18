@@ -18,7 +18,7 @@
  */
 
 package org.apache.hadoop.hbase.filter;
-
+import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.Before;
@@ -71,13 +71,13 @@ public class TestPrefixFilter {
     for (char c = FIRST_CHAR; c <= LAST_CHAR; c++) {
       byte [] t = createRow(c);
       assertFalse("Failed with character " + c,
-        filter.filterRowKey(t, 0, t.length));
+        filter.filterRowKey(KeyValueUtil.createFirstOnRow(t)));
       assertFalse(filter.filterAllRemaining());
     }
     String yahooSite = "com.yahoo.www";
     byte [] yahooSiteBytes = Bytes.toBytes(yahooSite);
     assertTrue("Failed with character " +
-      yahooSite, filter.filterRowKey(yahooSiteBytes, 0, yahooSiteBytes.length));
+      yahooSite, filter.filterRowKey(KeyValueUtil.createFirstOnRow(yahooSiteBytes)));
     assertEquals(filter.filterAllRemaining(), lastFilterAllRemaining);
   }
 

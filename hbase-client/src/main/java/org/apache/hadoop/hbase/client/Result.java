@@ -31,6 +31,7 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellScannable;
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.CellUtil;
@@ -135,7 +136,7 @@ public class Result implements CellScannable, CellScanner {
    * @deprecated Use {@link #create(List)} instead.
    */
   @Deprecated
-  public Result(KeyValue [] cells) {
+  public Result(KeyValue[] cells) {
     this(cells, null, false, false);
   }
 
@@ -144,7 +145,7 @@ public class Result implements CellScannable, CellScanner {
    */
   @Deprecated
   public Result(List<KeyValue> kvs) {
-    // TODO: Here we presume the passed in Cells are KVs.  One day this won't always be so.
+    // TODO: Here we presume the passed in Cells are KVs. One day this won't always be so.
     this(kvs.toArray(new Cell[kvs.size()]), null, false, false);
   }
 
@@ -217,14 +218,14 @@ public class Result implements CellScannable, CellScanner {
    * Return the array of Cells backing this Result instance.
    *
    * The array is sorted from smallest -> largest using the
-   * {@link KeyValue#COMPARATOR}.
+   * {@link CellComparator#COMPARATOR}.
    *
    * The array only contains what your Get or Scan specifies and no more.
    * For example if you request column "A" 1 version you will have at most 1
    * Cell in the array. If you request column "A" with 2 version you will
    * have at most 2 Cells, with the first one being the newer timestamp and
    * the second being the older timestamp (this is the sort order defined by
-   * {@link KeyValue#COMPARATOR}).  If columns don't exist, they won't be
+   * {@link CellComparator#COMPARATOR}).  If columns don't exist, they won't be
    * present in the result. Therefore if you ask for 1 version all columns,
    * it is safe to iterate over this array and expect to see 1 Cell for
    * each column and no more.
@@ -239,18 +240,17 @@ public class Result implements CellScannable, CellScanner {
 
   /**
    * Return an cells of a Result as an array of KeyValues
-   *
-   * WARNING do not use, expensive.  This does an arraycopy of the cell[]'s value.
-   *
-   * Added to ease transition from  0.94 -> 0.96.
-   *
+   * <p/>
+   * WARNING do not use, expensive. This does an arraycopy of the cell[]'s value.
+   * <p/>
+   * Added to ease transition from 0.94 -> 0.96.
    * @deprecated as of 0.96, use {@link #rawCells()}
    * @return array of KeyValues, empty array if nothing in result.
    */
   @Deprecated
   public KeyValue[] raw() {
     KeyValue[] kvs = new KeyValue[cells.length];
-    for (int i = 0 ; i < kvs.length; i++) {
+    for (int i = 0; i < kvs.length; i++) {
       kvs[i] = KeyValueUtil.ensureKeyValue(cells[i]);
     }
     return kvs;
@@ -269,11 +269,10 @@ public class Result implements CellScannable, CellScanner {
 
   /**
    * Return an cells of a Result as an array of KeyValues
-   *
-   * WARNING do not use, expensive.  This does  an arraycopy of the cell[]'s value.
-   *
-   * Added to ease transition from  0.94 -> 0.96.
-   *
+   * <p/>
+   * WARNING do not use, expensive. This does an arraycopy of the cell[]'s value.
+   * <p/>
+   * Added to ease transition from 0.94 -> 0.96.
    * @deprecated as of 0.96, use {@link #listCells()}
    * @return all sorted List of KeyValues; can be null if no cells in the result
    */
@@ -286,13 +285,13 @@ public class Result implements CellScannable, CellScanner {
    * @deprecated Use {@link #getColumnCells(byte[], byte[])} instead.
    */
   @Deprecated
-  public List<KeyValue> getColumn(byte [] family, byte [] qualifier) {
+  public List<KeyValue> getColumn(byte[] family, byte[] qualifier) {
     return KeyValueUtil.ensureKeyValues(getColumnCells(family, qualifier));
   }
 
   /**
    * Return the Cells for the specific column.  The Cells are sorted in
-   * the {@link KeyValue#COMPARATOR} order.  That implies the first entry in
+   * the {@link CellComparator#COMPARATOR} order.  That implies the first entry in
    * the list is the most recent column.  If the query (Scan or Get) only
    * requested 1 version the list will contain at most 1 entry.  If the column
    * did not exist in the result set (either the column does not exist
@@ -337,7 +336,7 @@ public class Result implements CellScannable, CellScanner {
             family, qualifier);
 
     // pos === ( -(insertion point) - 1)
-    int pos = Arrays.binarySearch(kvs, searchTerm, KeyValue.COMPARATOR);
+    int pos = Arrays.binarySearch(kvs, searchTerm, CellComparator.COMPARATOR);
     // never will exact match
     if (pos < 0) {
       pos = (pos+1) * -1;
@@ -382,7 +381,7 @@ public class Result implements CellScannable, CellScanner {
         qualifier, qoffset, qlength);
 
     // pos === ( -(insertion point) - 1)
-    int pos = Arrays.binarySearch(kvs, searchTerm, KeyValue.COMPARATOR);
+    int pos = Arrays.binarySearch(kvs, searchTerm, CellComparator.COMPARATOR);
     // never will exact match
     if (pos < 0) {
       pos = (pos+1) * -1;
@@ -398,8 +397,18 @@ public class Result implements CellScannable, CellScanner {
    * @deprecated Use {@link #getColumnLatestCell(byte[], byte[])} instead.
    */
   @Deprecated
-  public KeyValue getColumnLatest(byte [] family, byte [] qualifier) {
+  public KeyValue getColumnLatest(byte[] family, byte[] qualifier) {
     return KeyValueUtil.ensureKeyValue(getColumnLatestCell(family, qualifier));
+  }
+
+  /**
+   * @deprecated Use {@link #getColumnLatestCell(byte[], int, int, byte[], int, int)} instead.
+   */
+  @Deprecated
+  public KeyValue getColumnLatest(byte[] family, int foffset, int flength, byte[] qualifier,
+      int qoffset, int qlength) {
+    return KeyValueUtil
+        .ensureKeyValue(getColumnLatestCell(family, foffset, flength, qualifier, qoffset, qlength));
   }
 
   /**
@@ -424,16 +433,6 @@ public class Result implements CellScannable, CellScanner {
       return kvs[pos];
     }
     return null;
-  }
-
-  /**
-   * @deprecated Use {@link #getColumnLatestCell(byte[], int, int, byte[], int, int)} instead.
-   */
-  @Deprecated
-  public KeyValue getColumnLatest(byte [] family, int foffset, int flength,
-      byte [] qualifier, int qoffset, int qlength) {
-    return KeyValueUtil.ensureKeyValue(
-        getColumnLatestCell(family, foffset, flength, qualifier, qoffset, qlength));
   }
 
   /**

@@ -18,6 +18,9 @@
 package org.apache.hadoop.hbase.ipc;
 
 import com.google.protobuf.BlockingRpcChannel;
+import com.google.protobuf.RpcCallback;
+import com.google.protobuf.RpcChannel;
+
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.security.User;
@@ -68,6 +71,18 @@ import java.io.IOException;
       int rpcTimeout) throws IOException;
 
   /**
+   * Creates a "channel" that can be used by a non-blocking protobuf service. Useful setting up
+   * protobuf non-blocking stubs.
+   * @param sn server name describing location of server
+   * @param user which is to use the connection
+   * @param rpcTimeout default rpc operation timeout
+   * @return A non-blocking rpc channel that goes via this rpc client instance.
+   * @throws IOException when channel could not be created
+   */
+  public RpcChannel createRpcChannel(ServerName sn, User user, int rpcTimeout)
+      throws IOException;
+
+  /**
    * Interrupt the connections to the given server. This should be called if the server
    * is known as actually dead. This will not prevent current operation to be retried, and,
    * depending on their own behavior, they may retry on the same server. This can be a feature,
@@ -89,4 +104,9 @@ import java.io.IOException;
    *         supports cell blocks rather than Protobuffed Cells.
    */
   boolean supportsCellBlock();
+
+  /**
+   * @return true when this client supports non-blocking interface with {@link RpcCallback}
+   */
+  boolean supportsNonBlockingInterface();
 }

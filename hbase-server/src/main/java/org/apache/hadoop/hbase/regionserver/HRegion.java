@@ -72,7 +72,9 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.CompoundConfiguration;
@@ -94,6 +96,7 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagRewriteCell;
 import org.apache.hadoop.hbase.TagType;
+import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.UnknownScannerException;
 import org.apache.hadoop.hbase.backup.HFileArchiver;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
@@ -294,7 +297,6 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   private final HRegionFileSystem fs;
   protected final Configuration conf;
   private final Configuration baseConf;
-  private final KeyValue.KVComparator comparator;
   private final int rowLockWaitDuration;
   static final int DEFAULT_ROWLOCK_WAIT_DURATION = 30000;
 
@@ -358,7 +360,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   private boolean disallowWritesInRecovering = false;
 
   // when a region is in recovering state, it can only accept writes not reads
-  private volatile boolean isRecovering = false;
+  private volatile boolean recovering = false;
 
   private volatile Optional<ConfigurationManager> configurationManager;
 
@@ -662,7 +664,6 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       throw new IllegalArgumentException("Need original base configuration");
     }
 
-    this.comparator = fs.getRegionInfo().getComparator();
     this.wal = wal;
     this.fs = fs;
 
@@ -732,7 +733,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       Map<String, Region> recoveringRegions = rsServices.getRecoveringRegions();
       String encodedName = getRegionInfo().getEncodedName();
       if (recoveringRegions != null && recoveringRegions.containsKey(encodedName)) {
-        this.isRecovering = true;
+        this.recovering = true;
         recoveringRegions.put(encodedName, this);
       }
     } else {
@@ -879,7 +880,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     // overlaps used sequence numbers
     if (this.writestate.writesEnabled) {
       nextSeqid = WALSplitter.writeRegionSequenceIdFile(this.fs.getFileSystem(), this.fs
-          .getRegionDir(), nextSeqid, (this.isRecovering ? (this.flushPerChanges + 10000000) : 1));
+          .getRegionDir(), nextSeqid, (this.recovering ? (this.flushPerChanges + 10000000) : 1));
     } else {
       nextSeqid++;
     }
@@ -1218,7 +1219,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    * Reset recovering state of current region
    */
   public void setRecovering(boolean newState) {
-    boolean wasRecovering = this.isRecovering;
+    boolean wasRecovering = this.recovering;
     // before we flip the recovering switch (enabling reads) we should write the region open
     // event to WAL if needed
     if (wal != null && getRegionServerServices() != null && !writestate.readOnly
@@ -1259,8 +1260,8 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       }
     }
 
-    this.isRecovering = newState;
-    if (wasRecovering && !isRecovering) {
+    this.recovering = newState;
+    if (wasRecovering && !recovering) {
       // Call only when wal replay is over.
       coprocessorHost.postLogReplay();
     }
@@ -1268,7 +1269,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
   @Override
   public boolean isRecovering() {
-    return this.isRecovering;
+    return this.recovering;
   }
 
   @Override
@@ -1727,13 +1728,6 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       }
     }
     return size;
-  }
-
-  /**
-   * @return KeyValue Comparator
-   */
-  public KeyValue.KVComparator getComparator() {
-    return this.comparator;
   }
 
   /*
@@ -2538,18 +2532,19 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    return getScanner(scan, null);
   }
 
-  protected RegionScanner getScanner(Scan scan,
-      List<KeyValueScanner> additionalScanners) throws IOException {
+  @Override
+  public RegionScanner getScanner(Scan scan, List<KeyValueScanner> additionalScanners)
+      throws IOException {
     startRegionOperation(Operation.SCAN);
     try {
       // Verify families are all valid
       if (!scan.hasFamilies()) {
         // Adding all families to scanner
-        for (byte[] family: this.htableDescriptor.getFamiliesKeys()) {
+        for (byte[] family : this.htableDescriptor.getFamiliesKeys()) {
           scan.addFamily(family);
         }
       } else {
-        for (byte [] family : scan.getFamilyMap().keySet()) {
+        for (byte[] family : scan.getFamilyMap().keySet()) {
           checkFamily(family);
         }
       }
@@ -3438,8 +3433,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         } else if (result.size() == 1 && !valueIsNull) {
           Cell kv = result.get(0);
           cellTs = kv.getTimestamp();
-          int compareResult = comparator.compareTo(kv.getValueArray(),
-              kv.getValueOffset(), kv.getValueLength());
+          int compareResult = CellComparator.compareValue(kv, comparator);
           switch (compareOp) {
           case LESS:
             matches = compareResult < 0;
@@ -3535,8 +3529,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         } else if (result.size() == 1 && !valueIsNull) {
           Cell kv = result.get(0);
           cellTs = kv.getTimestamp();
-          int compareResult = comparator.compareTo(kv.getValueArray(),
-              kv.getValueOffset(), kv.getValueLength());
+          int compareResult = CellComparator.compareValue(kv, comparator);
           switch (compareOp) {
           case LESS:
             matches = compareResult < 0;
@@ -3659,11 +3652,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       int listSize = cells.size();
       for (int i = 0; i < listSize; i++) {
         Cell cell = cells.get(i);
-        List<Tag> newTags = Tag.carryForwardTags(null, cell);
+        List<Tag> newTags = carryForwardTags(cell, null);
         newTags = carryForwardTTLTag(newTags, m);
 
         // Rewrite the cell with the updated set of tags
-        cells.set(i, new TagRewriteCell(cell, Tag.fromList(newTags)));
+        cells.set(i, new TagRewriteCell(cell, TagUtil.fromList(newTags)));
       }
     }
   }
@@ -5408,7 +5401,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   /**
    * RegionScannerImpl is used to combine scanners from multiple Stores (aka column families).
    */
-  class RegionScannerImpl implements RegionScanner {
+  class RegionScannerImpl implements RegionScanner, org.apache.hadoop.hbase.ipc.RpcCallback {
     // Package local for testability
     KeyValueHeap storeHeap = null;
     /** Heap of key-values that are not essential for the provided filters and are thus read
@@ -5426,6 +5419,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     private long readPt;
     private long maxResultSize;
     protected HRegion region;
+    protected CellComparator comparator;
 
     @Override
     public HRegionInfo getRegionInfo() {
@@ -5442,22 +5436,23 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       } else {
         this.filter = null;
       }
-
+      this.comparator = region.getCellCompartor();
       /**
        * By default, calls to next/nextRaw must enforce the batch limit. Thus, construct a default
        * scanner context that can be used to enforce the batch limit in the event that a
        * ScannerContext is not specified during an invocation of next/nextRaw
        */
-      defaultScannerContext = ScannerContext.newBuilder().setBatchLimit(scan.getBatch()).build();
+      defaultScannerContext = ScannerContext.newBuilder()
+          .setBatchLimit(scan.getBatch()).build();
 
       if (Bytes.equals(scan.getStopRow(), HConstants.EMPTY_END_ROW) && !scan.isGetScan()) {
         this.stopRow = null;
       } else {
         this.stopRow = scan.getStopRow();
       }
-      // If we are doing a get, we want to be [startRow,endRow] normally
+      // If we are doing a get, we want to be [startRow,endRow]. Normally
       // it is [startRow,endRow) and if startRow=endRow we get nothing.
-      this.isScan = scan.isGetScan() ? -1 : 0;
+      this.isScan = scan.isGetScan() ? 1 : 0;
 
       // synchronize on scannerReadPoints so that nobody calculates
       // getSmallestReadPoint, before scannerReadPoints is updated.
@@ -5519,9 +5514,9 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     protected void initializeKVHeap(List<KeyValueScanner> scanners,
         List<KeyValueScanner> joinedScanners, HRegion region)
         throws IOException {
-      this.storeHeap = new KeyValueHeap(scanners, region.comparator);
+      this.storeHeap = new KeyValueHeap(scanners, comparator);
       if (!joinedScanners.isEmpty()) {
-        this.joinedHeap = new KeyValueHeap(joinedScanners, region.comparator);
+        this.joinedHeap = new KeyValueHeap(joinedScanners, comparator);
       }
     }
 
@@ -5587,7 +5582,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         // scanner is closed
         throw new UnknownScannerException("Scanner was closed");
       }
-      boolean moreValues;
+      boolean moreValues = false;
       if (outResults.isEmpty()) {
         // Usually outResults is empty. This is true when next is called
         // to handle scan or get operation.
@@ -5598,10 +5593,13 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         outResults.addAll(tmpList);
       }
 
-      // If the size limit was reached it means a partial Result is being returned. Returning a
-      // partial Result means that we should not reset the filters; filters should only be reset in
+      // If the size limit was reached it means a partial Result is being
+      // returned. Returning a
+      // partial Result means that we should not reset the filters; filters
+      // should only be reset in
       // between rows
-      if (!scannerContext.midRowResultFormed()) resetFilters();
+      if (!scannerContext.midRowResultFormed())
+        resetFilters();
 
       if (isFilterDoneInternal()) {
         moreValues = false;
@@ -5615,10 +5613,8 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     private boolean populateFromJoinedHeap(List<Cell> results, ScannerContext scannerContext)
             throws IOException {
       assert joinedContinuationRow != null;
-      boolean moreValues =
-          populateResult(results, this.joinedHeap, scannerContext,
-          joinedContinuationRow.getRowArray(), joinedContinuationRow.getRowOffset(),
-          joinedContinuationRow.getRowLength());
+      boolean moreValues = populateResult(results, this.joinedHeap, scannerContext,
+          joinedContinuationRow);
 
       if (!scannerContext.checkAnyLimitReached(LimitScope.BETWEEN_CELLS)) {
         // We are done with this row, reset the continuation.
@@ -5635,14 +5631,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
      * reached, or remainingResultSize (if not -1) is reaced
      * @param heap KeyValueHeap to fetch data from.It must be positioned on correct row before call.
      * @param scannerContext
-     * @param currentRow Byte array with key we are fetching.
-     * @param offset offset for currentRow
-     * @param length length for currentRow
+     * @param currentRowCell
      * @return state of last call to {@link KeyValueHeap#next()}
      */
     private boolean populateResult(List<Cell> results, KeyValueHeap heap,
-        ScannerContext scannerContext, byte[] currentRow, int offset, short length)
-        throws IOException {
+        ScannerContext scannerContext, Cell currentRowCell) throws IOException {
       Cell nextKv;
       boolean moreCellsInRow = false;
       boolean tmpKeepProgress = scannerContext.getKeepProgress();
@@ -5657,7 +5650,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         scannerContext.setKeepProgress(tmpKeepProgress);
 
         nextKv = heap.peek();
-        moreCellsInRow = moreCellsInRow(nextKv, currentRow, offset, length);
+        moreCellsInRow = moreCellsInRow(nextKv, currentRowCell);
 
 	if (moreCellsInRow && scannerContext.checkBatchLimit(limitScope)) {
           return scannerContext.setScannerState(NextState.BATCH_LIMIT_REACHED).hasMoreValues();
@@ -5680,14 +5673,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
      * cells to be read in the heap. If the row of the nextKv in the heap matches the current row
      * then there are more cells to be read in the row.
      * @param nextKv
-     * @param currentRow
-     * @param offset
-     * @param length
+     * @param currentRowCell
      * @return true When there are more cells in the row to be read
      */
-    private boolean moreCellsInRow(final Cell nextKv, byte[] currentRow, int offset,
-        short length) {
-      return nextKv != null && CellUtil.matchingRow(nextKv, currentRow, offset, length);
+    private boolean moreCellsInRow(final Cell nextKv, Cell currentRowCell) {
+      return nextKv != null && CellUtil.matchingRow(nextKv, currentRowCell);
     }
 
     /*
@@ -5752,16 +5742,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         // Let's see what we have in the storeHeap.
         Cell current = this.storeHeap.peek();
 
-        byte[] currentRow = null;
-        int offset = 0;
-        short length = 0;
-        if (current != null) {
-          currentRow = current.getRowArray();
-          offset = current.getRowOffset();
-          length = current.getRowLength();
-        }
-
-        boolean stopRow = isStopRow(currentRow, offset, length);
+        boolean stopRow = isStopRow(current);
         // When has filter row is true it means that the all the cells for a particular row must be
         // read before a filtering decision can be made. This means that filters where hasFilterRow
         // run the risk of encountering out of memory errors in the case that they are applied to a
@@ -5794,8 +5775,8 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
           // Check if rowkey filter wants to exclude this row. If so, loop to next.
           // Technically, if we hit limits before on this row, we don't need this call.
-          if (filterRowKey(currentRow, offset, length)) {
-            boolean moreRows = nextRow(currentRow, offset, length);
+          if (filterRowKey(current)) {
+            boolean moreRows = nextRow(current);
             if (!moreRows) {
               return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
             }
@@ -5804,7 +5785,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           }
 
           // Ok, we are good, let's try to get some results from the main heap.
-          populateResult(results, this.storeHeap, scannerContext, currentRow, offset, length);
+          populateResult(results, this.storeHeap, scannerContext, current);
 
           if (scannerContext.checkAnyLimitReached(LimitScope.BETWEEN_CELLS)) {
             if (hasFilterRow) {
@@ -5816,8 +5797,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           }
 
           Cell nextKv = this.storeHeap.peek();
-          stopRow = nextKv == null ||
-              isStopRow(nextKv.getRowArray(), nextKv.getRowOffset(), nextKv.getRowLength());
+          stopRow = nextKv == null || isStopRow(nextKv);
           // save that the row was empty before filters applied to it.
           final boolean isEmptyRow = results.isEmpty();
 
@@ -5846,7 +5826,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
           if ((isEmptyRow || ret == FilterWrapper.FilterRowRetCode.EXCLUDE) || filterRow()) {
             results.clear();
-            boolean moreRows = nextRow(currentRow, offset, length);
+            boolean moreRows = nextRow(current);
             if (!moreRows) {
               return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
             }
@@ -5862,7 +5842,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           // These values are not needed for filter to work, so we postpone their
           // fetch to (possibly) reduce amount of data loads from disk.
           if (this.joinedHeap != null) {
-            boolean mayHaveData = joinedHeapMayHaveData(currentRow, offset, length);
+            boolean mayHaveData = joinedHeapMayHaveData(current);
             if (mayHaveData) {
               joinedContinuationRow = current;
               populateFromJoinedHeap(results, scannerContext);
@@ -5889,7 +5869,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         // Double check to prevent empty rows from appearing in result. It could be
         // the case when SingleColumnValueExcludeFilter is used.
         if (results.isEmpty()) {
-          boolean moreRows = nextRow(currentRow, offset, length);
+          boolean moreRows = nextRow(current);
           if (!moreRows) {
             return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
           }
@@ -5906,27 +5886,25 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     }
 
     /**
-     * @param currentRow
-     * @param offset
-     * @param length
+     * @param currentRowCell
      * @return true when the joined heap may have data for the current row
      * @throws IOException
      */
-    private boolean joinedHeapMayHaveData(byte[] currentRow, int offset, short length)
+    private boolean joinedHeapMayHaveData(Cell currentRowCell)
         throws IOException {
       Cell nextJoinedKv = joinedHeap.peek();
       boolean matchCurrentRow =
-          nextJoinedKv != null && CellUtil.matchingRow(nextJoinedKv, currentRow, offset, length);
+          nextJoinedKv != null && CellUtil.matchingRow(nextJoinedKv, currentRowCell);
       boolean matchAfterSeek = false;
 
       // If the next value in the joined heap does not match the current row, try to seek to the
       // correct row
       if (!matchCurrentRow) {
-        Cell firstOnCurrentRow = KeyValueUtil.createFirstOnRow(currentRow, offset, length);
+        Cell firstOnCurrentRow = CellUtil.createFirstOnRow(currentRowCell);
         boolean seekSuccessful = this.joinedHeap.requestSeek(firstOnCurrentRow, true, true);
         matchAfterSeek =
             seekSuccessful && joinedHeap.peek() != null
-                && CellUtil.matchingRow(joinedHeap.peek(), currentRow, offset, length);
+                && CellUtil.matchingRow(joinedHeap.peek(), currentRowCell);
       }
 
       return matchCurrentRow || matchAfterSeek;
@@ -5946,30 +5924,27 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           && filter.filterRow();
     }
 
-    private boolean filterRowKey(byte[] row, int offset, short length) throws IOException {
-      return filter != null
-          && filter.filterRowKey(row, offset, length);
+    private boolean filterRowKey(Cell current) throws IOException {
+      return filter != null && filter.filterRowKey(current);
     }
 
-    protected boolean nextRow(byte [] currentRow, int offset, short length) throws IOException {
+    protected boolean nextRow(Cell curRowCell) throws IOException {
       assert this.joinedContinuationRow == null: "Trying to go to next row during joinedHeap read.";
       Cell next;
       while ((next = this.storeHeap.peek()) != null &&
-             CellUtil.matchingRow(next, currentRow, offset, length)) {
+             CellUtil.matchingRow(next, curRowCell)) {
         this.storeHeap.next(MOCKED_LIST);
       }
       resetFilters();
       // Calling the hook in CP which allows it to do a fast forward
       return this.region.getCoprocessorHost() == null
           || this.region.getCoprocessorHost()
-              .postScannerFilterRow(this, currentRow, offset, length);
+              .postScannerFilterRow(this, curRowCell);
     }
 
-    protected boolean isStopRow(byte[] currentRow, int offset, short length) {
-      return currentRow == null ||
-          (stopRow != null &&
-          comparator.compareRows(stopRow, 0, stopRow.length,
-            currentRow, offset, length) <= isScan);
+    protected boolean isStopRow(Cell currentRowCell) {
+      return currentRowCell == null
+          || (stopRow != null && comparator.compareRows(currentRowCell, stopRow, 0, stopRow.length) >= isScan);
     }
 
     @Override
@@ -6009,6 +5984,23 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         closeRegionOperation();
       }
       return result;
+    }
+
+    @Override
+    public void shipped() throws IOException {
+      if (storeHeap != null) {
+        storeHeap.shipped();
+      }
+      if (joinedHeap != null) {
+        joinedHeap.shipped();
+      }
+    }
+
+    @Override
+    public void run() throws IOException {
+      // This is the RPC callback method executed. We do the close in of the scanner in this
+      // callback
+      this.close();
     }
   }
 
@@ -6395,7 +6387,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     this.openSeqNum = initialize(reporter);
     this.mvcc.advanceTo(openSeqNum);
     if (wal != null && getRegionServerServices() != null && !writestate.readOnly
-        && !isRecovering) {
+        && !recovering) {
       // Only write the region open event marker to WAL if (1) we are not read-only
       // (2) dist log replay is off or we are not recovering. In case region is
       // recovering, the open event will be written at setRecovering(false)
@@ -6660,6 +6652,13 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
   @Override
   public Result get(final Get get) throws IOException {
+    prepareGet(get);
+    List<Cell> results = get(get, true);
+    boolean stale = this.getRegionInfo().getReplicaId() != 0;
+    return Result.create(results, get.isCheckExistenceOnly() ? !results.isEmpty() : null, stale);
+  }
+
+   void prepareGet(final Get get) throws IOException, NoSuchColumnFamilyException {
     checkRow(get.getRow(), "Get");
     // Verify families are all valid
     if (get.hasFamilies()) {
@@ -6671,9 +6670,6 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
         get.addFamily(family);
       }
     }
-    List<Cell> results = get(get, true);
-    boolean stale = this.getRegionInfo().getReplicaId() != 0;
-    return Result.create(results, get.isCheckExistenceOnly() ? !results.isEmpty() : null, stale);
   }
 
   @Override
@@ -6683,9 +6679,9 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
     // pre-get CP hook
     if (withCoprocessor && (coprocessorHost != null)) {
-       if (coprocessorHost.preGet(get, results)) {
-         return results;
-       }
+      if (coprocessorHost.preGet(get, results)) {
+        return results;
+      }
     }
 
     Scan scan = new Scan(get);
@@ -6704,16 +6700,21 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       coprocessorHost.postGet(get, results);
     }
 
-    // do after lock
+    metricsUpdateForGet(results);
+
+    return results;
+  }
+
+  void metricsUpdateForGet(List<Cell> results) {
     if (this.metricsRegion != null) {
       long totalSize = 0L;
       for (Cell cell : results) {
+        // This should give an estimate of the cell in the result. Why do we need
+        // to know the serialization of how the codec works with it??
         totalSize += CellUtil.estimatedSerializedSizeOf(cell);
       }
       this.metricsRegion.updateGet(totalSize);
     }
-
-    return results;
   }
 
   @Override
@@ -7000,8 +7001,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   private static List<Tag> carryForwardTags(final Cell cell, final List<Tag> tags) {
     if (cell.getTagsLength() <= 0) return tags;
     List<Tag> newTags = tags == null? new ArrayList<Tag>(): /*Append Tags*/tags;
-    Iterator<Tag> i =
-        CellUtil.tagsIterator(cell.getTagsArray(), cell.getTagsOffset(), cell.getTagsLength());
+    Iterator<Tag> i = CellUtil.tagsIterator(cell);
     while (i.hasNext()) newTags.add(i.next());
     return newTags;
   }
@@ -7102,12 +7102,12 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
                 long ts = Math.max(now, oldCell.getTimestamp());
 
                 // Process cell tags
-                List<Tag> tags = Tag.carryForwardTags(null, oldCell);
-                tags = Tag.carryForwardTags(tags, cell);
+                List<Tag> tags = carryForwardTags(oldCell, new ArrayList<Tag>());
+                tags = carryForwardTags(cell, tags);
                 tags = carryForwardTTLTag(tags, mutate);
 
                 // Rebuild tags
-                byte[] tagBytes = Tag.fromList(tags);
+                byte[] tagBytes = TagUtil.fromList(tags);
 
                 // allocate an empty cell once
                 newCell = new KeyValue(row.length, cell.getFamilyLength(),
@@ -7143,9 +7143,10 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
                 if (mutate.getTTL() != Long.MAX_VALUE) {
                   List<Tag> newTags = new ArrayList<Tag>(1);
-                  newTags.add(new Tag(TagType.TTL_TAG_TYPE, Bytes.toBytes(mutate.getTTL())));
+                  newTags.add(
+                      new ArrayBackedTag(TagType.TTL_TAG_TYPE, Bytes.toBytes(mutate.getTTL())));
                   // Add the new TTL tag
-                  newCell = new TagRewriteCell(cell, Tag.fromList(newTags));
+                  newCell = new TagRewriteCell(cell, TagUtil.fromList(newTags));
                 } else {
                   newCell = cell;
                 }
@@ -7285,7 +7286,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     boolean writeToWAL = durability != Durability.SKIP_WAL;
     WALEdit walEdits = null;
     List<Cell> allKVs = new ArrayList<Cell>(mutation.size());
-    
+
     Map<Store, List<Cell>> tempMemstore = new HashMap<Store, List<Cell>>();
     long size = 0;
     long txid = 0;
@@ -7344,7 +7345,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
                 c = results.get(idx);
                 ts = Math.max(now, c.getTimestamp());
                 if(c.getValueLength() == Bytes.SIZEOF_LONG) {
-                  amount += getLongValue(c);
+                  amount += CellUtil.getValueAsLong(c);
                 } else {
                   // throw DoNotRetryIOException instead of IllegalArgumentException
                   throw new org.apache.hadoop.hbase.DoNotRetryIOException(
@@ -7363,7 +7364,8 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
               // Add the TTL tag if the mutation carried one
               if (mutation.getTTL() != Long.MAX_VALUE) {
-                newTags.add(new Tag(TagType.TTL_TAG_TYPE, Bytes.toBytes(mutation.getTTL())));
+                newTags.add(
+                    new ArrayBackedTag(TagType.TTL_TAG_TYPE, Bytes.toBytes(mutation.getTTL())));
               }
 
               Cell newKV = new KeyValue(row, 0, row.length,
@@ -7511,7 +7513,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     // in the array so set its size to '1' (I saw this being done in earlier version of
     // tag-handling).
     if (tags == null) tags = new ArrayList<Tag>(1);
-    tags.add(new Tag(TagType.TTL_TAG_TYPE, Bytes.toBytes(ttl)));
+    tags.add(new ArrayBackedTag(TagType.TTL_TAG_TYPE, Bytes.toBytes(mutation.getTTL())));
     return tags;
   }
 
@@ -7519,7 +7521,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   // New HBASE-880 Helpers
   //
 
-  private void checkFamily(final byte [] family)
+  void checkFamily(final byte [] family)
   throws NoSuchColumnFamilyException {
     if (!this.htableDescriptor.hasFamily(family)) {
       throw new NoSuchColumnFamilyException("Column family " +
@@ -7531,7 +7533,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   public static final long FIXED_OVERHEAD = ClassSize.align(
       ClassSize.OBJECT +
       ClassSize.ARRAY +
-      46 * ClassSize.REFERENCE + 3 * Bytes.SIZEOF_INT +
+      45 * ClassSize.REFERENCE + 3 * Bytes.SIZEOF_INT +
       (15 * Bytes.SIZEOF_LONG) +
       5 * Bytes.SIZEOF_BOOLEAN);
 
@@ -8287,6 +8289,12 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     for (Store s : this.stores.values()) {
       configurationManager.get().deregisterObserver(s);
     }
+  }
+
+  @Override
+  public CellComparator getCellCompartor() {
+    return this.getRegionInfo().isMetaRegion() ? CellComparator.META_COMPARATOR
+        : CellComparator.COMPARATOR;
   }
 
   /**

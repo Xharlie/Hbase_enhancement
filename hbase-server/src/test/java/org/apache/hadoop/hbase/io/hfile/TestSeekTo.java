@@ -36,14 +36,17 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.OffheapKeyValue;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.TagUtil;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -86,7 +89,7 @@ public class TestSeekTo {
       return new KeyValue(Bytes.toBytes(row), Bytes.toBytes("family"), Bytes.toBytes("qualifier"),
           Bytes.toBytes("value"));
     } else if (tagUsage == TagUsage.ONLY_TAG) {
-      Tag t = new Tag((byte) 1, "myTag1");
+      Tag t = new ArrayBackedTag((byte) 1, "myTag1");
       Tag[] tags = new Tag[1];
       tags[0] = t;
       return new KeyValue(Bytes.toBytes(row), Bytes.toBytes("family"), Bytes.toBytes("qualifier"),
@@ -98,7 +101,7 @@ public class TestSeekTo {
             Bytes.toBytes("qualifier"), HConstants.LATEST_TIMESTAMP, Bytes.toBytes("value"));
       } else {
         switchKVs = false;
-        Tag t = new Tag((byte) 1, "myTag1");
+        Tag t = new ArrayBackedTag((byte) 1, "myTag1");
         Tag[] tags = new Tag[1];
         tags[0] = t;
         return new KeyValue(Bytes.toBytes(row), Bytes.toBytes("family"),
@@ -107,26 +110,21 @@ public class TestSeekTo {
     }
   }
 
-  static String toRowStr(Cell kv) {
-    return Bytes.toString(KeyValueUtil.ensureKeyValue(kv).getRow());
+  static String toRowStr(Cell c) {
+    return Bytes.toString(c.getRowArray(), c.getRowOffset(), c.getRowLength());
   }
 
   Path makeNewFile(TagUsage tagUsage) throws IOException {
     Path ncTFile = new Path(TEST_UTIL.getDataTestDir(), "basic.hfile");
     FSDataOutputStream fout = TEST_UTIL.getTestFileSystem().create(ncTFile);
     Configuration conf = TEST_UTIL.getConfiguration();
-    if (tagUsage != TagUsage.NO_TAG) {
-      conf.setInt("hfile.format.version", 3);
-    } else {
-      conf.setInt("hfile.format.version", 2);
-    }
     int blocksize = toKV("a", tagUsage).getLength() * 3;
     HFileContext context = new HFileContextBuilder().withBlockSize(blocksize)
         .withDataBlockEncoding(encoding)
         .withIncludesTags(true).build();
     HFile.Writer writer = HFile.getWriterFactoryNoCache(conf).withOutputStream(fout)
         .withFileContext(context)
-        .withComparator(KeyValue.COMPARATOR).create();
+        .withComparator(CellComparator.COMPARATOR).create();
     // 4 bytes * 3 * 2 for each key/value +
     // 3 for keys, 15 for values = 42 (woot)
     writer.append(toKV("c", tagUsage));
@@ -159,36 +157,35 @@ public class TestSeekTo {
     assertEquals(false, scanner.seekBefore(toKV("c", tagUsage)));
 
     assertEquals(true, scanner.seekBefore(toKV("d", tagUsage)));
-    assertEquals("c", toRowStr(scanner.getKeyValue()));
+    assertEquals("c", toRowStr(scanner.getCell()));
 
     assertEquals(true, scanner.seekBefore(toKV("e", tagUsage)));
-    assertEquals("c", toRowStr(scanner.getKeyValue()));
+    assertEquals("c", toRowStr(scanner.getCell()));
 
     assertEquals(true, scanner.seekBefore(toKV("f", tagUsage)));
-    assertEquals("e", toRowStr(scanner.getKeyValue()));
+    assertEquals("e", toRowStr(scanner.getCell()));
 
     assertEquals(true, scanner.seekBefore(toKV("g", tagUsage)));
-    assertEquals("e", toRowStr(scanner.getKeyValue()));
+    assertEquals("e", toRowStr(scanner.getCell()));
 
     assertEquals(true, scanner.seekBefore(toKV("h", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
     assertEquals(true, scanner.seekBefore(toKV("i", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
     assertEquals(true, scanner.seekBefore(toKV("j", tagUsage)));
-    assertEquals("i", toRowStr(scanner.getKeyValue()));
-    Cell cell = scanner.getKeyValue();
+    assertEquals("i", toRowStr(scanner.getCell()));
+    Cell cell = scanner.getCell();
     if (tagUsage != TagUsage.NO_TAG && cell.getTagsLength() > 0) {
-      Iterator<Tag> tagsIterator = CellUtil.tagsIterator(cell.getTagsArray(), cell.getTagsOffset(),
-          cell.getTagsLength());
+      Iterator<Tag> tagsIterator = CellUtil.tagsIterator(cell);
       while (tagsIterator.hasNext()) {
         Tag next = tagsIterator.next();
-        assertEquals("myTag1", Bytes.toString(next.getValue()));
+        assertEquals("myTag1", Bytes.toString(TagUtil.cloneValue(next)));
       }
     }
     assertEquals(true, scanner.seekBefore(toKV("k", tagUsage)));
-    assertEquals("i", toRowStr(scanner.getKeyValue()));
+    assertEquals("i", toRowStr(scanner.getCell()));
     assertEquals(true, scanner.seekBefore(toKV("l", tagUsage)));
-    assertEquals("k", toRowStr(scanner.getKeyValue()));
+    assertEquals("k", toRowStr(scanner.getCell()));
 
     reader.close();
     deleteTestDir(fs);
@@ -196,7 +193,7 @@ public class TestSeekTo {
 
   @Test
   public void testSeekBeforeWithReSeekTo() throws Exception {
-    testSeekBeforeWithReSeekToInternals(TagUsage.NO_TAG);
+    testSeekBeforeInternals(TagUsage.NO_TAG);
     testSeekBeforeWithReSeekToInternals(TagUsage.ONLY_TAG);
     testSeekBeforeWithReSeekToInternals(TagUsage.PARTIAL_TAG);
   }
@@ -214,82 +211,83 @@ public class TestSeekTo {
 
     // seekBefore d, so the scanner points to c
     assertEquals(true, scanner.seekBefore(toKV("d", tagUsage)));
-    assertEquals("c", toRowStr(scanner.getKeyValue()));
+    assertFalse(scanner.getCell() instanceof OffheapKeyValue);
+    assertEquals("c", toRowStr(scanner.getCell()));
     // reseekTo e and g
     assertEquals(0, scanner.reseekTo(toKV("c", tagUsage)));
-    assertEquals("c", toRowStr(scanner.getKeyValue()));
+    assertEquals("c", toRowStr(scanner.getCell()));
     assertEquals(0, scanner.reseekTo(toKV("g", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
 
     // seekBefore e, so the scanner points to c
     assertTrue(scanner.seekBefore(toKV("e", tagUsage)));
-    assertEquals("c", toRowStr(scanner.getKeyValue()));
+    assertEquals("c", toRowStr(scanner.getCell()));
     // reseekTo e and g
     assertEquals(0, scanner.reseekTo(toKV("e", tagUsage)));
-    assertEquals("e", toRowStr(scanner.getKeyValue()));
+    assertEquals("e", toRowStr(scanner.getCell()));
     assertEquals(0, scanner.reseekTo(toKV("g", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
 
     // seekBefore f, so the scanner points to e
     assertTrue(scanner.seekBefore(toKV("f", tagUsage)));
-    assertEquals("e", toRowStr(scanner.getKeyValue()));
+    assertEquals("e", toRowStr(scanner.getCell()));
     // reseekTo e and g
     assertEquals(0, scanner.reseekTo(toKV("e", tagUsage)));
-    assertEquals("e", toRowStr(scanner.getKeyValue()));
+    assertEquals("e", toRowStr(scanner.getCell()));
     assertEquals(0, scanner.reseekTo(toKV("g", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
 
     // seekBefore g, so the scanner points to e
     assertTrue(scanner.seekBefore(toKV("g", tagUsage)));
-    assertEquals("e", toRowStr(scanner.getKeyValue()));
+    assertEquals("e", toRowStr(scanner.getCell()));
     // reseekTo e and g again
     assertEquals(0, scanner.reseekTo(toKV("e", tagUsage)));
-    assertEquals("e", toRowStr(scanner.getKeyValue()));
+    assertEquals("e", toRowStr(scanner.getCell()));
     assertEquals(0, scanner.reseekTo(toKV("g", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
 
     // seekBefore h, so the scanner points to g
     assertTrue(scanner.seekBefore(toKV("h", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
     // reseekTo g
     assertEquals(0, scanner.reseekTo(toKV("g", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
 
     // seekBefore i, so the scanner points to g
     assertTrue(scanner.seekBefore(toKV("i", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
     // reseekTo g
     assertEquals(0, scanner.reseekTo(toKV("g", tagUsage)));
-    assertEquals("g", toRowStr(scanner.getKeyValue()));
+    assertEquals("g", toRowStr(scanner.getCell()));
 
     // seekBefore j, so the scanner points to i
     assertTrue(scanner.seekBefore(toKV("j", tagUsage)));
-    assertEquals("i", toRowStr(scanner.getKeyValue()));
+    assertEquals("i", toRowStr(scanner.getCell()));
     // reseekTo i
     assertEquals(0, scanner.reseekTo(toKV("i", tagUsage)));
-    assertEquals("i", toRowStr(scanner.getKeyValue()));
+    assertEquals("i", toRowStr(scanner.getCell()));
 
     // seekBefore k, so the scanner points to i
     assertTrue(scanner.seekBefore(toKV("k", tagUsage)));
-    assertEquals("i", toRowStr(scanner.getKeyValue()));
+    assertEquals("i", toRowStr(scanner.getCell()));
     // reseekTo i and k
     assertEquals(0, scanner.reseekTo(toKV("i", tagUsage)));
-    assertEquals("i", toRowStr(scanner.getKeyValue()));
+    assertEquals("i", toRowStr(scanner.getCell()));
     assertEquals(0, scanner.reseekTo(toKV("k", tagUsage)));
-    assertEquals("k", toRowStr(scanner.getKeyValue()));
+    assertEquals("k", toRowStr(scanner.getCell()));
 
     // seekBefore l, so the scanner points to k
     assertEquals(true, scanner.seekBefore(toKV("l", tagUsage)));
-    assertEquals("k", toRowStr(scanner.getKeyValue()));
+    assertEquals("k", toRowStr(scanner.getCell()));
     // reseekTo k
     assertEquals(0, scanner.reseekTo(toKV("k", tagUsage)));
-    assertEquals("k", toRowStr(scanner.getKeyValue()));
+    assertEquals("k", toRowStr(scanner.getCell()));
     deleteTestDir(fs);
   }
 
   @Test
   public void testSeekTo() throws Exception {
-    testSeekToInternals(TagUsage.NO_TAG);
+    testSeekBeforeInternals(TagUsage.NO_TAG);
     testSeekToInternals(TagUsage.ONLY_TAG);
     testSeekToInternals(TagUsage.PARTIAL_TAG);
   }
@@ -306,18 +304,18 @@ public class TestSeekTo {
     assertEquals(-1, scanner.seekTo(toKV("a", tagUsage)));
 
     assertEquals(1, scanner.seekTo(toKV("d", tagUsage)));
-    assertEquals("c", toRowStr(scanner.getKeyValue()));
+    assertEquals("c", toRowStr(scanner.getCell()));
 
     // Across a block boundary now.
     // 'h' does not exist so we will get a '1' back for not found.
     assertEquals(0, scanner.seekTo(toKV("i", tagUsage)));
-    assertEquals("i", toRowStr(scanner.getKeyValue()));
+    assertEquals("i", toRowStr(scanner.getCell()));
     assertEquals(1, scanner.seekTo(toKV("l", tagUsage)));
     if (encoding == DataBlockEncoding.PREFIX_TREE) {
       // TODO : Fix this
-      assertEquals(null, scanner.getKeyValue());
+      assertEquals(null, scanner.getCell());
     } else {
-      assertEquals("k", toRowStr(scanner.getKeyValue()));
+      assertEquals("k", toRowStr(scanner.getCell()));
     }
 
     reader.close();
@@ -326,7 +324,7 @@ public class TestSeekTo {
 
   @Test
   public void testBlockContainingKey() throws Exception {
-    testBlockContainingKeyInternals(TagUsage.NO_TAG);
+    testSeekBeforeInternals(TagUsage.NO_TAG);
     testBlockContainingKeyInternals(TagUsage.ONLY_TAG);
     testBlockContainingKeyInternals(TagUsage.PARTIAL_TAG);
   }
@@ -343,7 +341,7 @@ public class TestSeekTo {
     Configuration conf = TEST_UTIL.getConfiguration();
     HFile.Reader reader = HFile.createReader(fs, p, new CacheConfig(conf), conf);
     reader.loadFileInfo();
-    HFileBlockIndex.BlockIndexReader blockIndexReader = 
+    HFileBlockIndex.BlockIndexReader blockIndexReader =
       reader.getDataBlockIndexReader();
     System.out.println(blockIndexReader.toString());
     // falls before the start of the file.

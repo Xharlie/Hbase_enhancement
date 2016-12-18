@@ -21,6 +21,7 @@ package org.apache.hadoop.hbase.security.access;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.security.PrivilegedExceptionAction;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -34,6 +35,7 @@ import java.util.TreeSet;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.CellUtil;
@@ -53,6 +55,7 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagRewriteCell;
+import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Append;
 import org.apache.hadoop.hbase.client.Delete;
@@ -331,9 +334,9 @@ public class AccessController extends BaseMasterAndRegionObserver
             List<KeyValue> kvList = (List<KeyValue>)family.getValue();
             for (KeyValue kv : kvList) {
               if (!authManager.authorize(user, tableName, family.getKey(),
-                      kv.getQualifier(), permRequest)) {
-                return AuthResult.deny(request, "Failed qualifier check", user,
-                    permRequest, tableName, makeFamilyMap(family.getKey(), kv.getQualifier()));
+                CellUtil.cloneQualifier(kv), permRequest)) {
+                return AuthResult.deny(request, "Failed qualifier check", user, permRequest,
+                  tableName, makeFamilyMap(family.getKey(), CellUtil.cloneQualifier(kv)));
               }
             }
           }
@@ -751,7 +754,7 @@ public class AccessController extends BaseMasterAndRegionObserver
           }
         }
       } else if (entry.getValue() == null) {
-        get.addFamily(col);        
+        get.addFamily(col);
       } else {
         throw new RuntimeException("Unhandled collection type " +
           entry.getValue().getClass().getName());
@@ -869,15 +872,13 @@ public class AccessController extends BaseMasterAndRegionObserver
       List<Cell> newCells = Lists.newArrayList();
       for (Cell cell: e.getValue()) {
         // Prepend the supplied perms in a new ACL tag to an update list of tags for the cell
-        List<Tag> tags = Lists.newArrayList(new Tag(AccessControlLists.ACL_TAG_TYPE, perms));
-        if (cell.getTagsLength() > 0) {
-          Iterator<Tag> tagIterator = CellUtil.tagsIterator(cell.getTagsArray(),
-            cell.getTagsOffset(), cell.getTagsLength());
-          while (tagIterator.hasNext()) {
-            tags.add(tagIterator.next());
-          }
+        List<Tag> tags = new ArrayList<Tag>();
+        tags.add(new ArrayBackedTag(AccessControlLists.ACL_TAG_TYPE, perms));
+        Iterator<Tag> tagIterator = CellUtil.tagsIterator(cell);
+        while (tagIterator.hasNext()) {
+          tags.add(tagIterator.next());
         }
-        newCells.add(new TagRewriteCell(cell, Tag.fromList(tags)));
+        newCells.add(new TagRewriteCell(cell, TagUtil.fromList(tags)));
       }
       // This is supposed to be safe, won't CME
       e.setValue(newCells);
@@ -902,14 +903,10 @@ public class AccessController extends BaseMasterAndRegionObserver
       return;
     }
     for (CellScanner cellScanner = m.cellScanner(); cellScanner.advance();) {
-      Cell cell = cellScanner.current();
-      if (cell.getTagsLength() > 0) {
-        Iterator<Tag> tagsItr = CellUtil.tagsIterator(cell.getTagsArray(), cell.getTagsOffset(),
-          cell.getTagsLength());
-        while (tagsItr.hasNext()) {
-          if (tagsItr.next().getType() == AccessControlLists.ACL_TAG_TYPE) {
-            throw new AccessDeniedException("Mutation contains cell with reserved type tag");
-          }
+      Iterator<Tag> tagsItr = CellUtil.tagsIterator(cellScanner.current());
+      while (tagsItr.hasNext()) {
+        if (tagsItr.next().getType() == AccessControlLists.ACL_TAG_TYPE) {
+          throw new AccessDeniedException("Mutation contains cell with reserved type tag");
         }
       }
     }
@@ -1307,7 +1304,7 @@ public class AccessController extends BaseMasterAndRegionObserver
   @Override
   public void preModifyNamespace(ObserverContext<MasterCoprocessorEnvironment> ctx,
       NamespaceDescriptor ns) throws IOException {
-    // We require only global permission so that 
+    // We require only global permission so that
     // a user with NS admin cannot altering namespace configurations. i.e. namespace quota
     requireGlobalPermission("modifyNamespace", Action.ADMIN, ns.getName());
   }
@@ -1950,32 +1947,21 @@ public class AccessController extends BaseMasterAndRegionObserver
 
     // Collect any ACLs from the old cell
     List<Tag> tags = Lists.newArrayList();
+    List<Tag> aclTags = Lists.newArrayList();
     ListMultimap<String,Permission> perms = ArrayListMultimap.create();
     if (oldCell != null) {
-      // Save an object allocation where we can
-      if (oldCell.getTagsLength() > 0) {
-        Iterator<Tag> tagIterator = CellUtil.tagsIterator(oldCell.getTagsArray(),
-          oldCell.getTagsOffset(), oldCell.getTagsLength());
-        while (tagIterator.hasNext()) {
-          Tag tag = tagIterator.next();
-          if (tag.getType() != AccessControlLists.ACL_TAG_TYPE) {
-            // Not an ACL tag, just carry it through
-            if (LOG.isTraceEnabled()) {
-              LOG.trace("Carrying forward tag from " + oldCell + ": type " + tag.getType() +
-                " length " + tag.getTagLength());
-            }
-            tags.add(tag);
-          } else {
-            // Merge the perms from the older ACL into the current permission set
-            // TODO: The efficiency of this can be improved. Don't build just to unpack
-            // again, use the builder
-            AccessControlProtos.UsersAndPermissions.Builder builder =
-              AccessControlProtos.UsersAndPermissions.newBuilder();
-            ProtobufUtil.mergeFrom(builder, tag.getBuffer(), tag.getTagOffset(), tag.getTagLength());
-            ListMultimap<String,Permission> kvPerms =
-              ProtobufUtil.toUsersAndPermissions(builder.build());
-            perms.putAll(kvPerms);
+      Iterator<Tag> tagIterator = CellUtil.tagsIterator(oldCell);
+      while (tagIterator.hasNext()) {
+        Tag tag = tagIterator.next();
+        if (tag.getType() != AccessControlLists.ACL_TAG_TYPE) {
+          // Not an ACL tag, just carry it through
+          if (LOG.isTraceEnabled()) {
+            LOG.trace("Carrying forward tag from " + oldCell + ": type " + tag.getType()
+                + " length " + tag.getValueLength());
           }
+          tags.add(tag);
+        } else {
+          aclTags.add(tag);
         }
       }
     }
@@ -1984,7 +1970,7 @@ public class AccessController extends BaseMasterAndRegionObserver
     byte[] aclBytes = mutation.getACL();
     if (aclBytes != null) {
       // Yes, use it
-      tags.add(new Tag(AccessControlLists.ACL_TAG_TYPE, aclBytes));
+      tags.add(new ArrayBackedTag(AccessControlLists.ACL_TAG_TYPE, aclBytes));
     } else {
       // No, use what we carried forward
       if (perms != null) {
@@ -1994,8 +1980,7 @@ public class AccessController extends BaseMasterAndRegionObserver
         if (LOG.isTraceEnabled()) {
           LOG.trace("Carrying forward ACLs from " + oldCell + ": " + perms);
         }
-        tags.add(new Tag(AccessControlLists.ACL_TAG_TYPE,
-          ProtobufUtil.toUsersAndPermissions(perms).toByteArray()));
+        tags.addAll(aclTags);
       }
     }
 
@@ -2004,7 +1989,7 @@ public class AccessController extends BaseMasterAndRegionObserver
       return newCell;
     }
 
-    Cell rewriteCell = new TagRewriteCell(newCell, Tag.fromList(tags));
+    Cell rewriteCell = new TagRewriteCell(newCell, TagUtil.fromList(tags));
     return rewriteCell;
   }
 
@@ -2045,6 +2030,13 @@ public class AccessController extends BaseMasterAndRegionObserver
       final InternalScanner s) throws IOException {
     // clean up any associated owner mapping
     scannerOwners.remove(s);
+  }
+
+  @Override
+  public boolean postScannerFilterRow(final ObserverContext<RegionCoprocessorEnvironment> e,
+      final InternalScanner s, final Cell curRowCell, final boolean hasMore) throws IOException {
+    // Impl in BaseRegionObserver might do unnecessary copy for Off heap backed Cells.
+    return hasMore;
   }
 
   /**

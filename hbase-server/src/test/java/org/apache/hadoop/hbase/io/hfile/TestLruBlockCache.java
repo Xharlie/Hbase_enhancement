@@ -825,6 +825,11 @@ public class TestLruBlockCache {
       return BlockType.DATA;
     }
 
+    @Override
+    public MemoryType getMemoryType() {
+      return MemoryType.EXCLUSIVE;
+    }
+
   }
 
 }

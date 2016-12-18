@@ -148,15 +148,13 @@ public class TestWALPlayer {
     WALKey key = mock(WALKey.class);
     when(key.getTablename()).thenReturn(TableName.valueOf("table"));
     @SuppressWarnings("unchecked")
-    Mapper<WALKey, WALEdit, ImmutableBytesWritable, KeyValue>.Context context =
-        mock(Context.class);
+    Mapper<WALKey, WALEdit, ImmutableBytesWritable, KeyValue>.Context context = mock(Context.class);
     when(context.getConfiguration()).thenReturn(configuration);
 
     WALEdit value = mock(WALEdit.class);
     ArrayList<Cell> values = new ArrayList<Cell>();
-    KeyValue kv1 = mock(KeyValue.class);
-    when(kv1.getFamily()).thenReturn(Bytes.toBytes("family"));
-    when(kv1.getRow()).thenReturn(Bytes.toBytes("row"));
+    KeyValue kv1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("family"), null);
+
     values.add(kv1);
     when(value.getCells()).thenReturn(values);
     mapper.setup(context);
@@ -168,7 +166,7 @@ public class TestWALPlayer {
         ImmutableBytesWritable writer = (ImmutableBytesWritable) invocation.getArguments()[0];
         KeyValue key = (KeyValue) invocation.getArguments()[1];
         assertEquals("row", Bytes.toString(writer.get()));
-        assertEquals("row", Bytes.toString(key.getRow()));
+        assertEquals("row", Bytes.toString(CellUtil.cloneRow(key)));
         return null;
       }
     }).when(context).write(any(ImmutableBytesWritable.class), any(KeyValue.class));

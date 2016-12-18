@@ -51,17 +51,17 @@ import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
-import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
 import org.apache.hadoop.hbase.io.hfile.HFile.FileInfo;
 import org.apache.hadoop.hbase.regionserver.TimeRangeTracker;
 import org.apache.hadoop.hbase.util.BloomFilter;
+import org.apache.hadoop.hbase.util.BloomFilterUtil;
 import org.apache.hadoop.hbase.util.BloomFilterFactory;
-import org.apache.hadoop.hbase.util.ByteBloomFilter;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.Writables;
@@ -264,7 +264,7 @@ public class HFilePrettyPrinter extends Configured implements Tool {
       if (this.isSeekToRow) {
         // seek to the first kv on this row
         shouldScanKeysValues =
-          (scanner.seekTo(KeyValueUtil.createFirstOnRow(this.row).getKey()) != -1);
+          (scanner.seekTo(KeyValueUtil.createFirstOnRow(this.row)) != -1);
       } else {
         shouldScanKeysValues = scanner.seekTo();
       }
@@ -315,10 +315,9 @@ public class HFilePrettyPrinter extends Configured implements Tool {
       HFileScanner scanner,  byte[] row) throws IOException {
     Cell pCell = null;
     do {
-      Cell cell = scanner.getKeyValue();
+      Cell cell = scanner.getCell();
       if (row != null && row.length != 0) {
-        int result = CellComparator.compareRows(cell.getRowArray(), cell.getRowOffset(),
-            cell.getRowLength(), row, 0, row.length);
+        int result = CellComparator.COMPARATOR.compareRows(cell, row, 0, row.length);
         if (result > 0) {
           break;
         } else if (result < 0) {
@@ -337,18 +336,17 @@ public class HFilePrettyPrinter extends Configured implements Tool {
               + Bytes.toStringBinary(cell.getValueArray(), cell.getValueOffset(),
                   cell.getValueLength()));
           int i = 0;
-          List<Tag> tags = Tag.asList(cell.getTagsArray(), cell.getTagsOffset(),
+          List<Tag> tags = TagUtil.asList(cell.getTagsArray(), cell.getTagsOffset(),
               cell.getTagsLength());
           for (Tag tag : tags) {
-            System.out.print(String.format(" T[%d]: %s", i++,
-                Bytes.toStringBinary(tag.getBuffer(), tag.getTagOffset(), tag.getTagLength())));
+            System.out.print(String.format(" T[%d]: %s", i++, TagUtil.getValueAsString(tag)));
           }
         }
         System.out.println();
       }
       // check if rows are in order
       if (checkRow && pCell != null) {
-        if (CellComparator.compareRows(pCell, cell) > 0) {
+        if (CellComparator.COMPARATOR.compareRows(pCell, cell) > 0) {
           System.err.println("WARNING, previous row is greater then"
               + " current row\n\tfilename -> " + file + "\n\tprevious -> "
               + CellUtil.getCellKeyAsString(pCell) + "\n\tcurrent  -> "
@@ -412,7 +410,7 @@ public class HFilePrettyPrinter extends Configured implements Tool {
     }
 
     try {
-      System.out.println("Mid-key: " + Bytes.toStringBinary(reader.midkey()));
+      System.out.println("Mid-key: " + (CellUtil.getCellKeyAsString(reader.midkey())));
     } catch (Exception e) {
       System.out.println ("Unable to retrieve the midkey");
     }
@@ -426,7 +424,7 @@ public class HFilePrettyPrinter extends Configured implements Tool {
     System.out.println("Bloom filter:");
     if (bloomFilter != null) {
       System.out.println(FOUR_SPACES + bloomFilter.toString().replaceAll(
-          ByteBloomFilter.STATS_RECORD_SEP, "\n" + FOUR_SPACES));
+          BloomFilterUtil.STATS_RECORD_SEP, "\n" + FOUR_SPACES));
     } else {
       System.out.println(FOUR_SPACES + "Not present");
     }
@@ -440,7 +438,7 @@ public class HFilePrettyPrinter extends Configured implements Tool {
     System.out.println("Delete Family Bloom filter:");
     if (bloomFilter != null) {
       System.out.println(FOUR_SPACES
-          + bloomFilter.toString().replaceAll(ByteBloomFilter.STATS_RECORD_SEP,
+          + bloomFilter.toString().replaceAll(BloomFilterUtil.STATS_RECORD_SEP,
               "\n" + FOUR_SPACES));
     } else {
       System.out.println(FOUR_SPACES + "Not present");
@@ -468,7 +466,7 @@ public class HFilePrettyPrinter extends Configured implements Tool {
     public void collect(Cell cell) {
       valLen.update(cell.getValueLength());
       if (prevCell != null &&
-          KeyValue.COMPARATOR.compareRows(prevCell, cell) != 0) {
+          CellComparator.COMPARATOR.compareRows(prevCell, cell) != 0) {
         // new row
         collectRow();
       }
@@ -484,7 +482,7 @@ public class HFilePrettyPrinter extends Configured implements Tool {
       keyLen.update(curRowKeyLength);
 
       if (curRowBytes > maxRowBytes && prevCell != null) {
-        biggestRow = prevCell.getRow();
+        biggestRow = CellUtil.cloneRow(prevCell);
         maxRowBytes = curRowBytes;
       }
 

@@ -24,7 +24,9 @@ import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.protobuf.generated.ComparatorProtos;
+import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
+import java.nio.ByteBuffer;
 
 /**
  * A binary comparator which lexicographically compares against the specified
@@ -45,6 +47,11 @@ public class BinaryComparator extends ByteArrayComparable {
   @Override
   public int compareTo(byte [] value, int offset, int length) {
     return Bytes.compareTo(this.value, 0, this.value.length, value, offset, length);
+  }
+
+  @Override
+  public int compareTo(ByteBuffer value, int offset, int length) {
+    return -(ByteBufferUtils.compareTo(value, offset, length, this.value, 0, this.value.length));
   }
 
   /**

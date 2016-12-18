@@ -18,6 +18,10 @@
  */
 package org.apache.hadoop.hbase.io.hfile;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -27,6 +31,13 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.*;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -37,15 +48,6 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
 
-import static org.junit.Assert.*;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSDataOutputStream;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-
 @RunWith(Parameterized.class)
 @Category(SmallTests.class)
 public class TestFixedFileTrailer {
@@ -54,7 +56,7 @@ public class TestFixedFileTrailer {
   private static final int MAX_COMPARATOR_NAME_LENGTH = 128;
 
   /**
-   * The number of used fields by version. Indexed by version minus two. 
+   * The number of used fields by version. Indexed by version minus two.
    * Min version that we support is V2
    */
   private static final int[] NUM_FIELDS_BY_VERSION = new int[] { 14, 15 };
@@ -88,14 +90,14 @@ public class TestFixedFileTrailer {
 
   @Test
   public void testTrailer() throws IOException {
-    FixedFileTrailer t = new FixedFileTrailer(version, 
-        HFileReaderV2.PBUF_TRAILER_MINOR_VERSION);
+    FixedFileTrailer t = new FixedFileTrailer(version,
+        HFileReaderImpl.PBUF_TRAILER_MINOR_VERSION);
     t.setDataIndexCount(3);
     t.setEntryCount(((long) Integer.MAX_VALUE) + 1);
 
     t.setLastDataBlockOffset(291);
     t.setNumDataIndexLevels(3);
-    t.setComparatorClass(KeyValue.COMPARATOR.getClass());
+    t.setComparatorClass(CellComparator.COMPARATOR.getClass());
     t.setFirstDataBlockOffset(9081723123L); // Completely unrealistic.
     t.setUncompressedDataIndexSize(827398717L); // Something random.
 
@@ -121,8 +123,8 @@ public class TestFixedFileTrailer {
     // Finished writing, trying to read.
     {
       DataInputStream dis = new DataInputStream(bais);
-      FixedFileTrailer t2 = new FixedFileTrailer(version, 
-          HFileReaderV2.PBUF_TRAILER_MINOR_VERSION);
+      FixedFileTrailer t2 = new FixedFileTrailer(version,
+          HFileReaderImpl.PBUF_TRAILER_MINOR_VERSION);
       t2.deserialize(dis);
       assertEquals(-1, bais.read()); // Ensure we have read everything.
       checkLoadedTrailer(version, t, t2);
@@ -166,17 +168,17 @@ public class TestFixedFileTrailer {
         trailerStr.split(", ").length);
     assertEquals(trailerStr, t4.toString());
   }
-  
+
   @Test
   public void testTrailerForV2NonPBCompatibility() throws Exception {
     if (version == 2) {
       FixedFileTrailer t = new FixedFileTrailer(version,
-          HFileReaderV2.MINOR_VERSION_NO_CHECKSUM);
+          HFileReaderImpl.MINOR_VERSION_NO_CHECKSUM);
       t.setDataIndexCount(3);
       t.setEntryCount(((long) Integer.MAX_VALUE) + 1);
       t.setLastDataBlockOffset(291);
       t.setNumDataIndexLevels(3);
-      t.setComparatorClass(KeyValue.COMPARATOR.getClass());
+      t.setComparatorClass(CellComparator.COMPARATOR.getClass());
       t.setFirstDataBlockOffset(9081723123L); // Completely unrealistic.
       t.setUncompressedDataIndexSize(827398717L); // Something random.
       t.setLoadOnOpenOffset(128);
@@ -198,7 +200,7 @@ public class TestFixedFileTrailer {
       {
         DataInputStream dis = new DataInputStream(bais);
         FixedFileTrailer t2 = new FixedFileTrailer(version,
-            HFileReaderV2.MINOR_VERSION_NO_CHECKSUM);
+            HFileReaderImpl.MINOR_VERSION_NO_CHECKSUM);
         t2.deserialize(dis);
         assertEquals(-1, bais.read()); // Ensure we have read everything.
         checkLoadedTrailer(version, t, t2);
@@ -227,7 +229,7 @@ public class TestFixedFileTrailer {
     output.writeInt(FixedFileTrailer.materializeVersion(fft.getMajorVersion(),
         fft.getMinorVersion()));
   }
- 
+
 
   private FixedFileTrailer readTrailer(Path trailerPath) throws IOException {
     FSDataInputStream fsdis = fs.open(trailerPath);
@@ -274,7 +276,7 @@ public class TestFixedFileTrailer {
       assertEquals(expected.getFirstDataBlockOffset(),
           loaded.getFirstDataBlockOffset());
       assertTrue(
-          expected.createComparator() instanceof KeyValue.KVComparator);
+          expected.createComparator() instanceof CellComparator);
       assertEquals(expected.getUncompressedDataIndexSize(),
           loaded.getUncompressedDataIndexSize());
     }

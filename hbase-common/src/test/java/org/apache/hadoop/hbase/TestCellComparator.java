@@ -17,18 +17,20 @@
  */
 package org.apache.hadoop.hbase;
 
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.KeyValue.Type;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.Test;
+import static org.junit.Assert.assertEquals;
+import java.nio.ByteBuffer;
+import org.apache.hadoop.hbase.TestCellUtil.ByteBufferedCellImpl;
 import org.junit.experimental.categories.Category;
 @Category(SmallTests.class)
 public class TestCellComparator {
 
+  private CellComparator comparator = CellComparator.COMPARATOR;
   byte[] row1 = Bytes.toBytes("row1");
   byte[] row2 = Bytes.toBytes("row2");
   byte[] row_1_0 = Bytes.toBytes("row10");
@@ -46,7 +48,7 @@ public class TestCellComparator {
   public void testCompareCells() {
     KeyValue kv1 = new KeyValue(row1, fam1, qual1, val);
     KeyValue kv2 = new KeyValue(row2, fam1, qual1, val);
-    assertTrue((CellComparator.compare(kv1, kv2, false)) < 0);
+    assertTrue((comparator.compare(kv1, kv2)) < 0);
 
     kv1 = new KeyValue(row1, fam2, qual1, val);
     kv2 = new KeyValue(row1, fam1, qual1, val);
@@ -54,90 +56,64 @@ public class TestCellComparator {
 
     kv1 = new KeyValue(row1, fam1, qual1, 1l, val);
     kv2 = new KeyValue(row1, fam1, qual1, 2l, val);
-    assertTrue((CellComparator.compare(kv1, kv2, false) > 0));
+    assertTrue((comparator.compare(kv1, kv2) > 0));
 
     kv1 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
     kv2 = new KeyValue(row1, fam1, qual1, 1l, Type.Maximum);
-    assertTrue((CellComparator.compare(kv1, kv2, false) > 0));
-
-    kv1 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
-    kv2 = new KeyValue(row1, fam_1_2, qual1, 1l, Type.Maximum);
-    assertTrue((CellComparator.compareCommonFamilyPrefix(kv1, kv2, 4) < 0));
-
-    kv1 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
-    kv2 = new KeyValue(row_1_0, fam_1_2, qual1, 1l, Type.Maximum);
-    assertTrue((CellComparator.compareCommonRowPrefix(kv1, kv2, 4) < 0));
-
-    kv1 = new KeyValue(row1, fam1, qual2, 1l, Type.Put);
-    kv2 = new KeyValue(row1, fam1, qual1, 1l, Type.Maximum);
-    assertTrue((CellComparator.compareCommonQualifierPrefix(kv1, kv2, 4) > 0));
+    assertTrue((comparator.compare(kv1, kv2) > 0));
 
     kv1 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
     kv2 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
-    assertTrue((CellComparator.equals(kv1, kv2)));
+    assertTrue((CellUtil.equals(kv1, kv2)));
   }
 
   @Test
-  public void testGetShortMidpoint() {
-    KeyValue.KVComparator comparator = new KeyValue.KVComparator();
+  public void testCompareCellWithKey() throws Exception {
+    KeyValue kv1 = new KeyValue(row1, fam1, qual1, val);
+    KeyValue kv2 = new KeyValue(row2, fam1, qual1, val);
+    assertTrue((comparator.compare(kv1, kv2.getKey(), 0, kv2.getKey().length)) < 0);
 
-    Cell left = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    Cell right = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    Cell mid = CellComparator.getMidpoint(comparator, left, right);
-    assertTrue(CellComparator.compare(left, mid, true) <= 0);
-    assertTrue(CellComparator.compare(mid, right, true) <= 0);
+    kv1 = new KeyValue(row1, fam2, qual1, val);
+    kv2 = new KeyValue(row1, fam1, qual1, val);
+    assertTrue((comparator.compare(kv1, kv2.getKey(), 0, kv2.getKey().length)) > 0);
 
-    left = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    right = CellUtil.createCell(Bytes.toBytes("b"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    mid = CellComparator.getMidpoint(comparator, left, right);
-    assertTrue(CellComparator.compare(left, mid, true) < 0);
-    assertTrue(CellComparator.compare(mid, right, true) <= 0);
+    kv1 = new KeyValue(row1, fam1, qual1, 1l, val);
+    kv2 = new KeyValue(row1, fam1, qual1, 2l, val);
+    assertTrue((comparator.compare(kv1, kv2.getKey(), 0, kv2.getKey().length)) > 0);
 
-    left = CellUtil.createCell(Bytes.toBytes("g"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    right = CellUtil.createCell(Bytes.toBytes("i"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    mid = CellComparator.getMidpoint(comparator, left, right);
-    assertTrue(CellComparator.compare(left, mid, true) < 0);
-    assertTrue(CellComparator.compare(mid, right, true) <= 0);
+    kv1 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
+    kv2 = new KeyValue(row1, fam1, qual1, 1l, Type.Maximum);
+    assertTrue((comparator.compare(kv1, kv2.getKey(), 0, kv2.getKey().length)) > 0);
 
-    left = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    right = CellUtil.createCell(Bytes.toBytes("bbbbbbb"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    mid = CellComparator.getMidpoint(comparator, left, right);
-    assertTrue(CellComparator.compare(left, mid, true) < 0);
-    assertTrue(CellComparator.compare(mid, right, true) < 0);
-    assertEquals(1, (int)mid.getRowLength());
+    kv1 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
+    kv2 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
+    assertTrue((comparator.compare(kv1, kv2.getKey(), 0, kv2.getKey().length)) == 0);
+  }
 
-    left = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    right = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("b"), Bytes.toBytes("a"));
-    mid = CellComparator.getMidpoint(comparator, left, right);
-    assertTrue(CellComparator.compare(left, mid, true) < 0);
-    assertTrue(CellComparator.compare(mid, right, true) <= 0);
+  @Test
+  public void testCompareByteBufferedCell() {
+    byte[] r1 = Bytes.toBytes("row1");
+    byte[] r2 = Bytes.toBytes("row2");
+    byte[] f1 = Bytes.toBytes("cf1");
+    byte[] q1 = Bytes.toBytes("qual1");
+    byte[] q2 = Bytes.toBytes("qual2");
+    byte[] v = Bytes.toBytes("val1");
+    KeyValue kv = new KeyValue(r1, f1, q1, v);
+    ByteBuffer buffer = ByteBuffer.wrap(kv.getBuffer());
+    Cell bbCell1 = new ByteBufferedCellImpl(buffer, 0, buffer.remaining());
+    kv = new KeyValue(r2, f1, q1, v);
+    buffer = ByteBuffer.wrap(kv.getBuffer());
+    Cell bbCell2 = new ByteBufferedCellImpl(buffer, 0, buffer.remaining());
+    assertEquals(0, CellComparator.compareColumns(bbCell1, bbCell2));
+    assertEquals(0, CellComparator.compareColumns(bbCell1, kv));
+    kv = new KeyValue(r2, f1, q2, v);
+    buffer = ByteBuffer.wrap(kv.getBuffer());
+    Cell bbCell3 = new ByteBufferedCellImpl(buffer, 0, buffer.remaining());
+    assertEquals(0, CellComparator.compareFamilies(bbCell2, bbCell3));
+    assertTrue(CellComparator.compareQualifiers(bbCell2, bbCell3) < 0);
+    assertTrue(CellComparator.compareColumns(bbCell2, bbCell3) < 0);
 
-    left = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    right = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("aaaaaaaa"), Bytes.toBytes("b"));
-    mid = CellComparator.getMidpoint(comparator, left, right);
-    assertTrue(CellComparator.compare(left, mid, true) < 0);
-    assertTrue(CellComparator.compare(mid, right, true) < 0);
-    assertEquals(2, (int)mid.getFamilyLength());
-
-    left = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    right = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("aaaaaaaaa"));
-    mid = CellComparator.getMidpoint(comparator, left, right);
-    assertTrue(CellComparator.compare(left, mid, true) < 0);
-    assertTrue(CellComparator.compare(mid, right, true) < 0);
-    assertEquals(2, (int)mid.getQualifierLength());
-
-    left = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    right = CellUtil.createCell(Bytes.toBytes("a"), Bytes.toBytes("a"), Bytes.toBytes("b"));
-    mid = CellComparator.getMidpoint(comparator, left, right);
-    assertTrue(CellComparator.compare(left, mid, true) < 0);
-    assertTrue(CellComparator.compare(mid, right, true) <= 0);
-    assertEquals(1, (int)mid.getQualifierLength());
-
-    // Assert that if meta comparator, it returns the right cell -- i.e.  no optimization done.
-    left = CellUtil.createCell(Bytes.toBytes("g"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    right = CellUtil.createCell(Bytes.toBytes("i"), Bytes.toBytes("a"), Bytes.toBytes("a"));
-    mid = CellComparator.getMidpoint(new KeyValue.MetaComparator(), left, right);
-    assertTrue(CellComparator.compare(left, mid, true) < 0);
-    assertTrue(CellComparator.compare(mid, right, true) == 0);
+    assertEquals(0, CellComparator.COMPARATOR.compareRows(bbCell2, bbCell3));
+    assertTrue(CellComparator.COMPARATOR.compareRows(bbCell1, bbCell2) < 0);
   }
 }

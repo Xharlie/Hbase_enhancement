@@ -381,10 +381,6 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
     this.nonceGroup = nonceGroup;
     this.nonce = nonce;
     this.mvcc = mvcc;
-    if (writeEntry != null) {
-      this.preAssignedWriteEntry = writeEntry;
-      this.logSeqNum = writeEntry.getWriteNumber();
-    }
   }
 
   /**

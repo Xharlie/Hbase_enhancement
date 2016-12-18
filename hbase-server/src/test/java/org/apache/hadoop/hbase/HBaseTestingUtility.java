@@ -255,6 +255,19 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
     return Collections.unmodifiableList(configurations);
   }
 
+  public static List<Object[]> memStoreTSTagsAndOffheapCombination() {
+    List<Object[]> configurations = new ArrayList<Object[]>();
+    configurations.add(new Object[] { false, false, true });
+    configurations.add(new Object[] { false, false, false });
+    configurations.add(new Object[] { false, true, true });
+    configurations.add(new Object[] { false, true, false });
+    configurations.add(new Object[] { true, false, true });
+    configurations.add(new Object[] { true, false, false });
+    configurations.add(new Object[] { true, true, true });
+    configurations.add(new Object[] { true, true, false });
+    return Collections.unmodifiableList(configurations);
+  }
+
   public static final Collection<Object[]> BLOOM_AND_COMPRESSION_COMBINATIONS =
       bloomAndCompressionCombinations();
 
@@ -1380,7 +1393,8 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
       desc.addFamily(hcd);
     }
     getHBaseAdmin().createTable(desc, startKey, endKey, numRegions);
-    // HBaseAdmin only waits for regions to appear in hbase:meta we should wait until they are assigned
+    // HBaseAdmin only waits for regions to appear in hbase:meta we
+    // should wait until they are assigned
     waitUntilAllRegionsAssigned(tableName);
     return new HTable(getConfiguration(), tableName);
   }
@@ -1418,8 +1432,8 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
       htd.addFamily(hcd);
     }
     getHBaseAdmin().createTable(htd, splitKeys);
-    // HBaseAdmin only waits for regions to appear in hbase:meta we should wait until they are
-    // assigned
+    // HBaseAdmin only waits for regions to appear in hbase:meta
+    // we should wait until they are assigned
     waitUntilAllRegionsAssigned(htd.getTableName());
     return (HTable) getConnection().getTable(htd.getTableName());
   }
@@ -1434,7 +1448,8 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
   public HTable createTable(HTableDescriptor htd, byte[][] splitRows)
       throws IOException {
     getHBaseAdmin().createTable(htd, splitRows);
-    // HBaseAdmin only waits for regions to appear in hbase:meta we should wait until they are assigned
+    // HBaseAdmin only waits for regions to appear in hbase:meta
+    // we should wait until they are assigned
     waitUntilAllRegionsAssigned(htd.getTableName());
     return new HTable(getConfiguration(), htd.getTableName());
   }
@@ -1702,6 +1717,24 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
     // HBaseAdmin only waits for regions to appear in hbase:meta we should wait until they are assigned
     waitUntilAllRegionsAssigned(tableName);
     return new HTable(new Configuration(getConfiguration()), tableName);
+  }
+
+  public HTable createTable(TableName tableName, byte[][] families,
+    int numVersions, int blockSize, String cpName) throws IOException {
+    HTableDescriptor desc = new HTableDescriptor(tableName);
+    for (byte[] family : families) {
+      HColumnDescriptor hcd = new HColumnDescriptor(family)
+          .setMaxVersions(numVersions)
+          .setBlocksize(blockSize);
+      desc.addFamily(hcd);
+    }
+    if(cpName != null) {
+      desc.addCoprocessor(cpName);
+    }
+    getHBaseAdmin().createTable(desc);
+    // HBaseAdmin only waits for regions to appear in hbase:meta we should wait until they are assigned
+    waitUntilAllRegionsAssigned(tableName);
+    return (HTable) getConnection().getTable(tableName);
   }
 
   /**
@@ -2045,6 +2078,33 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
     HRegionInfo info = new HRegionInfo(htd.getTableName(), startKey, stopKey, false);
     return createLocalHRegion(info, htd, wal);
   }
+
+  /**
+   * @param tableName
+   * @param startKey
+   * @param stopKey
+   * @param callingMethod
+   * @param conf
+   * @param isReadOnly
+   * @param families
+   * @return A region on which you must call
+   * {@link HBaseTestingUtility#closeRegionAndWAL(HRegion)} when done.
+   * @throws IOException
+   */
+  public HRegion createLocalHRegion(TableName tableName, byte[] startKey, byte[] stopKey,
+      boolean isReadOnly, Durability durability, WAL wal, byte[]... families) throws IOException {
+    HTableDescriptor htd = new HTableDescriptor(tableName);
+    htd.setReadOnly(isReadOnly);
+    for (byte[] family : families) {
+      HColumnDescriptor hcd = new HColumnDescriptor(family);
+      // Set default to be three versions.
+      hcd.setMaxVersions(Integer.MAX_VALUE);
+      htd.addFamily(hcd);
+    }
+    htd.setDurability(durability);
+    HRegionInfo info = new HRegionInfo(htd.getTableName(), startKey, stopKey, false);
+    return createLocalHRegion(info, htd, wal);
+  }
   //
   // ==========================================================================
 
@@ -2366,7 +2426,7 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
     }
   }
 
-  public void deleteNumericRows(final HTable t, final byte[] f, int startRow, int endRow)
+  public void deleteNumericRows(final Table t, final byte[] f, int startRow, int endRow)
       throws IOException {
     for (int i = startRow; i < endRow; i++) {
       byte[] data = Bytes.toBytes(String.valueOf(i));
@@ -3568,7 +3628,7 @@ public class HBaseTestingUtility extends HBaseCommonTestingUtility {
 
     int i;
     for (i = 0; i < minLen
-        && KeyValue.COMPARATOR.compare(expected.get(i), actual.get(i)) == 0;
+        && CellComparator.COMPARATOR.compare(expected.get(i), actual.get(i)) == 0;
         ++i) {}
 
     if (additionalMsg == null) {

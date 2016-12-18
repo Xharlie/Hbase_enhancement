@@ -34,13 +34,13 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.TagUtil;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Append;
 import org.apache.hadoop.hbase.client.Durability;
-import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Increment;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Put;
@@ -55,6 +55,7 @@ import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.protobuf.generated.AdminProtos.GetRegionInfoResponse.CompactionState;
 import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
+import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -118,7 +119,7 @@ public class TestTags {
       Admin admin = TEST_UTIL.getHBaseAdmin();
       admin.createTable(desc);
       byte[] value = Bytes.toBytes("value");
-      table = new HTable(TEST_UTIL.getConfiguration(), tableName);
+      table = TEST_UTIL.getConnection().getTable(tableName);
       Put put = new Put(row);
       put.add(fam, qual, HConstants.LATEST_TIMESTAMP, value);
       put.setAttribute("visibility", Bytes.toBytes("myTag"));
@@ -184,7 +185,7 @@ public class TestTags {
       Admin admin = TEST_UTIL.getHBaseAdmin();
       admin.createTable(desc);
 
-      table = new HTable(TEST_UTIL.getConfiguration(), tableName);
+      table = TEST_UTIL.getConnection().getTable(tableName);
       Put put = new Put(row);
       byte[] value = Bytes.toBytes("value");
       put.add(fam, qual, HConstants.LATEST_TIMESTAMP, value);
@@ -276,7 +277,7 @@ public class TestTags {
       Admin admin = TEST_UTIL.getHBaseAdmin();
       admin.createTable(desc);
       try {
-        table = new HTable(TEST_UTIL.getConfiguration(), tableName);
+        table = TEST_UTIL.getConnection().getTable(tableName);
         Put put = new Put(row);
         byte[] value = Bytes.toBytes("value");
         put.add(fam, qual, HConstants.LATEST_TIMESTAMP, value);
@@ -327,7 +328,7 @@ public class TestTags {
             if (CellUtil.matchingRow(current, row)) {
               assertEquals(1, TestCoprocessorForTags.tags.size());
               Tag tag = TestCoprocessorForTags.tags.get(0);
-              assertEquals(bigTagLen, tag.getTagLength());
+              assertEquals(bigTagLen, tag.getValueLength());
             } else {
               assertEquals(0, TestCoprocessorForTags.tags.size());
             }
@@ -352,7 +353,7 @@ public class TestTags {
             if (CellUtil.matchingRow(current, row)) {
               assertEquals(1, TestCoprocessorForTags.tags.size());
               Tag tag = TestCoprocessorForTags.tags.get(0);
-              assertEquals(bigTagLen, tag.getTagLength());
+              assertEquals(bigTagLen, tag.getValueLength());
             } else {
               assertEquals(0, TestCoprocessorForTags.tags.size());
             }
@@ -389,7 +390,7 @@ public class TestTags {
 
     Table table = null;
     try {
-      table = new HTable(TEST_UTIL.getConfiguration(), tableName);
+      table = TEST_UTIL.getConnection().getTable(tableName);
       Put put = new Put(row1);
       byte[] v = Bytes.toBytes(2L);
       put.add(f, q, v);
@@ -405,7 +406,7 @@ public class TestTags {
       List<Tag> tags = TestCoprocessorForTags.tags;
       assertEquals(3L, Bytes.toLong(kv.getValueArray(), kv.getValueOffset(), kv.getValueLength()));
       assertEquals(1, tags.size());
-      assertEquals("tag1", Bytes.toString(tags.get(0).getValue()));
+      assertEquals("tag1", Bytes.toString(TagUtil.cloneValue(tags.get(0))));
       TestCoprocessorForTags.checkTagPresence = false;
       TestCoprocessorForTags.tags = null;
 
@@ -423,7 +424,7 @@ public class TestTags {
       // We cannot assume the ordering of tags
       List<String> tagValues = new ArrayList<String>();
       for (Tag tag: tags) {
-        tagValues.add(Bytes.toString(tag.getValue()));
+        tagValues.add(Bytes.toString(TagUtil.cloneValue(tag)));
       }
       assertTrue(tagValues.contains("tag1"));
       assertTrue(tagValues.contains("tag2"));
@@ -447,7 +448,7 @@ public class TestTags {
       tags = TestCoprocessorForTags.tags;
       assertEquals(4L, Bytes.toLong(kv.getValueArray(), kv.getValueOffset(), kv.getValueLength()));
       assertEquals(1, tags.size());
-      assertEquals("tag2", Bytes.toString(tags.get(0).getValue()));
+      assertEquals("tag2", Bytes.toString(TagUtil.cloneValue(tags.get(0))));
       TestCoprocessorForTags.checkTagPresence = false;
       TestCoprocessorForTags.tags = null;
 
@@ -468,7 +469,7 @@ public class TestTags {
       kv = KeyValueUtil.ensureKeyValue(result.getColumnLatestCell(f, q));
       tags = TestCoprocessorForTags.tags;
       assertEquals(1, tags.size());
-      assertEquals("tag1", Bytes.toString(tags.get(0).getValue()));
+      assertEquals("tag1", Bytes.toString(TagUtil.cloneValue(tags.get(0))));
       TestCoprocessorForTags.checkTagPresence = false;
       TestCoprocessorForTags.tags = null;
 
@@ -485,7 +486,7 @@ public class TestTags {
       // We cannot assume the ordering of tags
       tagValues.clear();
       for (Tag tag: tags) {
-        tagValues.add(Bytes.toString(tag.getValue()));
+        tagValues.add(Bytes.toString(TagUtil.cloneValue(tag)));
       }
       assertTrue(tagValues.contains("tag1"));
       assertTrue(tagValues.contains("tag2"));
@@ -508,7 +509,7 @@ public class TestTags {
       kv = KeyValueUtil.ensureKeyValue(result.getColumnLatestCell(f, q));
       tags = TestCoprocessorForTags.tags;
       assertEquals(1, tags.size());
-      assertEquals("tag2", Bytes.toString(tags.get(0).getValue()));
+      assertEquals("tag2", Bytes.toString(TagUtil.cloneValue(tags.get(0))));
     } finally {
       TestCoprocessorForTags.checkTagPresence = false;
       TestCoprocessorForTags.tags = null;
@@ -569,15 +570,16 @@ public class TestTags {
           for (Cell cell : edits) {
             KeyValue kv = KeyValueUtil.ensureKeyValue(cell);
             if (cf == null) {
-              cf = kv.getFamily();
+              cf = CellUtil.cloneFamily(kv);
             }
-            Tag tag = new Tag((byte) 1, attribute);
+            Tag tag = new ArrayBackedTag((byte) 1, attribute);
             List<Tag> tagList = new ArrayList<Tag>();
             tagList.add(tag);
 
-            KeyValue newKV = new KeyValue(kv.getRow(), 0, kv.getRowLength(), kv.getFamily(), 0,
-                kv.getFamilyLength(), kv.getQualifier(), 0, kv.getQualifierLength(),
-                kv.getTimestamp(), KeyValue.Type.codeToType(kv.getType()), kv.getValue(), 0,
+            KeyValue newKV = new KeyValue(CellUtil.cloneRow(kv), 0, kv.getRowLength(),
+                CellUtil.cloneFamily(kv), 0, kv.getFamilyLength(), CellUtil.cloneQualifier(kv), 0,
+                kv.getQualifierLength(), kv.getTimestamp(),
+                KeyValue.Type.codeToType(kv.getTypeByte()), CellUtil.cloneValue(kv), 0,
                 kv.getValueLength(), tagList);
             ((List<Cell>) updatedCells).add(newKV);
           }
@@ -612,7 +614,7 @@ public class TestTags {
           CellScanner cellScanner = result.cellScanner();
           if (cellScanner.advance()) {
             Cell cell = cellScanner.current();
-            tags = Tag.asList(cell.getTagsArray(), cell.getTagsOffset(),
+            tags = TagUtil.asList(cell.getTagsArray(), cell.getTagsOffset(),
                 cell.getTagsLength());
           }
         }

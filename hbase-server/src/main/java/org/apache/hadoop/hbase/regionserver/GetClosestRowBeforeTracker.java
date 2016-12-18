@@ -25,11 +25,10 @@ import java.util.TreeSet;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
-import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.util.Bytes;
 
 /**
@@ -45,7 +44,7 @@ class GetClosestRowBeforeTracker {
   private final long now;
   private final long oldestUnexpiredTs;
   private Cell candidate = null;
-  private final KVComparator kvcomparator;
+  private final CellComparator cellComparator;
   // Flag for whether we're doing getclosest on a metaregion.
   private final boolean metaregion;
   // Offset and length into targetkey demarking table name (if in a metaregion).
@@ -53,7 +52,7 @@ class GetClosestRowBeforeTracker {
   private final int tablenamePlusDelimiterLength;
 
   // Deletes keyed by row.  Comparator compares on row portion of KeyValue only.
-  private final NavigableMap<KeyValue, NavigableSet<KeyValue>> deletes;
+  private final NavigableMap<Cell, NavigableSet<Cell>> deletes;
 
   /**
    * @param c
@@ -62,7 +61,7 @@ class GetClosestRowBeforeTracker {
    * @param ttl Time to live in ms for this Store
    * @param metaregion True if this is hbase:meta or -ROOT- region.
    */
-  GetClosestRowBeforeTracker(final KVComparator c, final KeyValue kv,
+  GetClosestRowBeforeTracker(final CellComparator c, final KeyValue kv,
       final long ttl, final boolean metaregion) {
     super();
     this.metaregion = metaregion;
@@ -72,15 +71,14 @@ class GetClosestRowBeforeTracker {
     this.rowoffset = kv.getRowOffset();
     int l = -1;
     if (metaregion) {
-      l = KeyValue.getDelimiter(kv.getRowArray(), rowoffset, kv.getRowLength(),
+      l = Bytes.searchDelimiterIndex(kv.getRowArray(), rowoffset, kv.getRowLength(),
         HConstants.DELIMITER) - this.rowoffset;
     }
     this.tablenamePlusDelimiterLength = metaregion? l + 1: -1;
     this.now = System.currentTimeMillis();
     this.oldestUnexpiredTs = now - ttl;
-    this.kvcomparator = c;
-    KeyValue.RowOnlyComparator rc = new KeyValue.RowOnlyComparator(this.kvcomparator);
-    this.deletes = new TreeMap<KeyValue, NavigableSet<KeyValue>>(rc);
+    this.cellComparator = c;
+    this.deletes = new TreeMap<Cell, NavigableSet<Cell>>(new CellComparator.RowComparator());
   }
 
   /*
@@ -88,12 +86,12 @@ class GetClosestRowBeforeTracker {
    * @param kv
    */
   private void addDelete(final Cell kv) {
-    NavigableSet<KeyValue> rowdeletes = this.deletes.get(kv);
+    NavigableSet<Cell> rowdeletes = this.deletes.get(kv);
     if (rowdeletes == null) {
-      rowdeletes = new TreeSet<KeyValue>(this.kvcomparator);
-      this.deletes.put(KeyValueUtil.ensureKeyValue(kv), rowdeletes);
+      rowdeletes = new TreeSet<Cell>(this.cellComparator);
+      this.deletes.put(kv, rowdeletes);
     }
-    rowdeletes.add(KeyValueUtil.ensureKeyValue(kv));
+    rowdeletes.add(kv);
   }
 
   /*
@@ -110,8 +108,8 @@ class GetClosestRowBeforeTracker {
 
   boolean isBetterCandidate(final Cell contender) {
     return this.candidate == null ||
-      (this.kvcomparator.compareRows(this.candidate, contender) < 0 &&
-        this.kvcomparator.compareRows(contender, this.targetkey) <= 0);
+      (this.cellComparator.compareRows(this.candidate, contender) < 0 &&
+        this.cellComparator.compareRows(contender, this.targetkey) <= 0);
   }
 
   /*
@@ -122,7 +120,7 @@ class GetClosestRowBeforeTracker {
    */
   private boolean isDeleted(final Cell kv) {
     if (this.deletes.isEmpty()) return false;
-    NavigableSet<KeyValue> rowdeletes = this.deletes.get(kv);
+    NavigableSet<Cell> rowdeletes = this.deletes.get(kv);
     if (rowdeletes == null || rowdeletes.isEmpty()) return false;
     return isDeleted(kv, rowdeletes);
   }
@@ -134,9 +132,9 @@ class GetClosestRowBeforeTracker {
    * @param ds
    * @return True is the specified KeyValue is deleted, false if not
    */
-  public boolean isDeleted(final Cell kv, final NavigableSet<KeyValue> ds) {
+  public boolean isDeleted(final Cell kv, final NavigableSet<Cell> ds) {
     if (deletes == null || deletes.isEmpty()) return false;
-    for (KeyValue d: ds) {
+    for (Cell d: ds) {
       long kvts = kv.getTimestamp();
       long dts = d.getTimestamp();
       if (CellUtil.isDeleteFamily(d)) {
@@ -144,9 +142,7 @@ class GetClosestRowBeforeTracker {
         continue;
       }
       // Check column
-      int ret = Bytes.compareTo(kv.getQualifierArray(), kv.getQualifierOffset(),
-          kv.getQualifierLength(),
-        d.getQualifierArray(), d.getQualifierOffset(), d.getQualifierLength());
+      int ret = CellComparator.compareQualifiers(kv, d);
       if (ret <= -1) {
         // This delete is for an earlier column.
         continue;
@@ -158,7 +154,7 @@ class GetClosestRowBeforeTracker {
       if (kvts > dts) return false;
 
       // Check Type
-      switch (KeyValue.Type.codeToType(d.getType())) {
+      switch (KeyValue.Type.codeToType(d.getTypeByte())) {
         case Delete: return kvts == dts;
         case DeleteColumn: return true;
         default: continue;
@@ -201,7 +197,7 @@ class GetClosestRowBeforeTracker {
    * @return True if we added a candidate
    */
   boolean handle(final Cell kv) {
-    if (KeyValueUtil.ensureKeyValue(kv).isDelete()) {
+    if (CellUtil.isDelete(kv)) {
       handleDeletes(kv);
       return false;
     }
@@ -232,7 +228,7 @@ class GetClosestRowBeforeTracker {
    * @return True if we went too far, past the target key.
    */
   boolean isTooFar(final Cell kv, final Cell firstOnRow) {
-    return this.kvcomparator.compareRows(kv, firstOnRow) > 0;
+    return this.cellComparator.compareRows(kv, firstOnRow) > 0;
   }
 
   boolean isTargetTable(final Cell kv) {

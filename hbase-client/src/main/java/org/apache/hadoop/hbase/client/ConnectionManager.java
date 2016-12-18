@@ -75,6 +75,7 @@ import org.apache.hadoop.hbase.exceptions.RegionMovedException;
 import org.apache.hadoop.hbase.exceptions.RegionOpeningException;
 import org.apache.hadoop.hbase.ipc.RpcClient;
 import org.apache.hadoop.hbase.ipc.RpcClientFactory;
+import org.apache.hadoop.hbase.ipc.RpcClientImpl;
 import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.RequestConverter;
@@ -189,8 +190,10 @@ import org.apache.zookeeper.KeeperException;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.BlockingRpcChannel;
+import com.google.protobuf.RpcChannel;
 import com.google.protobuf.RpcController;
 import com.google.protobuf.ServiceException;
+
 import org.apache.hadoop.hbase.ClusterNotAvailableException;
 import org.apache.hadoop.hbase.zookeeper.ClusterAvailabilityTracker;
 
@@ -1157,7 +1160,7 @@ class ConnectionManager {
     public RegionLocations locateRegion(final TableName tableName,
       final byte [] row, boolean useCache, boolean retry, int replicaId)
     throws IOException {
-      if (this.closed) throw new IOException(toString() + " closed");
+      if (this.closed) throw new DoNotRetryIOException(toString() + " closed");
       if (tableName== null || tableName.getName().length == 0) {
         throw new IllegalArgumentException(
             "table name cannot be null or zero length");
@@ -1673,6 +1676,34 @@ class ConnectionManager {
         }
       }
       return stub;
+    }
+
+    @Override
+    public ClientService.Interface getAsyncClient(final ServerName sn)
+    throws IOException {
+      if (!supportsNonBlockingInterface()) {
+        // return null if don't support non-blocking call
+        return null;
+      }
+      if (isDeadServer(sn)) {
+        throw new RegionServerStoppedException(sn + " is dead.");
+      }
+      // The service name is different from blocking interface so there's no conflict
+      String key = getStubKey(ClientService.Interface.class.getName(), sn.getHostname(),
+          sn.getPort());
+      this.connectionLock.putIfAbsent(key, key);
+      ClientService.Interface asyncStub = null;
+      synchronized (this.connectionLock.get(key)) {
+        asyncStub = (ClientService.Interface) this.stubs.get(key);
+        if (asyncStub == null) {
+          RpcChannel channel = this.rpcClient.createRpcChannel(sn, user, rpcTimeout);
+          asyncStub = ClientService.newStub(channel);
+          // In old days, after getting stub/proxy, we'd make a call. We are not doing that here.
+          // Just fail on first actual call rather than in here on setup.
+          this.stubs.put(key, asyncStub);
+        }
+      }
+      return asyncStub;
     }
 
     static String getStubKey(final String serviceName, final String rsHostname, int port) {
@@ -2604,6 +2635,11 @@ class ConnectionManager {
     @Override
     public boolean supportsCellBlock() {
       return this.rpcClient.supportsCellBlock();
+    }
+
+    @Override
+    public boolean supportsNonBlockingInterface() {
+      return this.rpcClient.supportsNonBlockingInterface();
     }
   }
 

@@ -27,6 +27,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ChecksumType;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 
 /**
  * Utility methods to compute and validate checksums.
@@ -134,7 +135,7 @@ public class ChecksumUtil {
       return false;   // cannot happen case, unable to verify checksum
     }
     // Extract the header and compute checksum for the header.
-    ByteBuffer hdr = block.getBufferWithHeader();
+    ByteBuff hdr = block.getBufferWithHeader();
     if (hdr.hasArray()) {
       checksumObject.update(hdr.array(), hdr.arrayOffset(), hdrSize);
     } else {

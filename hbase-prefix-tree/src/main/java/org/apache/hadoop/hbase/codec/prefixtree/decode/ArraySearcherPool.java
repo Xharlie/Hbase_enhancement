@@ -18,7 +18,7 @@
 
 package org.apache.hadoop.hbase.codec.prefixtree.decode;
 
-import java.nio.ByteBuffer;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -44,7 +44,7 @@ public class ArraySearcherPool {
   protected Queue<PrefixTreeArraySearcher> pool
     = new LinkedBlockingQueue<PrefixTreeArraySearcher>(MAX_POOL_SIZE);
 
-  public PrefixTreeArraySearcher checkOut(ByteBuffer buffer, boolean includesMvccVersion) {
+  public PrefixTreeArraySearcher checkOut(ByteBuff buffer, boolean includesMvccVersion) {
     PrefixTreeArraySearcher searcher = pool.poll();//will return null if pool is empty
     searcher = DecoderFactory.ensureArraySearcherValid(buffer, searcher, includesMvccVersion);
     return searcher;

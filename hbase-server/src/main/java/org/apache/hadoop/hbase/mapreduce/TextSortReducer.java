@@ -27,7 +27,9 @@ import java.util.TreeSet;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.Tag;
@@ -145,7 +147,7 @@ public class TextSortReducer extends
         "reducer.row.threshold", 1L * (1<<30));
     Iterator<Text> iter = lines.iterator();
     while (iter.hasNext()) {
-      Set<KeyValue> kvs = new TreeSet<KeyValue>(KeyValue.COMPARATOR);
+      Set<KeyValue> kvs = new TreeSet<KeyValue>(CellComparator.COMPARATOR);
       long curSize = 0;
       // stop at the end or the RAM threshold
       while (iter.hasNext() && curSize < threshold) {
@@ -174,7 +176,7 @@ public class TextSortReducer extends
             // Add TTL directly to the KV so we can vary them when packing more than one KV
             // into puts
             if (ttl > 0) {
-              tags.add(new Tag(TagType.TTL_TAG_TYPE, Bytes.toBytes(ttl)));
+              tags.add(new ArrayBackedTag(TagType.TTL_TAG_TYPE, Bytes.toBytes(ttl)));
             }
             Cell cell = this.kvCreator.create(lineBytes, parsed.getRowKeyOffset(),
                 parsed.getRowKeyLength(), parser.getFamily(i), 0, parser.getFamily(i).length,

@@ -26,6 +26,8 @@ import java.util.List;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
@@ -70,7 +72,7 @@ final public class FilterList extends Filter {
   private Filter seekHintFilter = null;
 
   /** Reference Cell used by {@link #transformCell(Cell)} for validation purpose. */
-  private Cell referenceKV = null;
+  private Cell referenceCell = null;
 
   /**
    * When filtering a given Cell in {@link #filterKeyValue(Cell)},
@@ -79,7 +81,7 @@ final public class FilterList extends Filter {
    * Individual filters transformation are applied only when the filter includes the Cell.
    * Transformations are composed in the order specified by {@link #filters}.
    */
-  private Cell transformedKV = null;
+  private Cell transformedCell = null;
 
   /**
    * For pre-0.94 users Default constructor, filters nothing. Required though for RPC
@@ -206,6 +208,25 @@ final public class FilterList extends Filter {
   }
 
   @Override
+  public boolean filterRowKey(Cell firstRowCell) throws IOException {
+    boolean flag = (this.operator == Operator.MUST_PASS_ONE) ? true : false;
+    int listize = filters.size();
+    for (int i = 0; i < listize; i++) {
+      Filter filter = filters.get(i);
+      if (this.operator == Operator.MUST_PASS_ALL) {
+        if (filter.filterAllRemaining() || filter.filterRowKey(firstRowCell)) {
+          flag = true;
+        }
+      } else if (this.operator == Operator.MUST_PASS_ONE) {
+        if (!filter.filterAllRemaining() && !filter.filterRowKey(firstRowCell)) {
+          flag = false;
+        }
+      }
+    }
+    return flag;
+  }
+
+  @Override
   public boolean filterAllRemaining() throws IOException {
     int listize = filters.size();
     for (int i = 0; i < listize; i++) {
@@ -223,42 +244,22 @@ final public class FilterList extends Filter {
   }
 
   @Override
-  public Cell transformCell(Cell v) throws IOException {
-    // transformCell() is expected to follow an inclusive filterKeyValue() immediately:
-    if (!v.equals(this.referenceKV)) {
-      throw new IllegalStateException("Reference Cell: " + this.referenceKV + " does not match: "
-          + v);
+  public Cell transformCell(Cell c) throws IOException {
+    if (!CellUtil.equals(c, referenceCell)) {
+      throw new IllegalStateException("Reference Cell: " + this.referenceCell + " does not match: "
+          + c);
     }
-    return this.transformedKV;
+    return this.transformedCell;
   }
 
-  /**
-   * WARNING: please to not override this method.  Instead override {@link #transformCell(Cell)}.
-   *
-   * When removing this, its body should be placed in transformCell.
-   *
-   * This is for transition from 0.94 -> 0.96
-   */
-  @Deprecated
-  @Override
-  public KeyValue transform(KeyValue v) throws IOException {
-    // transform() is expected to follow an inclusive filterKeyValue() immediately:
-    if (!v.equals(this.referenceKV)) {
-      throw new IllegalStateException(
-          "Reference Cell: " + this.referenceKV + " does not match: " + v);
-     }
-    return KeyValueUtil.ensureKeyValue(this.transformedKV);
-  }
-
-  
   @Override
   @edu.umd.cs.findbugs.annotations.SuppressWarnings(value="SF_SWITCH_FALLTHROUGH",
     justification="Intentional")
-  public ReturnCode filterKeyValue(Cell v) throws IOException {
-    this.referenceKV = v;
+  public ReturnCode filterKeyValue(Cell c) throws IOException {
+    this.referenceCell = c;
 
     // Accumulates successive transformation of every filter that includes the Cell:
-    Cell transformed = v;
+    Cell transformed = c;
 
     ReturnCode rc = operator == Operator.MUST_PASS_ONE?
         ReturnCode.SKIP: ReturnCode.INCLUDE;
@@ -269,7 +270,7 @@ final public class FilterList extends Filter {
         if (filter.filterAllRemaining()) {
           return ReturnCode.NEXT_ROW;
         }
-        ReturnCode code = filter.filterKeyValue(v);
+        ReturnCode code = filter.filterKeyValue(c);
         switch (code) {
         // Override INCLUDE and continue to evaluate.
         case INCLUDE_AND_NEXT_COL:
@@ -288,7 +289,7 @@ final public class FilterList extends Filter {
           continue;
         }
 
-        switch (filter.filterKeyValue(v)) {
+        switch (filter.filterKeyValue(c)) {
         case INCLUDE:
           if (rc != ReturnCode.INCLUDE_AND_NEXT_COL) {
             rc = ReturnCode.INCLUDE;
@@ -315,7 +316,7 @@ final public class FilterList extends Filter {
     }
 
     // Save the transformed Cell for transform():
-    this.transformedKV = transformed;
+    this.transformedCell = transformed;
 
     return rc;
   }
@@ -424,21 +425,21 @@ final public class FilterList extends Filter {
   @Override
   @Deprecated
   public KeyValue getNextKeyHint(KeyValue currentKV) throws IOException {
-    return KeyValueUtil.ensureKeyValue(getNextCellHint((Cell)currentKV));
+    return KeyValueUtil.ensureKeyValue(getNextCellHint((Cell) currentKV));
   }
 
   @Override
-  public Cell getNextCellHint(Cell currentKV) throws IOException {
+  public Cell getNextCellHint(Cell currentCell) throws IOException {
     Cell keyHint = null;
     if (operator == Operator.MUST_PASS_ALL) {
-      keyHint = seekHintFilter.getNextCellHint(currentKV);
+      keyHint = seekHintFilter.getNextCellHint(currentCell);
       return keyHint;
     }
 
     // If any condition can pass, we need to keep the min hint
     int listize = filters.size();
     for (int i = 0; i < listize; i++) {
-      Cell curKeyHint = filters.get(i).getNextCellHint(currentKV);
+      Cell curKeyHint = filters.get(i).getNextCellHint(currentCell);
       if (curKeyHint == null) {
         // If we ever don't have a hint and this is must-pass-one, then no hint
         return null;
@@ -449,7 +450,7 @@ final public class FilterList extends Filter {
           keyHint = curKeyHint;
           continue;
         }
-        if (KeyValue.COMPARATOR.compare(keyHint, curKeyHint) > 0) {
+        if (CellComparator.COMPARATOR.compare(keyHint, curKeyHint) > 0) {
           keyHint = curKeyHint;
         }
       }
@@ -491,5 +492,23 @@ final public class FilterList extends Filter {
         endIndex,
         this.filters.size(),
         this.filters.subList(0, endIndex).toString());
+  }
+
+  /**
+   * WARNING: please do not override this method.  Instead override {@link #transformCell(Cell)}.
+   * <p/>
+   * When removing this, its body should be placed in transformCell.
+   * <p/>
+   * This is for transition from 0.94 -> 0.96
+   */
+  @Deprecated
+  @Override
+  public KeyValue transform(KeyValue v) throws IOException {
+    // transform() is expected to follow an inclusive filterKeyValue() immediately:
+    if (!v.equals(this.referenceCell)) {
+      throw new IllegalStateException(
+          "Reference Cell: " + this.referenceCell + " does not match: " + v);
+    }
+    return KeyValueUtil.ensureKeyValue(this.transformedCell);
   }
 }

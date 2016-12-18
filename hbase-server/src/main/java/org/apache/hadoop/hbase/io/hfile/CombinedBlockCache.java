@@ -25,6 +25,8 @@ import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.io.hfile.BlockType.BlockCategory;
 import org.apache.hadoop.hbase.io.hfile.bucket.BucketCache;
 
+import com.google.common.annotations.VisibleForTesting;
+
 
 /**
  * CombinedBlockCache is an abstraction layer that combines
@@ -180,6 +182,57 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
     }
 
     @Override
+    public long getDataHitCachingCount() {
+      return lruCacheStats.getDataHitCachingCount()
+          + bucketCacheStats.getDataHitCachingCount();
+    }
+
+    @Override
+    public long getDataRequestCachingCount() {
+      return lruCacheStats.getDataRequestCachingCount()
+          + bucketCacheStats.getDataRequestCachingCount();
+    }
+
+    @Override
+    public double getDataHitCachingRatio() {
+      return ((float)getDataHitCachingCount()/(float)getDataRequestCachingCount());
+    }
+
+    @Override
+    public long getDataHitCount() {
+      return lruCacheStats.getDataHitCount()
+          + bucketCacheStats.getDataHitCount();
+    }
+
+    @Override
+    public long getDataRequestCount() {
+      return lruCacheStats.getDataRequestCount()
+          + bucketCacheStats.getDataRequestCount();
+    }
+
+    @Override
+    public double getDataHitRatio() {
+      return ((float) getDataHitCount() / (float) getDataRequestCount());
+    }
+
+    @Override
+    public long getMetaHitCachingCount() {
+      return lruCacheStats.getMetaHitCachingCount()
+          + bucketCacheStats.getMetaHitCachingCount();
+    }
+
+    @Override
+    public long getMetaRequestCachingCount() {
+      return lruCacheStats.getMetaRequestCachingCount()
+          + bucketCacheStats.getMetaRequestCachingCount();
+    }
+
+    @Override
+    public double getMetaHitCachingRatio() {
+      return ((float)getMetaHitCachingCount()/(float)getMetaRequestCachingCount());
+    }
+
+    @Override
     public long getEvictionCount() {
       return lruCacheStats.getEvictionCount()
           + bucketCacheStats.getEvictionCount();
@@ -224,5 +277,17 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
   @Override
   public void setMaxSize(long size) {
     this.lruCache.setMaxSize(size);
+  }
+
+  @Override
+  public void returnBlock(BlockCacheKey cacheKey, Cacheable block) {
+    // A noop
+    this.lruCache.returnBlock(cacheKey, block);
+    this.l2Cache.returnBlock(cacheKey, block);
+  }
+
+  @VisibleForTesting
+  public int getRefCount(BlockCacheKey cacheKey) {
+    return ((BucketCache) this.l2Cache).getRefCount(cacheKey);
   }
 }

@@ -22,6 +22,10 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.io.hfile.Cacheable;
+import org.apache.hadoop.hbase.io.hfile.CacheableDeserializer;
+import org.apache.hadoop.hbase.io.hfile.Cacheable.MemoryType;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.util.ByteBufferArray;
 
 /**
@@ -63,19 +67,17 @@ public class ByteBufferIOEngine implements IOEngine {
     return false;
   }
 
-  /**
-   * Transfers data from the buffer array to the given byte buffer
-   * @param dstBuffer the given byte buffer into which bytes are to be written
-   * @param offset The offset in the ByteBufferArray of the first byte to be
-   *          read
-   * @return number of bytes read
-   * @throws IOException
-   */
   @Override
-  public int read(ByteBuffer dstBuffer, long offset) throws IOException {
-    assert dstBuffer.hasArray();
-    return bufferArray.getMultiple(offset, dstBuffer.remaining(), dstBuffer.array(),
-        dstBuffer.arrayOffset());
+  public Cacheable read(long offset, int length, CacheableDeserializer<Cacheable> deserializer)
+      throws IOException {
+    ByteBuff dstBuffer = bufferArray.asSubByteBuff(offset, length);
+    // Here the buffer that is created directly refers to the buffer in the actual buckets.
+    // When any cell is referring to the blocks created out of these buckets then it means that
+    // those cells are referring to a shared memory area which if evicted by the BucketCache would
+    // lead to corruption of results. Hence we set the type of the buffer as SHARED_MEMORY
+    // so that the readers using this block are aware of this fact and do the necessary action
+    // to prevent eviction till the results are either consumed or copied
+    return deserializer.deserialize(dstBuffer, true, MemoryType.SHARED);
   }
 
   /**
@@ -92,6 +94,14 @@ public class ByteBufferIOEngine implements IOEngine {
         srcBuffer.arrayOffset());
   }
 
+  @Override
+  public void write(ByteBuff srcBuffer, long offset) throws IOException {
+    // When caching block into BucketCache there will be single buffer backing for this HFileBlock.
+    // This will work for now. But from the DFS itself if we get DBB then this may not hold true.
+    assert srcBuffer.hasArray();
+    bufferArray.putMultiple(offset, srcBuffer.remaining(), srcBuffer.array(),
+        srcBuffer.arrayOffset());
+  }
   /**
    * No operation for the sync in the memory IO engine
    */

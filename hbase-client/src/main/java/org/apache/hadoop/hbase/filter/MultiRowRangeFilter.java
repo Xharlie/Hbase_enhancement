@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.List;
 
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
@@ -83,6 +84,55 @@ public class MultiRowRangeFilter extends FilterBase {
   }
 
   @Override
+  public boolean filterRowKey(Cell firstRowCell) {
+    // If it is the first time of running, calculate the current range index for
+    // the row key. If index is out of bound which happens when the start row
+    // user sets is after the largest stop row of the ranges, stop the scan.
+    // If row key is after the current range, find the next range and update index.
+    byte[] rowArr = firstRowCell.getRowArray();
+    int length = firstRowCell.getRowLength();
+    int offset = firstRowCell.getRowOffset();
+    if (!initialized
+        || !range.contains(rowArr, offset, length)) {
+      byte[] rowkey = CellUtil.cloneRow(firstRowCell);
+      index = getNextRangeIndex(rowkey);
+      if (index >= rangeList.size()) {
+        done = true;
+        currentReturnCode = ReturnCode.NEXT_ROW;
+        return false;
+      }
+      if(index != ROW_BEFORE_FIRST_RANGE) {
+        range = rangeList.get(index);
+      } else {
+        range = rangeList.get(0);
+      }
+      if (EXCLUSIVE) {
+        EXCLUSIVE = false;
+        currentReturnCode = ReturnCode.NEXT_ROW;
+        return false;
+      }
+      if (!initialized) {
+        if(index != ROW_BEFORE_FIRST_RANGE) {
+          currentReturnCode = ReturnCode.INCLUDE;
+        } else {
+          currentReturnCode = ReturnCode.SEEK_NEXT_USING_HINT;
+        }
+        initialized = true;
+      } else {
+        if (range.contains(rowArr, offset, length)) {
+          currentReturnCode = ReturnCode.INCLUDE;
+        } else currentReturnCode = ReturnCode.SEEK_NEXT_USING_HINT;
+      }
+    } else {
+      currentReturnCode = ReturnCode.INCLUDE;
+    }
+    return false;
+  }
+
+  /**
+   * @deprecated use {@link #filterRowKey(Cell)} instead
+   */
+  @Override
   public boolean filterRowKey(byte[] buffer, int offset, int length) {
     // If it is the first time of running, calculate the current range index for
     // the row key. If index is out of bound which happens when the start row
@@ -90,6 +140,7 @@ public class MultiRowRangeFilter extends FilterBase {
     // If row key is after the current range, find the next range and update index.
     if (!initialized || !range.contains(buffer, offset, length)) {
       byte[] rowkey = new byte[length];
+      // we don't reuse the codes because of this array copy
       System.arraycopy(buffer, offset, rowkey, 0, length);
       index = getNextRangeIndex(rowkey);
       if (index >= rangeList.size()) {

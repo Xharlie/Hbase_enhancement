@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HDFSBlocksDistribution;
 import org.apache.hadoop.hbase.HRegionInfo;
@@ -414,6 +415,24 @@ public interface Region extends ConfigurationObserver {
   RegionScanner getScanner(Scan scan) throws IOException;
 
   /**
+   * Return an iterator that scans over the HRegion, returning the indicated columns and rows
+   * specified by the {@link Scan}. The scanner will also include the additional scanners passed
+   * along with the scanners for the specified Scan instance. Should be careful with the usage to
+   * pass additional scanners only within this Region
+   * <p>
+   * This Iterator must be closed by the caller.
+   *
+   * @param scan configured {@link Scan}
+   * @param additionalScanners Any additional scanners to be used
+   * @return RegionScanner
+   * @throws IOException read exceptions
+   */
+  RegionScanner getScanner(Scan scan, List<KeyValueScanner> additionalScanners) throws IOException;
+
+  /** The comparator to be used with the region */
+  CellComparator getCellCompartor();
+
+  /**
    * Perform one or more increment operations on a row.
    * @param increment
    * @param nonceGroup
@@ -609,7 +628,7 @@ public interface Region extends ConfigurationObserver {
       byte[] now) throws IOException;
 
   /**
-   * Replace any cell timestamps set to HConstants#LATEST_TIMESTAMP with the
+   * Replace any cell timestamps set to {@link org.apache.hadoop.hbase.HConstants#LATEST_TIMESTAMP}
    * provided current timestamp.
    * @param values
    * @param now

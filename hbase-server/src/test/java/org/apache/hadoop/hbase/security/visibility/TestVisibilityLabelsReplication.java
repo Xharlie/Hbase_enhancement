@@ -44,8 +44,10 @@ import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.TagRewriteCell;
 import org.apache.hadoop.hbase.TagType;
+import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Durability;
@@ -285,11 +287,11 @@ public class TestVisibilityLabelsReplication {
     for (Cell cell : cells) {
       if ((Bytes.equals(cell.getRowArray(), cell.getRowOffset(), cell.getRowLength(), row, 0,
           row.length))) {
-        List<Tag> tags = Tag
-            .asList(cell.getTagsArray(), cell.getTagsOffset(), cell.getTagsLength());
+        List<Tag> tags = TagUtil.asList(cell.getTagsArray(), cell.getTagsOffset(),
+            cell.getTagsLength());
         for (Tag tag : tags) {
           if (tag.getType() == TagType.STRING_VIS_TAG_TYPE) {
-            assertEquals(visTag, Bytes.toString(tag.getValue()));
+            assertEquals(visTag, TagUtil.getValueAsString(tag));
             tagFound = true;
             break;
           }
@@ -331,7 +333,7 @@ public class TestVisibilityLabelsReplication {
           boolean foundNonVisTag = false;
           for (Tag t : TestCoprocessorForTagsAtSink.tags) {
             if (t.getType() == NON_VIS_TAG_TYPE) {
-              assertEquals(TEMP, Bytes.toString(t.getValue()));
+              assertEquals(TEMP, TagUtil.getValueAsString(t));
               foundNonVisTag = true;
               break;
             }
@@ -406,18 +408,14 @@ public class TestVisibilityLabelsReplication {
           for (Cell cell : edits) {
             KeyValue kv = KeyValueUtil.ensureKeyValue(cell);
             if (cf == null) {
-              cf = kv.getFamily();
+              cf = CellUtil.cloneFamily(kv);
             }
-            Tag tag = new Tag((byte) NON_VIS_TAG_TYPE, attribute);
+            Tag tag = new ArrayBackedTag((byte) NON_VIS_TAG_TYPE, attribute);
             List<Tag> tagList = new ArrayList<Tag>();
             tagList.add(tag);
             tagList.addAll(kv.getTags());
-            byte[] fromList = Tag.fromList(tagList);
+            byte[] fromList = TagUtil.fromList(tagList);
             TagRewriteCell newcell = new TagRewriteCell(kv, fromList);
-            KeyValue newKV = new KeyValue(kv.getRow(), 0, kv.getRowLength(), kv.getFamily(), 0,
-                kv.getFamilyLength(), kv.getQualifier(), 0, kv.getQualifierLength(),
-                kv.getTimestamp(), KeyValue.Type.codeToType(kv.getType()), kv.getValue(), 0,
-                kv.getValueLength(), tagList);
             ((List<Cell>) updatedCells).add(newcell);
           }
         }
@@ -438,7 +436,7 @@ public class TestVisibilityLabelsReplication {
         // Check tag presence in the 1st cell in 1st Result
         if (!results.isEmpty()) {
           Cell cell = results.get(0);
-          tags = Tag.asList(cell.getTagsArray(), cell.getTagsOffset(), cell.getTagsLength());
+          tags = TagUtil.asList(cell.getTagsArray(), cell.getTagsOffset(), cell.getTagsLength());
         }
       }
     }

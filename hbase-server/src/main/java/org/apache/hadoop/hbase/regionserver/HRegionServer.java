@@ -96,6 +96,7 @@ import org.apache.hadoop.hbase.executor.ExecutorType;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.http.InfoServer;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
+import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.ipc.*;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.RegionState.State;
@@ -536,6 +537,7 @@ public class HRegionServer extends HasThread implements
       throws IOException, InterruptedException {
     this.fsOk = true;
     this.conf = conf;
+    HFile.checkHFileVersion(this.conf);
     checkCodecs(this.conf);
     this.userProvider = UserProvider.instantiate(conf);
     Superusers.initialize(conf);

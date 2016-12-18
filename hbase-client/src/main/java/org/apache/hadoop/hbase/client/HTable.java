@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -36,10 +37,10 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellScannable;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
@@ -47,10 +48,14 @@ import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.HServerAddress;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.RegionLocations;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
+import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.client.AsyncProcess.AsyncRequestFuture;
+import org.apache.hadoop.hbase.client.AsyncProcess.AsyncRequestFutureImpl;
 import org.apache.hadoop.hbase.client.coprocessor.Batch;
 import org.apache.hadoop.hbase.client.coprocessor.Batch.Callback;
 import org.apache.hadoop.hbase.filter.BinaryComparator;
@@ -62,10 +67,14 @@ import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.RequestConverter;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos;
+import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetResponse;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiRequest;
+import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateRequest;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateResponse;
+import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutationProto;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.RegionAction;
+import org.apache.hadoop.hbase.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.protobuf.generated.HBaseProtos.CompareType;
 import org.apache.hadoop.hbase.protobuf.generated.MasterProtos.GetTableDescriptorsRequest;
 import org.apache.hadoop.hbase.protobuf.generated.MasterProtos.GetTableDescriptorsResponse;
@@ -78,6 +87,7 @@ import org.apache.hadoop.hbase.util.Threads;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
+import com.google.protobuf.RpcCallback;
 import com.google.protobuf.Service;
 import com.google.protobuf.ServiceException;
 
@@ -115,7 +125,7 @@ import com.google.protobuf.ServiceException;
  */
 @InterfaceAudience.Private
 @InterfaceStability.Stable
-public class HTable implements HTableInterface, RegionLocator {
+public class HTable implements AsyncableHTableInterface, RegionLocator {
   private static final Log LOG = LogFactory.getLog(HTable.class);
   protected ClusterConnection connection;
   private final TableName tableName;
@@ -132,6 +142,11 @@ public class HTable implements HTableInterface, RegionLocator {
   private final boolean cleanupConnectionOnClose; // close the connection in close()
   private Consistency defaultConsistency = Consistency.STRONG;
   private HRegionLocator locator;
+  private int maxAttempts;
+  private long retryPause;
+  private int startLogErrorsCnt;
+  private boolean cellBlock;
+  private int timeout;
 
   /** The Async process for batch */
   protected AsyncProcess multiAp;
@@ -377,6 +392,14 @@ public class HTable implements HTableInterface, RegionLocator {
         tableConfiguration.getMetaOperationTimeout() : tableConfiguration.getOperationTimeout();
     this.scannerCaching = tableConfiguration.getScannerCaching();
     this.scannerMaxResultSize = tableConfiguration.getScannerMaxResultSize();
+    this.maxAttempts = configuration.getInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER,
+      HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER) + 1;
+    this.retryPause =
+        configuration.getLong(HConstants.HBASE_CLIENT_PAUSE, HConstants.DEFAULT_HBASE_CLIENT_PAUSE);
+    this.startLogErrorsCnt = configuration.getInt(AsyncProcess.START_LOG_ERRORS_AFTER_COUNT_KEY,
+      AsyncProcess.DEFAULT_START_LOG_ERRORS_AFTER_COUNT);
+    this.timeout = configuration.getInt(HConstants.HBASE_RPC_TIMEOUT_KEY,
+      HConstants.DEFAULT_HBASE_RPC_TIMEOUT);
     if (this.rpcCallerFactory == null) {
       this.rpcCallerFactory = connection.getNewRpcRetryingCallerFactory(configuration);
     }
@@ -390,6 +413,7 @@ public class HTable implements HTableInterface, RegionLocator {
     this.closed = false;
 
     this.locator = new HRegionLocator(tableName, connection);
+    this.cellBlock = isCellBlock();
   }
 
   /**
@@ -896,10 +920,16 @@ public class HTable implements HTableInterface, RegionLocator {
    */
   @Override
   public Result get(final Get get) throws IOException {
-    return get(get, get.isCheckExistenceOnly());
+    return get(get, get.isCheckExistenceOnly(), null);
   }
 
-  private Result get(Get get, final boolean checkExistenceOnly) throws IOException {
+  @Override
+  public void asyncGet(final Get get, AsyncRpcCallback<GetResponse> callback) throws IOException {
+    get(get, get.isCheckExistenceOnly(), callback);
+  }
+
+  private Result get(Get get, final boolean checkExistenceOnly,
+      final AsyncRpcCallback<GetResponse> callback) throws IOException {
     // if we are changing settings to the get, clone it.
     if (get.isCheckExistenceOnly() != checkExistenceOnly || get.getConsistency() == null) {
       get = ReflectionUtils.newInstance(get.getClass(), get);
@@ -914,15 +944,37 @@ public class HTable implements HTableInterface, RegionLocator {
       final Get getReq = get;
       RegionServerCallable<Result> callable = new RegionServerCallable<Result>(this.connection,
           getName(), get.getRow()) {
+
         @Override
         public Result call(int callTimeout) throws IOException {
           ClientProtos.GetRequest request =
             RequestConverter.buildGetRequest(getLocation().getRegionInfo().getRegionName(), getReq);
-          PayloadCarryingRpcController controller = rpcControllerFactory.newController();
+          final PayloadCarryingRpcController controller = rpcControllerFactory.newController();
           controller.setPriority(tableName);
           controller.setCallTimeout(callTimeout);
+
           try {
-            ClientProtos.GetResponse response = getStub().get(controller, request);
+            ClientProtos.GetResponse response = null;
+            if (callback == null) {
+              response = getStub().get(controller, request);
+            } else {
+              controller.notifyOnFail(new FailureCallback(callback));
+              // for async call, we will always reload location from cache
+              // set into callback for checking and clearing cache on failure
+              callback.setLocation(getLocation());
+              getAsyncStub().get(controller, request, new RpcCallback<ClientProtos.GetResponse>() {
+
+                @Override
+                public void run(GetResponse result) {
+                  if (controller.failed()) {
+                    IOException exception = controller.getFailed();
+                    callback.onError(exception);
+                  } else {
+                    callback.run(result);
+                  }
+                }
+              });
+            }
             if (response == null) return null;
             return ProtobufUtil.toResult(response.getResult());
           } catch (ServiceException se) {
@@ -972,6 +1024,19 @@ public class HTable implements HTableInterface, RegionLocator {
       }
     };
     return rpcCallerFactory.<Result>newCaller().callWithRetries(callable, this.operationTimeout);
+  }
+
+  class FailureCallback implements RpcCallback<IOException> {
+    AsyncRpcCallback<? extends Message> callback;
+
+    public FailureCallback(AsyncRpcCallback<? extends Message> callback) {
+      this.callback = callback;
+    }
+
+    @Override
+    public void run(IOException exception) {
+      this.callback.onError(exception);
+    }
   }
 
 
@@ -1461,7 +1526,7 @@ public class HTable implements HTableInterface, RegionLocator {
    */
   @Override
   public boolean exists(final Get get) throws IOException {
-    Result r = get(get, true);
+    Result r = get(get, true, null);
     assert r.getExists() != null;
     return r.getExists();
   }
@@ -1997,5 +2062,329 @@ public class HTable implements HTableInterface, RegionLocator {
       );
     }
     return mutator;
+  }
+
+  public void asyncMutate(final Mutation mutate, final AsyncRpcCallback<MutateResponse> callback)
+      throws IOException {
+    RegionServerCallable<Boolean> callable =
+        new RegionServerCallable<Boolean>(connection, tableName, mutate.getRow()) {
+          @Override
+          public Boolean call(int callTimeout) throws IOException {
+            PayloadCarryingRpcController controller = rpcControllerFactory.newController();
+            controller.setPriority(tableName);
+            controller.setCallTimeout(callTimeout);
+
+            byte[] regionName = getLocation().getRegionInfo().getRegionName();
+            MutateRequest request = buildNonBlockingMutateRequest(regionName, mutate);
+            try {
+              if (callback == null) {
+                getStub().mutate(controller, request);
+              } else {
+                // for async call, we will always reload location from cache
+                // set into callback for checking and clearing cache on failure
+                callback.setLocation(getLocation());
+                controller.notifyOnFail(new FailureCallback(callback));
+                getAsyncStub().mutate(controller, request, callback);
+              }
+              return true;
+            } catch (ServiceException se) {
+              throw ProtobufUtil.getRemoteException(se);
+            }
+          }
+        };
+    rpcCallerFactory.<Boolean> newCaller().callWithRetries(callable, this.operationTimeout);
+  }
+
+  protected MutateRequest buildNonBlockingMutateRequest(byte[] regionName, Mutation mutate)
+      throws IOException {
+    MutateRequest request;
+    if (mutate instanceof Put) {
+      request = RequestConverter.buildMutateRequest(regionName, (Put) mutate);
+    } else if (mutate instanceof Delete) {
+      request = RequestConverter.buildMutateRequest(regionName, (Delete) mutate);
+    } else {
+      throw new IllegalArgumentException("Mutate type: " + mutate.getClass().getName()
+          + " not supported");
+    }
+    return request;
+  }
+
+  @Override
+  public void asyncPut(Put put, AsyncRpcCallback<MutateResponse> callback) throws IOException {
+    asyncMutate(put, callback);
+  }
+
+  @Override
+  public void asyncDelete(Delete delete, AsyncRpcCallback<MutateResponse> callback)
+      throws IOException {
+    asyncMutate(delete, callback);
+  }
+
+  @Override
+  public Future<Result> asyncGet(Get get) throws IOException {
+    return new AsyncGetFuture(this, get, maxAttempts, retryPause, startLogErrorsCnt,
+        operationTimeout);
+  }
+
+  @Override
+  public Future<Result> asyncPut(Put put) throws IOException {
+    return new AsyncMutateFuture(this, put, maxAttempts, retryPause, startLogErrorsCnt,
+        operationTimeout);
+  }
+
+  @Override
+  public Future<Result> asyncDelete(Delete delete) throws IOException {
+    return new AsyncMutateFuture(this, delete, maxAttempts, retryPause, startLogErrorsCnt,
+        operationTimeout);
+  }
+
+  @Override
+  public void asyncBatchGet(List<Get> gets, Object[] results, AsyncBatchCallback batchCallback)
+      throws IOException {
+    asyncBatch(gets, results, batchCallback);
+  }
+
+  @Override
+  public void asyncBatchPut(List<Put> puts, Object[] results, AsyncBatchCallback batchCallback)
+      throws IOException {
+    asyncBatch(puts, results, batchCallback);
+  }
+
+  @Override
+  public void asyncBatchDelete(List<Delete> deletes, Object[] results,
+      AsyncBatchCallback batchCallback) throws IOException {
+    asyncBatch(deletes, results, batchCallback);
+  }
+
+  /**
+   * TODO add timeout support
+   */
+  @Override
+  public void asyncBatch(List<? extends Row> rows, Object[] results,
+      AsyncBatchCallback batchCallback) throws IOException {
+    NonceGenerator ng = this.connection.getNonceGenerator();
+    List<Action<Row>> actions = generateActions(rows, ng);
+    batchCallback.setActions(actions);
+    groupAndSendMultiAction(actions, results, batchCallback);
+  }
+
+  /**
+   * @deprecated Please use {@link #asyncBatch(List, Object[])} instead
+   */
+  @Override
+  public AsyncFuture<Object[]> asyncBatch(List<? extends Row> rows) throws IOException {
+    Object[] results = new Object[rows.size()];
+    return asyncBatch(rows, results);
+  }
+
+  @Override
+  public AsyncFuture<Object[]> asyncBatch(List<? extends Row> rows, Object[] results)
+      throws IOException {
+    NonceGenerator ng = this.connection.getNonceGenerator();
+    List<Action<Row>> actions = generateActions(rows, ng);
+    AsyncBatchFuture future = new AsyncBatchFuture(this, actions, results, maxAttempts, retryPause);
+    return future;
+  }
+
+  /**
+   * Generate {@link Action} list for the given request list, to associate the action with it's
+   * region and maintain the index from the original request.
+   * @param rows The list of request
+   * @param ng the nonce generator
+   * @return an relative {@link Action} list
+   */
+  private List<Action<Row>> generateActions(List<? extends Row> rows, NonceGenerator ng) {
+    List<Action<Row>> actions = new ArrayList<Action<Row>>(rows.size());
+    // The position will be used by the processBatch to match the object array returned.
+    int posInList = -1;
+    for (Row r : rows) {
+      posInList++;
+      if (r instanceof Put) {
+        Put put = (Put) r;
+        if (put.isEmpty()) {
+          throw new IllegalArgumentException("No columns to insert for #" + (posInList + 1)
+              + " item");
+        }
+      }
+      Action<Row> action = new Action<Row>(r, posInList);
+      if ((r instanceof Append) || (r instanceof Increment)) {
+        action.setNonce(ng.newNonce());
+      }
+      actions.add(action);
+    }
+    return actions;
+  }
+
+  /**
+   * Group a list of actions per region servers, and send them in an async way.
+   * <p/>
+   * The grouping logic is mainly copied from
+   * {@link AsyncRequestFutureImpl#groupAndSendMultiAction(List, int)}, but notice that we DON'T
+   * support replica reads in asynchronous semantic
+   * <p/>
+   * @param currentActions - the list of row to submit
+   * @param results - the result array to set
+   * @param batchCallback - the callback to run
+   * @throws IOException if error occurs
+   */
+  public void groupAndSendMultiAction(List<Action<Row>> currentActions, Object[] results,
+      AsyncBatchCallback batchCallback) throws IOException {
+    Map<ServerName, MultiAction<Row>> actionsByServer = new HashMap<ServerName, MultiAction<Row>>();
+    long nonceGroup = this.connection.getNonceGenerator().getNonceGroup();
+
+    for (int i = 0; i < currentActions.size(); i++) {
+      Action<Row> action = currentActions.get(i);
+      RegionLocations locs = findAllLocationsOrFail(action, true, i, results);
+      if (locs == null) continue;
+      HRegionLocation loc = locs.getRegionLocation(action.getReplicaId());
+      if (loc == null || loc.getServerName() == null) {
+        results[i] =
+            new IOException("Failed to get region location for row "
+                + Bytes.toString(action.getAction().getRow()));
+      } else {
+        byte[] regionName = loc.getRegionInfo().getRegionName();
+        addAction(loc.getServerName(), regionName, action, actionsByServer, nonceGroup);
+      }
+    }
+
+    if (!actionsByServer.isEmpty()) {
+      sendMultiAction(actionsByServer, results, batchCallback);
+    }
+  }
+
+  /**
+   * Send multi requests to the servers with a callback. Asynchronous so we don't need multiple
+   * threads
+   * <p/>
+   * This method refers to method with the same name in {@link AsyncProcess}
+   * @param actionsByServer the actions structured by regions
+   * @param results the result array to set in callback
+   * @param batchCallback the callback to run when receiving result or error
+   * @param actionsForReplicaThread original actions for replica thread; null on non-first call.
+   */
+  private void sendMultiAction(Map<ServerName, MultiAction<Row>> actionsByServer, Object[] results,
+      AsyncBatchCallback batchCallback) throws IOException {
+    for (Map.Entry<ServerName, MultiAction<Row>> serverActions : actionsByServer.entrySet()) {
+      ServerName server = serverActions.getKey();
+      MultiAction<Row> multiAction = serverActions.getValue();
+      int countOfActions = multiAction.size();
+      assert countOfActions > 0 : "MultiAction should not be empty";
+      MultiRequest.Builder multiRequestBuilder = MultiRequest.newBuilder();
+      RegionAction.Builder regionActionBuilder = RegionAction.newBuilder();
+      ClientProtos.Action.Builder actionBuilder = ClientProtos.Action.newBuilder();
+      MutationProto.Builder mutationBuilder = MutationProto.newBuilder();
+      List<CellScannable> cells = null;
+      // The multi object is a list of Actions by region.  Iterate by region.
+      long nonceGroup = multiAction.getNonceGroup();
+      if (nonceGroup != HConstants.NO_NONCE) {
+        multiRequestBuilder.setNonceGroup(nonceGroup);
+      }
+      for (Map.Entry<byte[], List<Action<Row>>> regionActions : multiAction.actions.entrySet()) {
+        final byte [] regionName = regionActions.getKey();
+        final List<Action<Row>> actions = regionActions.getValue();
+        regionActionBuilder.clear();
+        regionActionBuilder.setRegion(RequestConverter.buildRegionSpecifier(
+          HBaseProtos.RegionSpecifier.RegionSpecifierType.REGION_NAME, regionName) );
+
+
+        if (this.cellBlock) {
+          // Presize.  Presume at least a KV per Action.  There are likely more.
+          if (cells == null) cells = new ArrayList<CellScannable>(countOfActions);
+          // Send data in cellblocks. The call to buildNoDataMultiRequest will skip RowMutations.
+          // They have already been handled above. Guess at count of cells
+          regionActionBuilder = RequestConverter.buildNoDataRegionAction(regionName, actions, cells,
+            regionActionBuilder, actionBuilder, mutationBuilder);
+        } else {
+          regionActionBuilder = RequestConverter.buildRegionAction(regionName, actions,
+            regionActionBuilder, actionBuilder, mutationBuilder);
+        }
+        multiRequestBuilder.addRegionAction(regionActionBuilder.build());
+      }
+      // set callback to enable asynchronous call
+      // use a wrapper to save multiAction and server information
+      final AsyncBatchCallbackWrapper callbackWrapper =
+          new AsyncBatchCallbackWrapper(multiAction, server, batchCallback);
+
+      // Controller optionally carries cell data over the proxy/service boundary and also
+      // optionally ferries cell response data back out again.
+      final PayloadCarryingRpcController controller = rpcControllerFactory.newController();
+      if (cells != null) controller.setCellScanner(CellUtil.createCellScanner(cells));
+      controller.setPriority(this.tableName);
+      controller.setCallTimeout(this.timeout);
+      final ClientProtos.MultiRequest requestProto = multiRequestBuilder.build();
+      connection.getAsyncClient(server).multi(controller, requestProto,
+        new RpcCallback<ClientProtos.MultiResponse>() {
+
+          @Override
+          public void run(MultiResponse result) {
+            if (controller.failed()) {
+              IOException exception = controller.getFailed();
+              callbackWrapper.onError(exception);
+            } else {
+              callbackWrapper.onComplete(requestProto, result, controller.cellScanner());
+            }
+          }
+        });
+    }
+  }
+
+  /**
+   * Copied from {@link MultiServerCallable}
+   * @return True if we should send data in cellblocks. This is an expensive call. Cache the result
+   *         if you can rather than call each time.
+   */
+  private boolean isCellBlock() {
+    if (!(connection instanceof ClusterConnection)) return true; // Default is to do cellblocks.
+    return ((ClusterConnection) connection).supportsCellBlock();
+  }
+
+  /**
+   * Find all locations of the region against which the action performs, mainly copied from
+   * {@link AsyncRequestFutureImpl}
+   * @param action the action to get region location from
+   * @param useCache use the cache if true
+   * @param id the original index of the action in action list
+   * @param results the result array to set
+   * @return the region location if succeed, or null if failed
+   */
+  private RegionLocations findAllLocationsOrFail(Action<Row> action, boolean useCache, int id,
+      Object[] results) {
+    if (action.getAction() == null) {
+      throw new IllegalArgumentException("#" + id + ", row cannot be null");
+    }
+    RegionLocations loc = null;
+    try {
+      loc =
+          connection.locateRegion(tableName, action.getAction().getRow(), useCache, true,
+            action.getReplicaId());
+    } catch (IOException ex) {
+      results[id] =
+          new IOException("Failed to get region location for row "
+              + Bytes.toString(action.getAction().getRow()), ex);
+    }
+    return loc;
+  }
+
+  /**
+   * Helper that is used when grouping the actions per region server, copied from
+   * {@link AsyncProcess}
+   * @param server the target server
+   * @param regionName the target region name
+   * @param action - the action to add to the multiaction
+   * @param actionsByServer the multiaction per server
+   * @param nonceGroup Nonce group.
+   */
+  private void addAction(ServerName server, byte[] regionName, Action<Row> action,
+      Map<ServerName, MultiAction<Row>> actionsByServer, long nonceGroup) {
+    MultiAction<Row> multiAction = actionsByServer.get(server);
+    if (multiAction == null) {
+      multiAction = new MultiAction<Row>();
+      actionsByServer.put(server, multiAction);
+    }
+    if (action.hasNonce() && !multiAction.hasNonceGroup()) {
+      multiAction.setNonceGroup(nonceGroup);
+    }
+
+    multiAction.add(regionName, action);
   }
 }

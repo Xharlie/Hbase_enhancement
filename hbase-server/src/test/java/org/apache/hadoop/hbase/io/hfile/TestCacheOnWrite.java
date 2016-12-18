@@ -28,7 +28,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
@@ -36,6 +39,8 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.ArrayBackedTag;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
@@ -243,7 +248,6 @@ public class TestCacheOnWrite {
   public void setUp() throws IOException {
     conf = TEST_UTIL.getConfiguration();
     this.conf.set("dfs.datanode.data.dir.perm", "700");
-    conf.setInt(HFile.FORMAT_VERSION_KEY, HFile.MAX_FORMAT_VERSION);
     conf.setInt(HFileBlockIndex.MAX_CHUNK_SIZE_KEY, INDEX_BLOCK_SIZE);
     conf.setInt(BloomFilterFactory.IO_STOREFILE_BLOOM_BLOCK_SIZE,
         BLOOM_BLOCK_SIZE);
@@ -274,12 +278,7 @@ public class TestCacheOnWrite {
   }
 
   private void readStoreFile(boolean useTags) throws IOException {
-    AbstractHFileReader reader;
-    if (useTags) {
-        reader = (HFileReaderV3) HFile.createReader(fs, storeFilePath, cacheConf, conf);
-    } else {
-        reader = (HFileReaderV2) HFile.createReader(fs, storeFilePath, cacheConf, conf);
-    }
+    HFile.Reader reader = HFile.createReader(fs, storeFilePath, cacheConf, conf);
     LOG.info("HFile information: " + reader);
     HFileContext meta = new HFileContextBuilder().withCompression(compress)
       .withBytesPerCheckSum(CKBYTES).withChecksumType(ChecksumType.NULL)
@@ -297,6 +296,8 @@ public class TestCacheOnWrite {
 
     DataBlockEncoding encodingInCache =
         encoderType.getEncoder().getDataBlockEncoding();
+    List<Long> cachedBlocksOffset = new ArrayList<Long>();
+    Map<Long, HFileBlock> cachedBlocks = new HashMap<Long, HFileBlock>();
     while (offset < reader.getTrailer().getLoadOnOpenDataOffset()) {
       long onDiskSize = -1;
       if (prevBlock != null) {
@@ -310,6 +311,8 @@ public class TestCacheOnWrite {
           offset);
       HFileBlock fromCache = (HFileBlock) blockCache.getBlock(blockCacheKey, true, false, true);
       boolean isCached = fromCache != null;
+      cachedBlocksOffset.add(offset);
+      cachedBlocks.put(offset, fromCache);
       boolean shouldBeCached = cowType.shouldBeCached(block.getBlockType());
       assertTrue("shouldBeCached: " + shouldBeCached+ "\n" +
           "isCached: " + isCached + "\n" +
@@ -360,8 +363,30 @@ public class TestCacheOnWrite {
 
     // iterate all the keyvalue from hfile
     while (scanner.next()) {
-      scanner.getKeyValue();
+      scanner.getCell();
     }
+    Iterator<Long> iterator = cachedBlocksOffset.iterator();
+    while(iterator.hasNext()) {
+      Long entry = iterator.next();
+      BlockCacheKey blockCacheKey = new BlockCacheKey(reader.getName(),
+          entry);
+      HFileBlock hFileBlock = cachedBlocks.get(entry);
+      if (hFileBlock != null) {
+        // call return twice because for the isCache cased the counter would have got incremented
+        // twice
+        blockCache.returnBlock(blockCacheKey, hFileBlock);
+        if(cacheCompressedData) {
+          if (this.compress == Compression.Algorithm.NONE
+              || cowType == CacheOnWriteType.INDEX_BLOCKS
+              || cowType == CacheOnWriteType.BLOOM_BLOCKS) {
+            blockCache.returnBlock(blockCacheKey, hFileBlock);
+          }
+        } else {
+          blockCache.returnBlock(blockCacheKey, hFileBlock);
+        }
+      }
+    }
+    scanner.shipped();
     reader.close();
   }
 
@@ -380,11 +405,6 @@ public class TestCacheOnWrite {
   }
 
   private void writeStoreFile(boolean useTags) throws IOException {
-    if(useTags) {
-      TEST_UTIL.getConfiguration().setInt("hfile.format.version", 3);
-    } else {
-      TEST_UTIL.getConfiguration().setInt("hfile.format.version", 2);
-    }
     Path storeFileParentDir = new Path(TEST_UTIL.getDataTestDir(),
         "test_cache_on_write");
     HFileContext meta = new HFileContextBuilder().withCompression(compress)
@@ -392,7 +412,7 @@ public class TestCacheOnWrite {
         .withBlockSize(DATA_BLOCK_SIZE).withDataBlockEncoding(encoder.getDataBlockEncoding())
         .withIncludesTags(useTags).build();
     StoreFile.Writer sfw = new StoreFile.WriterBuilder(conf, cacheConf, fs)
-        .withOutputDir(storeFileParentDir).withComparator(KeyValue.COMPARATOR)
+        .withOutputDir(storeFileParentDir).withComparator(CellComparator.COMPARATOR)
         .withFileContext(meta)
         .withBloomType(BLOOM_TYPE).withMaxKeyCount(NUM_KV).build();
     byte[] cf = Bytes.toBytes("fam");
@@ -402,7 +422,7 @@ public class TestCacheOnWrite {
       byte[] value = TestHFileWriterV2.randomValue(rand);
       KeyValue kv;
       if(useTags) {
-        Tag t = new Tag((byte) 1, "visibility");
+        Tag t = new ArrayBackedTag((byte) 1, "visibility");
         List<Tag> tagList = new ArrayList<Tag>();
         tagList.add(t);
         Tag[] tags = new Tag[1];
@@ -424,11 +444,6 @@ public class TestCacheOnWrite {
 
   private void testNotCachingDataBlocksDuringCompactionInternals(boolean useTags)
       throws IOException, InterruptedException {
-    if (useTags) {
-      TEST_UTIL.getConfiguration().setInt("hfile.format.version", 3);
-    } else {
-      TEST_UTIL.getConfiguration().setInt("hfile.format.version", 2);
-    }
     // TODO: need to change this test if we add a cache size threshold for
     // compactions, or if we implement some other kind of intelligent logic for
     // deciding what blocks to cache-on-write on compaction.
@@ -456,7 +471,7 @@ public class TestCacheOnWrite {
           String valueStr = "value_" + rowStr + "_" + qualStr;
           for (int iTS = 0; iTS < 5; ++iTS) {
             if (useTags) {
-              Tag t = new Tag((byte) 1, "visibility");
+              Tag t = new ArrayBackedTag((byte) 1, "visibility");
               Tag[] tags = new Tag[1];
               tags[0] = t;
               KeyValue kv = new KeyValue(Bytes.toBytes(rowStr), cfBytes, Bytes.toBytes(qualStr),

@@ -23,10 +23,11 @@ import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 
@@ -68,7 +69,7 @@ public class PrefixKeyDeltaEncoder extends BufferedDataBlockEncoder {
       writeKeyExcludingCommon(cell, common, out);
     }
     // Write the value part
-    out.write(cell.getValueArray(), cell.getValueOffset(), vlength);
+    CellUtil.writeValue(out, cell, vlength);
     int size = klength + vlength + KeyValue.KEYVALUE_INFRASTRUCTURE_SIZE;
     size += afterEncodingKeyValue(cell, out, encodingContext);
     state.prevCell = cell;
@@ -84,8 +85,8 @@ public class PrefixKeyDeltaEncoder extends BufferedDataBlockEncoder {
       CellUtil.writeRowKeyExcludingCommon(cell, rLen, commonPrefix, out);
       byte fLen = cell.getFamilyLength();
       out.writeByte(fLen);
-      out.write(cell.getFamilyArray(), cell.getFamilyOffset(), fLen);
-      out.write(cell.getQualifierArray(), cell.getQualifierOffset(), cell.getQualifierLength());
+      CellUtil.writeFamily(out, cell, fLen);
+      CellUtil.writeQualifier(out, cell, cell.getQualifierLength());
       out.writeLong(cell.getTimestamp());
       out.writeByte(cell.getTypeByte());
     } else {
@@ -97,8 +98,7 @@ public class PrefixKeyDeltaEncoder extends BufferedDataBlockEncoder {
       int commonQualPrefix = Math.min(commonPrefix, qLen);
       int qualPartLenToWrite = qLen - commonQualPrefix;
       if (qualPartLenToWrite > 0) {
-        out.write(cell.getQualifierArray(), cell.getQualifierOffset() + commonQualPrefix,
-            qualPartLenToWrite);
+        CellUtil.writeQualifierSkippingBytes(out, cell, qLen, commonQualPrefix);
       }
       commonPrefix -= commonQualPrefix;
       // Common part in TS also?
@@ -172,22 +172,20 @@ public class PrefixKeyDeltaEncoder extends BufferedDataBlockEncoder {
   }
 
   @Override
-  public ByteBuffer getFirstKeyInBlock(ByteBuffer block) {
+  public Cell getFirstKeyCellInBlock(ByteBuff block) {
     block.mark();
     block.position(Bytes.SIZEOF_INT);
-    int keyLength = ByteBufferUtils.readCompressedInt(block);
-    ByteBufferUtils.readCompressedInt(block);
-    int commonLength = ByteBufferUtils.readCompressedInt(block);
+    int keyLength = ByteBuff.readCompressedInt(block);
+    // TODO : See if we can avoid these reads as the read values are not getting used
+    ByteBuff.readCompressedInt(block);
+    int commonLength = ByteBuff.readCompressedInt(block);
     if (commonLength != 0) {
       throw new AssertionError("Nonzero common length in the first key in "
           + "block: " + commonLength);
     }
-    int pos = block.position();
+    ByteBuffer key = block.asSubByteBuffer(keyLength).duplicate();
     block.reset();
-    ByteBuffer dup = block.duplicate();
-    dup.position(pos);
-    dup.limit(pos + keyLength);
-    return dup.slice();
+    return createFirstKeyCell(key, keyLength);
   }
 
   @Override
@@ -196,26 +194,25 @@ public class PrefixKeyDeltaEncoder extends BufferedDataBlockEncoder {
   }
 
   @Override
-  public EncodedSeeker createSeeker(KVComparator comparator,
+  public EncodedSeeker createSeeker(CellComparator comparator,
       final HFileBlockDecodingContext decodingCtx) {
     return new BufferedEncodedSeeker<SeekerState>(comparator, decodingCtx) {
       @Override
       protected void decodeNext() {
-        current.keyLength = ByteBufferUtils.readCompressedInt(currentBuffer);
-        current.valueLength = ByteBufferUtils.readCompressedInt(currentBuffer);
-        current.lastCommonPrefix =
-            ByteBufferUtils.readCompressedInt(currentBuffer);
+        current.keyLength = ByteBuff.readCompressedInt(currentBuffer);
+        current.valueLength = ByteBuff.readCompressedInt(currentBuffer);
+        current.lastCommonPrefix = ByteBuff.readCompressedInt(currentBuffer);
         current.keyLength += current.lastCommonPrefix;
         current.ensureSpaceForKey();
         currentBuffer.get(current.keyBuffer, current.lastCommonPrefix,
             current.keyLength - current.lastCommonPrefix);
         current.valueOffset = currentBuffer.position();
-        ByteBufferUtils.skip(currentBuffer, current.valueLength);
+        currentBuffer.skip(current.valueLength);
         if (includesTags()) {
           decodeTags();
         }
         if (includesMvcc()) {
-          current.memstoreTS = ByteBufferUtils.readVLong(currentBuffer);
+          current.memstoreTS = ByteBuff.readVLong(currentBuffer);
         } else {
           current.memstoreTS = 0;
         }
@@ -224,7 +221,7 @@ public class PrefixKeyDeltaEncoder extends BufferedDataBlockEncoder {
 
       @Override
       protected void decodeFirst() {
-        ByteBufferUtils.skip(currentBuffer, Bytes.SIZEOF_INT);
+        currentBuffer.skip(Bytes.SIZEOF_INT);
         decodeNext();
       }
     };

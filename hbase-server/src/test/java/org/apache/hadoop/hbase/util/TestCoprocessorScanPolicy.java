@@ -29,25 +29,23 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.client.Get;
-import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.IsolationLevel;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.coprocessor.BaseRegionObserver;
 import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
@@ -65,7 +63,6 @@ import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
@@ -73,7 +70,6 @@ import org.junit.runners.Parameterized.Parameters;
 @Category(MediumTests.class)
 @RunWith(Parameterized.class)
 public class TestCoprocessorScanPolicy {
-  final Log LOG = LogFactory.getLog(getClass());
   protected final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static final byte[] F = Bytes.toBytes("fam");
   private static final byte[] Q = Bytes.toBytes("qual");
@@ -165,7 +161,7 @@ public class TestCoprocessorScanPolicy {
     .setTimeToLive(1);
     desc.addFamily(hcd);
     TEST_UTIL.getHBaseAdmin().createTable(desc);
-    Table t = new HTable(new Configuration(TEST_UTIL.getConfiguration()), tableName);
+    Table t = TEST_UTIL.getConnection().getTable(tableName);
     long now = EnvironmentEdgeManager.currentTime();
     ManualEnvironmentEdge me = new ManualEnvironmentEdge();
     me.setValue(now);
@@ -227,12 +223,16 @@ public class TestCoprocessorScanPolicy {
       if (put.getAttribute("ttl") != null) {
         Cell cell = put.getFamilyCellMap().values().iterator().next().get(0);
         KeyValue kv = KeyValueUtil.ensureKeyValue(cell);
-        ttls.put(TableName.valueOf(kv.getQualifier()), Bytes.toLong(kv.getValue()));
+        ttls.put(TableName.valueOf(
+          Bytes.toString(kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength())),
+          Bytes.toLong(CellUtil.cloneValue(kv)));
         c.bypass();
       } else if (put.getAttribute("versions") != null) {
         Cell cell = put.getFamilyCellMap().values().iterator().next().get(0);
         KeyValue kv = KeyValueUtil.ensureKeyValue(cell);
-        versions.put(TableName.valueOf(kv.getQualifier()), Bytes.toInt(kv.getValue()));
+        versions.put(TableName.valueOf(
+          Bytes.toString(kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength())),
+          Bytes.toInt(CellUtil.cloneValue(kv)));
         c.bypass();
       }
     }

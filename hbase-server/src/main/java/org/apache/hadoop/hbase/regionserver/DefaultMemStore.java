@@ -34,6 +34,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
@@ -84,7 +85,7 @@ public class DefaultMemStore implements MemStore {
   // Snapshot of memstore.  Made for flusher.
   volatile CellSkipListSet snapshot;
 
-  final KeyValue.KVComparator comparator;
+  final CellComparator comparator;
 
   // Used to track own heapSize
   final AtomicLong size;
@@ -104,7 +105,7 @@ public class DefaultMemStore implements MemStore {
    * Default constructor. Used for tests.
    */
   public DefaultMemStore() {
-    this(HBaseConfiguration.create(), KeyValue.COMPARATOR);
+    this(HBaseConfiguration.create(), CellComparator.COMPARATOR);
   }
 
   /**
@@ -112,7 +113,7 @@ public class DefaultMemStore implements MemStore {
    * @param c Comparator
    */
   public DefaultMemStore(final Configuration conf,
-                  final KeyValue.KVComparator c) {
+                  final CellComparator c) {
     this.conf = conf;
     this.comparator = c;
     this.cellSet = new CellSkipListSet(c);
@@ -978,8 +979,7 @@ public class DefaultMemStore implements MemStore {
      */
     @Override
     public synchronized boolean seekToPreviousRow(Cell key) {
-      Cell firstKeyOnRow = KeyValueUtil.createFirstOnRow(key.getRowArray(), key.getRowOffset(),
-          key.getRowLength());
+      Cell firstKeyOnRow = CellUtil.createFirstOnRow(key);
       SortedSet<Cell> cellHead = cellSetAtCreation.headSet(firstKeyOnRow);
       Cell cellSetBeforeRow = cellHead.isEmpty() ? null : cellHead.last();
       SortedSet<Cell> snapshotHead = snapshotAtCreation
@@ -991,8 +991,7 @@ public class DefaultMemStore implements MemStore {
         theNext = null;
         return false;
       }
-      Cell firstKeyOnPreviousRow = KeyValueUtil.createFirstOnRow(lastCellBeforeRow.getRowArray(),
-          lastCellBeforeRow.getRowOffset(), lastCellBeforeRow.getRowLength());
+      Cell firstKeyOnPreviousRow = CellUtil.createFirstOnRow(lastCellBeforeRow);
       this.stopSkippingCellsIfNextRow = true;
       seek(firstKeyOnPreviousRow);
       this.stopSkippingCellsIfNextRow = false;
@@ -1013,8 +1012,7 @@ public class DefaultMemStore implements MemStore {
       if (higherCell == null) {
         return false;
       }
-      Cell firstCellOnLastRow = KeyValueUtil.createFirstOnRow(higherCell.getRowArray(),
-          higherCell.getRowOffset(), higherCell.getRowLength());
+      Cell firstCellOnLastRow = CellUtil.createFirstOnRow(higherCell);
       if (seek(firstCellOnLastRow)) {
         return true;
       } else {

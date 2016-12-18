@@ -20,7 +20,6 @@ package org.apache.hadoop.hbase.codec.prefixtree.decode;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.codec.prefixtree.PrefixTreeBlockMeta;
 import org.apache.hadoop.hbase.codec.prefixtree.decode.column.ColumnReader;
@@ -28,6 +27,7 @@ import org.apache.hadoop.hbase.codec.prefixtree.decode.row.RowNodeReader;
 import org.apache.hadoop.hbase.codec.prefixtree.decode.timestamp.MvccVersionDecoder;
 import org.apache.hadoop.hbase.codec.prefixtree.decode.timestamp.TimestampDecoder;
 import org.apache.hadoop.hbase.codec.prefixtree.encode.other.ColumnNodeType;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 
 /**
  * Extends PtCell and manipulates its protected fields.  Could alternatively contain a PtCell and
@@ -60,7 +60,6 @@ public class PrefixTreeArrayScanner extends PrefixTreeCell implements CellScanne
 
   protected boolean nubCellsRemain;
   protected int currentCellIndex;
-
 
   /*********************** construct ******************************/
 
@@ -105,7 +104,7 @@ public class PrefixTreeArrayScanner extends PrefixTreeCell implements CellScanne
     return true;
   }
 
-  public void initOnBlock(PrefixTreeBlockMeta blockMeta, byte[] block,
+  public void initOnBlock(PrefixTreeBlockMeta blockMeta, ByteBuff block,
       boolean includeMvccVersion) {
     this.block = block;
     this.blockMeta = blockMeta;
@@ -360,7 +359,7 @@ public class PrefixTreeArrayScanner extends PrefixTreeCell implements CellScanne
   /***************** helper methods **************************/
 
   protected void appendCurrentTokenToRowBuffer() {
-    System.arraycopy(block, currentRowNode.getTokenArrayOffset(), rowBuffer, rowLength,
+    block.get(currentRowNode.getTokenArrayOffset(), rowBuffer, rowLength,
       currentRowNode.getTokenLength());
     rowLength += currentRowNode.getTokenLength();
   }
@@ -420,7 +419,7 @@ public class PrefixTreeArrayScanner extends PrefixTreeCell implements CellScanne
 
   protected int populateNonRowFieldsAndCompareTo(int cellNum, Cell key) {
     populateNonRowFields(cellNum);
-    return CellComparator.compare(this, key, true);
+    return comparator.compareKeyIgnoresMvcc(this, key);
   }
 
   protected void populateFirstNonRowFields() {
@@ -500,13 +499,10 @@ public class PrefixTreeArrayScanner extends PrefixTreeCell implements CellScanne
     int offsetIntoValueSection = currentRowNode.getValueOffset(currentCellIndex, blockMeta);
     absoluteValueOffset = blockMeta.getAbsoluteValueOffset() + offsetIntoValueSection;
     valueLength = currentRowNode.getValueLength(currentCellIndex, blockMeta);
+    this.block.asSubByteBuffer(this.absoluteValueOffset, valueLength, pair);
   }
 
   /**************** getters ***************************/
-
-  public byte[] getTreeBytes() {
-    return block;
-  }
 
   public PrefixTreeBlockMeta getBlockMeta() {
     return blockMeta;

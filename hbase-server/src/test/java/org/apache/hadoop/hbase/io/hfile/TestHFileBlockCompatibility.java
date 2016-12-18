@@ -37,6 +37,9 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.MultiByteBuff;
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
@@ -309,7 +312,7 @@ public class TestHFileBlockCompatibility {
 
             assertEquals((int) encodedSizes.get(blockId),
                 b.getUncompressedSizeWithoutHeader());
-            ByteBuffer actualBuffer = b.getBufferWithoutHeader();
+            ByteBuff actualBuffer = b.getBufferWithoutHeader();
             if (encoding != DataBlockEncoding.NONE) {
               // We expect a two-byte big-endian encoding id.
               assertEquals(0, actualBuffer.get(0));
@@ -322,7 +325,7 @@ public class TestHFileBlockCompatibility {
             expectedBuffer.rewind();
 
             // test if content matches, produce nice message
-            TestHFileBlock.assertBuffersEqual(expectedBuffer, actualBuffer,
+            TestHFileBlock.assertBuffersEqual(new SingleByteBuff(expectedBuffer), actualBuffer,
               algo, encoding, pread);
           }
           is.close();
@@ -479,7 +482,7 @@ public class TestHFileBlockCompatibility {
       this.dataBlockEncoder.encode(kv, dataBlockEncodingCtx, this.userDataStream);
       this.unencodedDataSizeWritten += kv.getLength();
       if (dataBlockEncodingCtx.getHFileContext().isIncludesMvcc()) {
-        this.unencodedDataSizeWritten += WritableUtils.getVIntSize(kv.getMvccVersion());
+        this.unencodedDataSizeWritten += WritableUtils.getVIntSize(kv.getSequenceId());
       }
     }
 

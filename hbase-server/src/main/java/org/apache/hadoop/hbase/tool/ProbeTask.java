@@ -63,7 +63,7 @@ class ProbeResult {
   }
   public String toString(){
     StringBuilder sb = new StringBuilder();
-    sb.append("regions: ").append(HRegionInfo.encodeRegionName(regionName)).append(", ");
+    sb.append("regions: ").append(Bytes.toStringBinary(regionName)).append(", ");
     sb.append("result: ").append(result).append(", ");
     sb.append("reason: ").append(reason).append("  ");
     return  sb.toString();

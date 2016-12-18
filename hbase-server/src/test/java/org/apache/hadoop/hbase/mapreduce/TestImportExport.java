@@ -397,10 +397,10 @@ public class TestImportExport {
     Scan s = new Scan();
     s.setMaxVersions();
     s.setRaw(true);
-    
+
     ResultScanner importedTScanner = importT.getScanner(s);
     Result importedTResult = importedTScanner.next();
-    
+
     ResultScanner exportedTScanner = exportT.getScanner(s);
     Result  exportedTResult =  exportedTScanner.next();
     try
@@ -498,7 +498,7 @@ public class TestImportExport {
     results.close();
     return count;
   }
-  
+
   /**
    * test main method. Import should print help and call System.exit
    */
@@ -580,7 +580,7 @@ public class TestImportExport {
         ImmutableBytesWritable writer = (ImmutableBytesWritable) invocation.getArguments()[0];
         KeyValue key = (KeyValue) invocation.getArguments()[1];
         assertEquals("Key", Bytes.toString(writer.get()));
-        assertEquals("row", Bytes.toString(key.getRow()));
+        assertEquals("row", Bytes.toString(CellUtil.cloneRow(key)));
         return null;
       }
     }).when(ctx).write(any(ImmutableBytesWritable.class), any(KeyValue.class));
@@ -610,7 +610,7 @@ public class TestImportExport {
     args.add("param2");
 
     Import.addFilterAndArguments(configuration, FilterBase.class, args);
-    assertEquals("org.apache.hadoop.hbase.filter.FilterBase", 
+    assertEquals("org.apache.hadoop.hbase.filter.FilterBase",
         configuration.get(Import.FILTER_CLASS_CONF_KEY));
     assertEquals("param1,param2", configuration.get(Import.FILTER_ARGS_CONF_KEY));
   }
@@ -698,5 +698,5 @@ public class TestImportExport {
     public boolean isWALVisited() {
       return isVisited;
     }
-  }  
+  }
 }

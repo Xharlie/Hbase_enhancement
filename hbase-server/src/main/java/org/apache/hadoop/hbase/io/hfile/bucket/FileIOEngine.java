@@ -26,6 +26,11 @@ import java.nio.channels.FileChannel;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.io.hfile.Cacheable;
+import org.apache.hadoop.hbase.io.hfile.CacheableDeserializer;
+import org.apache.hadoop.hbase.io.hfile.Cacheable.MemoryType;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -79,14 +84,26 @@ public class FileIOEngine implements IOEngine {
 
   /**
    * Transfers data from file to the given byte buffer
-   * @param dstBuffer the given byte buffer into which bytes are to be written
    * @param offset The offset in the file where the first byte to be read
+   * @param length The length of buffer that should be allocated for reading
+   *               from the file channel
    * @return number of bytes read
    * @throws IOException
    */
   @Override
-  public int read(ByteBuffer dstBuffer, long offset) throws IOException {
-    return fileChannel.read(dstBuffer, offset);
+  public Cacheable read(long offset, int length, CacheableDeserializer<Cacheable> deserializer)
+      throws IOException {
+    ByteBuffer dstBuffer = ByteBuffer.allocate(length);
+    fileChannel.read(dstBuffer, offset);
+    // The buffer created out of the fileChannel is formed by copying the data from the file
+    // Hence in this case there is no shared memory that we point to. Even if the BucketCache evicts
+    // this buffer from the file the data is already copied and there is no need to ensure that
+    // the results are not corrupted before consuming them.
+    if (dstBuffer.limit() != length) {
+      throw new RuntimeException("Only " + dstBuffer.limit() + " bytes read, " + length
+          + " expected");
+    }
+    return deserializer.deserialize(new SingleByteBuff(dstBuffer), true, MemoryType.EXCLUSIVE);
   }
 
   /**
@@ -124,5 +141,13 @@ public class FileIOEngine implements IOEngine {
     } catch (IOException ex) {
       LOG.error("Can't shutdown cleanly", ex);
     }
+  }
+
+  @Override
+  public void write(ByteBuff srcBuffer, long offset) throws IOException {
+    // When caching block into BucketCache there will be single buffer backing for this HFileBlock.
+    assert srcBuffer.hasArray();
+    fileChannel.write(
+        ByteBuffer.wrap(srcBuffer.array(), srcBuffer.arrayOffset(), srcBuffer.remaining()), offset);
   }
 }

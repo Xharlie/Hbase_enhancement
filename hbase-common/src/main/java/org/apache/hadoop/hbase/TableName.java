@@ -20,8 +20,8 @@ package org.apache.hadoop.hbase;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.KeyValue.KVComparator;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;

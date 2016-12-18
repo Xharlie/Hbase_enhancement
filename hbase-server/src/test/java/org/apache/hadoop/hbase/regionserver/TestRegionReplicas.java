@@ -474,7 +474,7 @@ public class TestRegionReplicas {
         do {
           keys++;
 
-          Cell cell = scanner.getKeyValue();
+          Cell cell = scanner.getCell();
           sum += Integer.parseInt(Bytes.toString(cell.getRowArray(),
             cell.getRowOffset(), cell.getRowLength()));
         } while (scanner.next());

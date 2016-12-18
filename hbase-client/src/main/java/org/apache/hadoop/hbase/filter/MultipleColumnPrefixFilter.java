@@ -17,20 +17,22 @@
  */
 package org.apache.hadoop.hbase.filter;
 
-import com.google.protobuf.InvalidProtocolBufferException;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.TreeSet;
+
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.protobuf.generated.FilterProtos;
 import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.hadoop.hbase.util.Bytes;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.TreeSet;
+import com.google.protobuf.InvalidProtocolBufferException;
 
 /**
  * This filter is used for selecting only those keys with columns that matches
@@ -63,11 +65,17 @@ public class MultipleColumnPrefixFilter extends FilterBase {
   }
 
   @Override
+  public boolean filterRowKey(Cell cell) throws IOException {
+    // Impl in FilterBase might do unnecessary copy for Off heap backed Cells.
+    return false;
+  }
+
+  @Override
   public ReturnCode filterKeyValue(Cell kv) {
-    if (sortedPrefixes.size() == 0 || kv.getQualifierArray() == null) {
+    if (sortedPrefixes.size() == 0) {
       return ReturnCode.INCLUDE;
     } else {
-      return filterColumn(kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength());
+      return filterColumn(kv);
     }
   }
 
@@ -78,9 +86,12 @@ public class MultipleColumnPrefixFilter extends FilterBase {
     return v;
   }
 
-  public ReturnCode filterColumn(byte[] buffer, int qualifierOffset, int qualifierLength) {
-    byte [] qualifier = Arrays.copyOfRange(buffer, qualifierOffset,
-                                           qualifierLength + qualifierOffset);
+  public ReturnCode filterColumn(Cell cell) {
+    byte [] qualifier = CellUtil.cloneQualifier(cell);
+    return internalFilterColumn(qualifier);
+  }
+
+  private ReturnCode internalFilterColumn(byte[] qualifier) {
     TreeSet<byte []> lesserOrEqualPrefixes =
       (TreeSet<byte []>) sortedPrefixes.headSet(qualifier, true);
 
@@ -101,6 +112,15 @@ public class MultipleColumnPrefixFilter extends FilterBase {
       hint = sortedPrefixes.first();
       return ReturnCode.SEEK_NEXT_USING_HINT;
     }
+  }
+
+  /**
+   * @deprecated use {@link #filterColumn(Cell)} instead
+   */
+  public ReturnCode filterColumn(byte[] buffer, int qualifierOffset, int qualifierLength) {
+    byte[] qualifier =
+        Arrays.copyOfRange(buffer, qualifierOffset, qualifierLength + qualifierOffset);
+    return internalFilterColumn(qualifier);
   }
 
   public static Filter createFilterFromArguments(ArrayList<byte []> filterArguments) {
@@ -161,10 +181,8 @@ public class MultipleColumnPrefixFilter extends FilterBase {
   }
 
   @Override
-  public Cell getNextCellHint(Cell kv) {
-    return KeyValueUtil.createFirstOnRow(
-      kv.getRowArray(), kv.getRowOffset(), kv.getRowLength(), kv.getFamilyArray(),
-      kv.getFamilyOffset(), kv.getFamilyLength(), hint, 0, hint.length);
+  public Cell getNextCellHint(Cell cell) {
+    return CellUtil.createFirstOnRowCol(cell, hint, 0, hint.length);
   }
 
   public TreeSet<byte []> createTreeSet() {

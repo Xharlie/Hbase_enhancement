@@ -76,6 +76,10 @@ public class TimeLimitedRpcController implements RpcController {
     return this.exception != null;
   }
 
+  public IOException getFailed() {
+    return this.exception;
+  }
+
   @Override
   public boolean isCanceled() {
     return cancelled;

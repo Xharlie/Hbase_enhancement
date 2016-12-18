@@ -105,7 +105,9 @@ public class Import {
           LOG.trace("Considering the row."
               + Bytes.toString(row.get(), row.getOffset(), row.getLength()));
         }
-        if (filter == null || !filter.filterRowKey(row.get(), row.getOffset(), row.getLength())) {
+        if (filter == null
+            || !filter.filterRowKey(KeyValueUtil.createFirstOnRow(row.get(), row.getOffset(),
+                (short) row.getLength()))) {
           for (Cell kv : value.rawCells()) {
             kv = filterKv(filter, kv);
             // skip if we filtered it out
@@ -160,7 +162,9 @@ public class Import {
         LOG.trace("Considering the row."
             + Bytes.toString(key.get(), key.getOffset(), key.getLength()));
       }
-      if (filter == null || !filter.filterRowKey(key.get(), key.getOffset(), key.getLength())) {
+      if (filter == null
+          || !filter.filterRowKey(KeyValueUtil.createFirstOnRow(key.get(), key.getOffset(),
+              (short) key.getLength()))) {
         processKV(key, result, context, put, delete);
       }
     }

@@ -43,7 +43,6 @@ public class HealthCheckChore extends ScheduledChore {
     super("HealthChecker", stopper, sleepTime);
     LOG.info("Health Check Chore runs every " + StringUtils.formatTime(sleepTime));
     this.config = conf;
-    this.rs = (HRegionServer)stopper;
     int threadPoolSize = this.config.getInt(HConstants.HEALTH_THREAD_POOL_SIZE, HConstants.DEFAULT_HEALTH_THREAD_POOL_SIZE);
     float failedThreshold = this.config.getFloat(HConstants.HEALTH_FAILED_THRESHOLD, HConstants.DEFAULT_HEALTH_FAILED_THRESHOLD);
     int sampledRegionCount = this.config.getInt(HConstants.HEALTH_SAMPLED_REGION_COUNT, HConstants.DEFAULT_HEALTH_SAMPLED_REGION_COUNT);
@@ -56,6 +55,7 @@ public class HealthCheckChore extends ScheduledChore {
       HConstants.DEFAULT_HEALTH_FAILURE_THRESHOLD);
     this.failureWindow = (long)this.threshold * (long)sleepTime;
     if(conf.getBoolean(HConstants.HEALTH_DIRECT_CHECK, false)){
+      this.rs = (HRegionServer)stopper;
       long directTimeout = this.config.getLong(HConstants.HEALTH_DIRECTCHECK_TIMEOUT,
               HConstants.DEFAULT_HEALTH_DIRECTCHECK_TIMEOUT);
       healthChecker = new DirectHealthChecker();
@@ -81,17 +81,18 @@ public class HealthCheckChore extends ScheduledChore {
     boolean isHealthy = (report.getStatus() == HealthCheckerExitStatus.SUCCESS);
     if (!isHealthy) {
       boolean needToStop = decideToStop();
-      this.rs.setDirectHealthCheckNumUnhealthy(numTimesUnhealthy);
+      if(rs != null){
+        this.rs.setDirectHealthCheckNumUnhealthy(numTimesUnhealthy);
+      }
       if (needToStop) {
         LOG.info("The  node reported unhealthy " + threshold + " number of times consecutively.");
-//        getStopper().stop(
-//          "The  node reported unhealthy " + threshold + " number of times consecutively.");
+        if(!config.getBoolean(HConstants.HEALTH_DIRECT_CHECK, false)) getStopper().stop(
+          "The  node reported unhealthy " + threshold + " number of times consecutively.");
       }
-      // Always log health report.
-      LOG.info("Health status at " + StringUtils.formatTime(System.currentTimeMillis()) + " : "
-          + report.getHealthReport());
-
     }
+    // Always log health report.
+    LOG.info("Health status at " + StringUtils.formatTime(System.currentTimeMillis()) + " : "
+            + report.getHealthReport());
   }
 
   private boolean decideToStop() {
@@ -122,10 +123,12 @@ public class HealthCheckChore extends ScheduledChore {
 
   @Override
   public void cancel(boolean mayInterruptIfRunning) {
-    this.rs.setDirectHealthCheckFailedRegionCount(0);
-    this.rs.setDirectHealthCheckSelectedRegionCount(0);
-    this.rs.setDirectHealthCheckFailedRatio(0);
-    this.rs.setDirectHealthCheckNumUnhealthy(0);
+    if(rs != null){
+      this.rs.setDirectHealthCheckFailedRegionCount(0);
+      this.rs.setDirectHealthCheckSelectedRegionCount(0);
+      this.rs.setDirectHealthCheckFailedRatio(0);
+      this.rs.setDirectHealthCheckNumUnhealthy(0);
+    }
     super.cancel(mayInterruptIfRunning);
   }
 

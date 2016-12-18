@@ -26,7 +26,6 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.SequenceInputStream;
 import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -38,6 +37,7 @@ import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -48,9 +48,8 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
@@ -60,13 +59,15 @@ import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.protobuf.generated.HBaseProtos.BytesBytesPair;
 import org.apache.hadoop.hbase.protobuf.generated.HFileProtos;
+import org.apache.hadoop.hbase.regionserver.CellSink;
+import org.apache.hadoop.hbase.regionserver.ShipperListener;
 import org.apache.hadoop.hbase.util.BloomFilterWriter;
-import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ChecksumType;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.io.Writable;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
 /**
@@ -233,12 +234,12 @@ public class HFile {
   }
 
   /** API required to write an {@link HFile} */
-  public interface Writer extends Closeable {
+  public interface Writer extends Closeable, CellSink, ShipperListener {
+    /** Max memstore (mvcc) timestamp in FileInfo */
+    public static final byte [] MAX_MEMSTORE_TS_KEY = Bytes.toBytes("MAX_MEMSTORE_TS_KEY");
 
     /** Add an element to the file info map. */
     void appendFileInfo(byte[] key, byte[] value) throws IOException;
-
-    void append(Cell cell) throws IOException;
 
     /** @return the path to this {@link HFile} */
     Path getPath();
@@ -285,7 +286,8 @@ public class HFile {
     protected FileSystem fs;
     protected Path path;
     protected FSDataOutputStream ostream;
-    protected KVComparator comparator = KeyValue.COMPARATOR;
+    protected CellComparator comparator = 
+        CellComparator.COMPARATOR;
     protected InetSocketAddress[] favoredNodes;
     private HFileContext fileContext;
     protected boolean shouldDropBehind = false;
@@ -309,7 +311,7 @@ public class HFile {
       return this;
     }
 
-    public WriterFactory withComparator(KVComparator comparator) {
+    public WriterFactory withComparator(CellComparator comparator) {
       Preconditions.checkNotNull(comparator);
       this.comparator = comparator;
       return this;
@@ -338,7 +340,7 @@ public class HFile {
             "filesystem/path or path");
       }
       if (path != null) {
-        ostream = AbstractHFileWriter.createOutputStream(conf, fs, path, favoredNodes);
+        ostream = HFileWriterImpl.createOutputStream(conf, fs, path, favoredNodes);
         try {
           ostream.setDropBehind(shouldDropBehind && cacheConf.shouldDropBehindCompaction());
         } catch (UnsupportedOperationException uoe) {
@@ -350,7 +352,7 @@ public class HFile {
     }
 
     protected abstract Writer createWriter(FileSystem fs, Path path, FSDataOutputStream ostream,
-        KVComparator comparator, HFileContext fileContext) throws IOException;
+        CellComparator comparator, HFileContext fileContext) throws IOException;
   }
 
   /** The configuration key for HFile version to use for new files */
@@ -382,9 +384,12 @@ public class HFile {
     int version = getFormatVersion(conf);
     switch (version) {
     case 2:
-      return new HFileWriterV2.WriterFactoryV2(conf, cacheConf);
+      throw new IllegalArgumentException("This should never happen. " +
+        "Did you change hfile.format.version to read v2? This version of the software writes v3" +
+        " hfiles only (but it can read v2 files without having to update hfile.format.version " +
+        "in hbase-site.xml)");
     case 3:
-      return new HFileWriterV3.WriterFactoryV3(conf, cacheConf);
+      return new HFileWriterFactory(conf, cacheConf);
     default:
       throw new IllegalArgumentException("Cannot create writer for HFile " +
           "format version " + version);
@@ -419,6 +424,12 @@ public class HFile {
         final boolean updateCacheMetrics, BlockType expectedBlockType,
         DataBlockEncoding expectedDataBlockEncoding)
         throws IOException;
+
+    /**
+     * Return the given block back to the cache, if it was obtained from cache.
+     * @param block Block to be returned.
+     */
+    void returnBlock(HFileBlock block);
   }
 
   /** An interface used by clients to open and iterate an {@link HFile}. */
@@ -430,23 +441,23 @@ public class HFile {
      */
     String getName();
 
-    KVComparator getComparator();
+    CellComparator getComparator();
 
     HFileScanner getScanner(boolean cacheBlocks, final boolean pread, final boolean isCompaction);
 
-    ByteBuffer getMetaBlock(String metaBlockName, boolean cacheBlock) throws IOException;
+    HFileBlock getMetaBlock(String metaBlockName, boolean cacheBlock) throws IOException;
 
     Map<byte[], byte[]> loadFileInfo() throws IOException;
 
-    byte[] getLastKey();
+    Cell getLastKey();
 
-    byte[] midkey() throws IOException;
+    Cell midkey() throws IOException;
 
     long length();
 
     long getEntries();
 
-    byte[] getFirstKey();
+    Cell getFirstKey();
 
     long indexSize();
 
@@ -489,6 +500,18 @@ public class HFile {
      * Return the file context of the HFile this reader belongs to
      */
     HFileContext getFileContext();
+
+    boolean shouldIncludeMemstoreTS();
+
+    boolean isDecodeMemstoreTS();
+
+    DataBlockEncoding getEffectiveEncodingInCache(boolean isCompaction);
+
+    @VisibleForTesting
+    HFileBlock.FSReader getUncachedBlockReader();
+
+    @VisibleForTesting
+    boolean prefetchComplete();
   }
 
   /**
@@ -512,9 +535,10 @@ public class HFile {
       trailer = FixedFileTrailer.readFromStream(fsdis.getStream(isHBaseChecksum), size);
       switch (trailer.getMajorVersion()) {
       case 2:
-        return new HFileReaderV2(path, trailer, fsdis, size, cacheConf, hfs, conf);
+        LOG.debug("Opening HFile v2 with v3 reader");
+        // Fall through.
       case 3 :
-        return new HFileReaderV3(path, trailer, fsdis, size, cacheConf, hfs, conf);
+        return new HFileReaderImpl(path, trailer, fsdis, size, cacheConf, hfs, conf);
       default:
         throw new IllegalArgumentException("Invalid HFile version " + trailer.getMajorVersion());
       }
@@ -538,6 +562,7 @@ public class HFile {
    * @return A version specific Hfile Reader
    * @throws IOException If file is invalid, will throw CorruptHFileException flavored IOException
    */
+  @SuppressWarnings("resource")
   public static Reader createReader(FileSystem fs, Path path,
       FSDataInputStreamWrapper fsdis, long size, CacheConfig cacheConf, Configuration conf)
       throws IOException {
@@ -902,6 +927,18 @@ public class HFile {
       throw new IllegalArgumentException("Invalid HFile version: " + version
           + " (expected to be " + "between " + MIN_FORMAT_VERSION + " and "
           + MAX_FORMAT_VERSION + ")");
+    }
+  }
+
+
+  public static void checkHFileVersion(final Configuration c) {
+    int version = c.getInt(FORMAT_VERSION_KEY, MAX_FORMAT_VERSION);
+    if (version < MAX_FORMAT_VERSION || version > MAX_FORMAT_VERSION) {
+      throw new IllegalArgumentException("The setting for " + FORMAT_VERSION_KEY +
+        " (in your hbase-*.xml files) is " + version + " which does not match " +
+        MAX_FORMAT_VERSION +
+        "; are you running with a configuration from an older or newer hbase install (an " +
+        "incompatible hbase-default.xml or hbase-site.xml on your CLASSPATH)?");
     }
   }
 

@@ -54,6 +54,7 @@ public abstract class RegionServerCallable<T> implements RetryingCallable<T> {
   protected final byte[] row;
   protected HRegionLocation location;
   private ClientService.BlockingInterface stub;
+  private ClientService.Interface asyncStub;
 
   protected final static int MIN_WAIT_DEAD_SERVER = 10000;
 
@@ -84,6 +85,7 @@ public abstract class RegionServerCallable<T> implements RetryingCallable<T> {
         ", row=" + Bytes.toString(row) + ", reload=" + reload);
     }
     setStub(getConnection().getClient(this.location.getServerName()));
+    setAsyncStub(getConnection().getAsyncClient(this.location.getServerName()));
   }
 
   /**
@@ -99,6 +101,14 @@ public abstract class RegionServerCallable<T> implements RetryingCallable<T> {
 
   void setStub(final ClientService.BlockingInterface stub) {
     this.stub = stub;
+  }
+
+  protected ClientService.Interface getAsyncStub() {
+    return this.asyncStub;
+  }
+
+  void setAsyncStub(final ClientService.Interface asyncStub) {
+    this.asyncStub = asyncStub;
   }
 
   protected HRegionLocation getLocation() {

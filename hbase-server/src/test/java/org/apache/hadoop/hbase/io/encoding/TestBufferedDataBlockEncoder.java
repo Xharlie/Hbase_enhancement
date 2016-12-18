@@ -17,18 +17,49 @@
 package org.apache.hadoop.hbase.io.encoding;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
+import java.nio.ByteBuffer;
+
+import static org.junit.Assert.assertFalse;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import org.apache.hadoop.hbase.codec.KeyValueCodecWithTags;
+import org.apache.hadoop.hbase.io.encoding.BufferedDataBlockEncoder.OffheapDecodedCell;
+import org.apache.hadoop.hbase.io.encoding.BufferedDataBlockEncoder.OnheapDecodedCell;
+import org.apache.hadoop.hbase.codec.Codec.Decoder;
+import org.apache.hadoop.hbase.codec.Codec.Encoder;
+import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.KeyValue.Type;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.ObjectIntPair;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 @Category(MediumTests.class)
 public class TestBufferedDataBlockEncoder {
 
+  byte[] row1 = Bytes.toBytes("row1");
+  byte[] row2 = Bytes.toBytes("row2");
+  byte[] row_1_0 = Bytes.toBytes("row10");
+
+  byte[] fam1 = Bytes.toBytes("fam1");
+  byte[] fam2 = Bytes.toBytes("fam2");
+  byte[] fam_1_2 = Bytes.toBytes("fam12");
+
+  byte[] qual1 = Bytes.toBytes("qual1");
+  byte[] qual2 = Bytes.toBytes("qual2");
+
+  byte[] val = Bytes.toBytes("val");
+
   @Test
   public void testEnsureSpaceForKey() {
-    BufferedDataBlockEncoder.SeekerState state =
-        new BufferedDataBlockEncoder.SeekerState(false);
+    BufferedDataBlockEncoder.SeekerState state = new BufferedDataBlockEncoder.SeekerState(
+      new ObjectIntPair<ByteBuffer>(), false);
     for (int i = 1; i <= 65536; ++i) {
       state.keyLength = i;
       state.ensureSpaceForKey();
@@ -40,4 +71,63 @@ public class TestBufferedDataBlockEncoder {
     }
   }
 
+  @Test
+  public void testCommonPrefixComparators() {
+    KeyValue kv1 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
+    KeyValue kv2 = new KeyValue(row1, fam_1_2, qual1, 1l, Type.Maximum);
+    assertTrue((BufferedDataBlockEncoder.compareCommonFamilyPrefix(kv1, kv2, 4) < 0));
+
+    kv1 = new KeyValue(row1, fam1, qual1, 1l, Type.Put);
+    kv2 = new KeyValue(row_1_0, fam_1_2, qual1, 1l, Type.Maximum);
+    assertTrue((BufferedDataBlockEncoder.compareCommonRowPrefix(kv1, kv2, 4) < 0));
+
+    kv1 = new KeyValue(row1, fam1, qual2, 1l, Type.Put);
+    kv2 = new KeyValue(row1, fam1, qual1, 1l, Type.Maximum);
+    assertTrue((BufferedDataBlockEncoder.compareCommonQualifierPrefix(kv1, kv2, 4) > 0));
+  }
+
+  @Test
+  public void testKVCodecWithTagsForDecodedCellsWithNoTags() throws Exception {
+    KeyValue kv1 = new KeyValue(Bytes.toBytes("r"), Bytes.toBytes("f"), Bytes.toBytes("1"),
+        HConstants.LATEST_TIMESTAMP, Bytes.toBytes("1"));
+    // kv1.getKey() return a copy of the Key bytes which starts from RK_length. Means from offsets,
+    // we need to reduce the KL and VL parts.
+    OnheapDecodedCell c1 = new OnheapDecodedCell(kv1.getKey(), kv1.getRowLength(),
+        kv1.getFamilyOffset() - KeyValue.ROW_OFFSET, kv1.getFamilyLength(),
+        kv1.getQualifierOffset() - KeyValue.ROW_OFFSET, kv1.getQualifierLength(),
+        kv1.getTimestamp(), kv1.getTypeByte(), kv1.getValueArray(), kv1.getValueOffset(),
+        kv1.getValueLength(), kv1.getSequenceId(), kv1.getTagsArray(), kv1.getTagsOffset(),
+        kv1.getTagsLength());
+    KeyValue kv2 = new KeyValue(Bytes.toBytes("r2"), Bytes.toBytes("f"), Bytes.toBytes("2"),
+        HConstants.LATEST_TIMESTAMP, Bytes.toBytes("2"));
+    OnheapDecodedCell c2 = new OnheapDecodedCell(kv2.getKey(), kv2.getRowLength(),
+        kv2.getFamilyOffset() - KeyValue.ROW_OFFSET, kv2.getFamilyLength(),
+        kv2.getQualifierOffset() - KeyValue.ROW_OFFSET, kv2.getQualifierLength(),
+        kv2.getTimestamp(), kv2.getTypeByte(), kv2.getValueArray(), kv2.getValueOffset(),
+        kv2.getValueLength(), kv2.getSequenceId(), kv2.getTagsArray(), kv2.getTagsOffset(),
+        kv2.getTagsLength());
+    KeyValue kv3 = new KeyValue(Bytes.toBytes("r3"), Bytes.toBytes("cf"), Bytes.toBytes("qual"),
+        HConstants.LATEST_TIMESTAMP, Bytes.toBytes("3"));
+    OffheapDecodedCell c3 = new OffheapDecodedCell(ByteBuffer.wrap(kv2.getKey()),
+        kv2.getRowLength(), kv2.getFamilyOffset() - KeyValue.ROW_OFFSET, kv2.getFamilyLength(),
+        kv2.getQualifierOffset() - KeyValue.ROW_OFFSET, kv2.getQualifierLength(),
+        kv2.getTimestamp(), kv2.getTypeByte(), ByteBuffer.wrap(kv2.getValueArray()),
+        kv2.getValueOffset(), kv2.getValueLength(), kv2.getSequenceId(),
+        ByteBuffer.wrap(kv2.getTagsArray()), kv2.getTagsOffset(), kv2.getTagsLength());
+    ByteArrayOutputStream os = new ByteArrayOutputStream();
+    KeyValueCodecWithTags codec = new KeyValueCodecWithTags();
+    Encoder encoder = codec.getEncoder(os);
+    encoder.write(c1);
+    encoder.write(c2);
+    encoder.write(c3);
+    ByteArrayInputStream is = new ByteArrayInputStream(os.toByteArray());
+    Decoder decoder = codec.getDecoder(is);
+    assertTrue(decoder.advance());
+    assertTrue(CellUtil.equals(c1, decoder.current()));
+    assertTrue(decoder.advance());
+    assertTrue(CellUtil.equals(c2, decoder.current()));
+    assertTrue(decoder.advance());
+    assertTrue(CellUtil.equals(c3, decoder.current()));
+    assertFalse(decoder.advance());
+  }
 }

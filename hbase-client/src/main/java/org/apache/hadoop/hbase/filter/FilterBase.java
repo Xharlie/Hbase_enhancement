@@ -26,7 +26,6 @@ import java.util.List;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
 
 /**
  * Abstract base class to help you implement new Filters.  Common "ignore" or NOOP type
@@ -54,10 +53,18 @@ public abstract class FilterBase extends Filter {
    * never filters anything. (ie: returns false).
    *
    * @inheritDoc
+   * @deprecated As of release 2.0.0, this will be removed in HBase 3.0.0.
+   *             Instead use {@link #filterRowKey(Cell)}
    */
   @Override
+  @Deprecated
   public boolean filterRowKey(byte[] buffer, int offset, int length) throws IOException {
     return false;
+  }
+
+  @Override
+  public boolean filterRowKey(Cell cell) throws IOException {
+    return filterRowKey(cell.getRowArray(), cell.getRowOffset(), cell.getRowLength());
   }
 
   /**
@@ -78,20 +85,7 @@ public abstract class FilterBase extends Filter {
    */
   @Override
   public Cell transformCell(Cell v) throws IOException {
-    // Old filters based off of this class will override KeyValue transform(KeyValue).
-    // Thus to maintain compatibility we need to call the old version.
-    return transform(KeyValueUtil.ensureKeyValue(v));
-  }
-
-  /**
-   * WARNING: please to not override this method.  Instead override {@link #transformCell(Cell)}.
-   *
-   * This is for transition from 0.94 -> 0.96
-   */
-  @Override
-  @Deprecated
-  public KeyValue transform(KeyValue currentKV) throws IOException {
-    return currentKV;
+    return v;
   }
 
   /**
@@ -128,24 +122,13 @@ public abstract class FilterBase extends Filter {
   }
 
   /**
-   * This method is deprecated and you should override Cell getNextKeyHint(Cell) instead.
-   */
-  @Override
-  @Deprecated
-  public KeyValue getNextKeyHint(KeyValue currentKV) throws IOException {
-    return null;
-  }
-  
-  /**
    * Filters that are not sure which key must be next seeked to, can inherit
    * this implementation that, by default, returns a null Cell.
    *
    * @inheritDoc
    */
-  public Cell getNextCellHint(Cell currentKV) throws IOException {
-    // Old filters based off of this class will override KeyValue getNextKeyHint(KeyValue).
-    // Thus to maintain compatibility we need to call the old version.
-    return getNextKeyHint(KeyValueUtil.ensureKeyValue(currentKV));
+  public Cell getNextCellHint(Cell currentCell) throws IOException {
+    return null;
   }
 
   /**
@@ -191,5 +174,25 @@ public abstract class FilterBase extends Filter {
    */
   boolean areSerializedFieldsEqual(Filter other) {
     return true;
+  }
+
+  /**
+   * WARNING: please to not override this method. Instead override {@link #transformCell(Cell)}.
+   * <p/>
+   * This is for transition from 0.94 -> 0.96
+   */
+  @Override
+  @Deprecated
+  public KeyValue transform(KeyValue currentKV) throws IOException {
+    return currentKV;
+  }
+
+  /**
+   * This method is deprecated and you should override Cell getNextKeyHint(Cell) instead.
+   */
+  @Override
+  @Deprecated
+  public KeyValue getNextKeyHint(KeyValue currentKV) throws IOException {
+    return null;
   }
 }

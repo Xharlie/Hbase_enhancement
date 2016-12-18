@@ -18,6 +18,9 @@
 
 package org.apache.hadoop.hbase.codec.prefixtree.decode;
 
+
+import java.nio.ByteBuffer;
+import org.apache.hadoop.hbase.ByteBufferedCell;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
@@ -25,14 +28,21 @@ import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.SettableSequenceId;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.util.ByteBufferUtils;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.ObjectIntPair;
 
 /**
- * As the PrefixTreeArrayScanner moves through the tree bytes, it changes the values in the fields
- * of this class so that Cell logic can be applied, but without allocating new memory for every Cell
- * iterated through.
+ * As the PrefixTreeArrayScanner moves through the tree bytes, it changes the
+ * values in the fields of this class so that Cell logic can be applied, but
+ * without allocating new memory for every Cell iterated through.
  */
 @InterfaceAudience.Private
-public class PrefixTreeCell implements Cell, SettableSequenceId, Comparable<Cell> {
+public class PrefixTreeCell extends ByteBufferedCell implements SettableSequenceId,
+    Comparable<Cell> {
+  // Create a reference here? Can be removed too
+  protected CellComparator comparator = CellComparator.COMPARATOR;
 
   /********************** static **********************/
 
@@ -43,13 +53,15 @@ public class PrefixTreeCell implements Cell, SettableSequenceId, Comparable<Cell
     }
   }
 
-  //Same as KeyValue constructor.  Only used to avoid NPE's when full cell hasn't been initialized.
+  // Same as KeyValue constructor. Only used to avoid NPE's when full cell
+  // hasn't been initialized.
   public static final KeyValue.Type DEFAULT_TYPE = KeyValue.Type.Put;
 
   /******************** fields ************************/
 
-  protected byte[] block;
-  //we could also avoid setting the mvccVersion in the scanner/searcher, but this is simpler
+  protected ByteBuff block;
+  // we could also avoid setting the mvccVersion in the scanner/searcher, but
+  // this is simpler
   protected boolean includeMvccVersion;
 
   protected byte[] rowBuffer;
@@ -74,11 +86,14 @@ public class PrefixTreeCell implements Cell, SettableSequenceId, Comparable<Cell
   protected byte[] tagsBuffer;
   protected int tagsOffset;
   protected int tagsLength;
+  // Pair to set the value ByteBuffer and its offset
+  protected ObjectIntPair<ByteBuffer> pair = new ObjectIntPair<ByteBuffer>();
 
   /********************** Cell methods ******************/
 
   /**
-   * For debugging.  Currently creates new KeyValue to utilize its toString() method.
+   * For debugging. Currently creates new KeyValue to utilize its toString()
+   * method.
    */
   @Override
   public String toString() {
@@ -90,20 +105,36 @@ public class PrefixTreeCell implements Cell, SettableSequenceId, Comparable<Cell
     if (!(obj instanceof Cell)) {
       return false;
     }
-    //Temporary hack to maintain backwards compatibility with KeyValue.equals
-    return CellComparator.equalsIgnoreMvccVersion(this, (Cell)obj);
+    // Temporary hack to maintain backwards compatibility with KeyValue.equals
+    return CellUtil.equalsIgnoreMvccVersion(this, (Cell) obj);
 
-    //TODO return CellComparator.equals(this, (Cell)obj);//see HBASE-6907
+    // TODO return CellComparator.equals(this, (Cell)obj);//see HBASE-6907
   }
 
   @Override
   public int hashCode() {
-    return CellComparator.hashCodeIgnoreMvcc(this);
+    return calculateHashForKey(this);
+  }
+
+  private int calculateHashForKey(Cell cell) {
+    // pre-calculate the 3 hashes made of byte ranges
+    int rowHash = Bytes.hashCode(cell.getRowArray(), cell.getRowOffset(), cell.getRowLength());
+    int familyHash = Bytes.hashCode(cell.getFamilyArray(), cell.getFamilyOffset(),
+        cell.getFamilyLength());
+    int qualifierHash = Bytes.hashCode(cell.getQualifierArray(), cell.getQualifierOffset(),
+        cell.getQualifierLength());
+
+    // combine the 6 sub-hashes
+    int hash = 31 * rowHash + familyHash;
+    hash = 31 * hash + qualifierHash;
+    hash = 31 * hash + (int) cell.getTimestamp();
+    hash = 31 * hash + cell.getTypeByte();
+    return hash;
   }
 
   @Override
   public int compareTo(Cell other) {
-    return CellComparator.compare(this, other, false);
+    return comparator.compare(this, other);
   }
 
   @Override
@@ -112,16 +143,11 @@ public class PrefixTreeCell implements Cell, SettableSequenceId, Comparable<Cell
   }
 
   @Override
-  public long getMvccVersion() {
+  public long getSequenceId() {
     if (!includeMvccVersion) {
       return 0L;
     }
     return mvccVersion;
-  }
-
-  @Override
-  public long getSequenceId() {
-    return getMvccVersion();
   }
 
   @Override
@@ -176,12 +202,24 @@ public class PrefixTreeCell implements Cell, SettableSequenceId, Comparable<Cell
 
   @Override
   public byte[] getValueArray() {
-    return block;
+    if (this.pair.getFirst().hasArray()) {
+      return this.pair.getFirst().array();
+    } else {
+      // Just in case getValueArray is called on offheap BB
+      byte[] val = new byte[valueLength];
+      ByteBufferUtils.copyFromBufferToArray(val, this.pair.getFirst(), this.pair.getSecond(), 0,
+        valueLength);
+      return val;
+    }
   }
 
   @Override
   public int getValueOffset() {
-    return absoluteValueOffset;
+    if (this.pair.getFirst().hasArray()) {
+      return this.pair.getSecond() + this.pair.getFirst().arrayOffset();
+    } else {
+      return 0;
+    }
   }
 
   @Override
@@ -189,33 +227,13 @@ public class PrefixTreeCell implements Cell, SettableSequenceId, Comparable<Cell
     return type.getCode();
   }
 
-  /* Deprecated methods pushed into the Cell interface */
-  @Override
-  public byte[] getValue() {
-    return CellUtil.cloneValue(this);
-  }
-
-  @Override
-  public byte[] getFamily() {
-    return CellUtil.cloneFamily(this);
-  }
-
-  @Override
-  public byte[] getQualifier() {
-    return CellUtil.cloneQualifier(this);
-  }
-
-  @Override
-  public byte[] getRow() {
-    return CellUtil.cloneRow(this);
-  }
-
   /************************* helper methods *************************/
 
   /**
-   * Need this separate method so we can call it from subclasses' toString() methods
+   * Need this separate method so we can call it from subclasses' toString()
+   * methods
    */
-  protected String getKeyValueString(){
+  protected String getKeyValueString() {
     KeyValue kv = KeyValueUtil.copyToNewKeyValue(this);
     return kv.toString();
   }
@@ -238,5 +256,75 @@ public class PrefixTreeCell implements Cell, SettableSequenceId, Comparable<Cell
   @Override
   public void setSequenceId(long seqId) {
     mvccVersion = seqId;
+  }
+
+  @Override
+  public ByteBuffer getRowByteBuffer() {
+    return ByteBuffer.wrap(rowBuffer);
+  }
+
+  @Override
+  public int getRowPosition() {
+    return 0;
+  }
+
+  @Override
+  public ByteBuffer getFamilyByteBuffer() {
+    return ByteBuffer.wrap(familyBuffer);
+  }
+
+  @Override
+  public int getFamilyPosition() {
+    return getFamilyOffset();
+  }
+
+  @Override
+  public ByteBuffer getQualifierByteBuffer() {
+    return ByteBuffer.wrap(qualifierBuffer);
+  }
+
+  @Override
+  public int getQualifierPosition() {
+    return getQualifierOffset();
+  }
+
+  @Override
+  public ByteBuffer getValueByteBuffer() {
+    return pair.getFirst();
+  }
+
+  @Override
+  public int getValuePosition() {
+    return pair.getSecond();
+  }
+
+  @Override
+  public ByteBuffer getTagsByteBuffer() {
+    return ByteBuffer.wrap(tagsBuffer);
+  }
+
+  @Override
+  public int getTagsPosition() {
+    return getTagsOffset();
+  }
+
+  @Override
+  public byte[] getFamily() {
+	return CellUtil.cloneFamily(this);
+  }
+
+  @Override
+  public byte[] getQualifier() {
+	return CellUtil.cloneQualifier(this);
+  }
+
+  @Override
+  public byte[] getRow() {
+	return CellUtil.cloneRow(this);
+  }
+
+  @Override
+  public byte[] getValue() {
+	return CellUtil.cloneValue(this);
   }
 }

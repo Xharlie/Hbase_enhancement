@@ -21,22 +21,42 @@ import static org.junit.Assert.assertEquals;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.hfile.HFileContext;
 import org.apache.hadoop.hbase.io.hfile.HFileContextBuilder;
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameters;
+
 @Category(SmallTests.class)
+@RunWith(Parameterized.class)
 public class TestSeekToBlockWithEncoders {
+
+  private final boolean useOffheapData;
+
+  @Parameters
+  public static Collection<Object[]> parameters() {
+    return HBaseTestingUtility.BOOLEAN_PARAMETERIZED;
+  }
+
+  public TestSeekToBlockWithEncoders(boolean useOffheapData) {
+    this.useOffheapData = useOffheapData;
+  }
 
   /**
    * Test seeking while file is encoded.
@@ -136,8 +156,7 @@ public class TestSeekToBlockWithEncoders {
     KeyValue kv4 = new KeyValue(Bytes.toBytes("row11baa"), Bytes.toBytes("f1"),
         Bytes.toBytes("q1"), Bytes.toBytes("val"));
     sampleKv.add(kv4);
-    KeyValue toSeek = KeyValueUtil.createLastOnRow(kv3.getRowArray(), kv3.getRowOffset(),
-        kv3.getRowLength(), null, 0, 0, null, 0, 0);
+    Cell toSeek = CellUtil.createLastOnRow(kv3);
     seekToTheKey(kv3, sampleKv, toSeek);
   }
 
@@ -250,7 +269,7 @@ public class TestSeekToBlockWithEncoders {
     seekToTheKey(kv5, sampleKv, toSeek);
   }
 
-  private void seekToTheKey(KeyValue expected, List<KeyValue> kvs, KeyValue toSeek)
+  private void seekToTheKey(KeyValue expected, List<KeyValue> kvs, Cell toSeek)
       throws IOException {
     // create all seekers
     List<DataBlockEncoder.EncodedSeeker> encodedSeekers = new ArrayList<DataBlockEncoder.EncodedSeeker>();
@@ -266,10 +285,10 @@ public class TestSeekToBlockWithEncoders {
       HFileBlockEncodingContext encodingContext = encoder.newDataBlockEncodingContext(encoding,
           HConstants.HFILEBLOCK_DUMMY_HEADER, meta);
       ByteBuffer encodedBuffer = TestDataBlockEncoders.encodeKeyValues(encoding, kvs,
-          encodingContext);
-      DataBlockEncoder.EncodedSeeker seeker = encoder.createSeeker(KeyValue.COMPARATOR,
+          encodingContext, this.useOffheapData);
+      DataBlockEncoder.EncodedSeeker seeker = encoder.createSeeker(CellComparator.COMPARATOR,
           encoder.newDataBlockDecodingContext(meta));
-      seeker.setCurrentBuffer(encodedBuffer);
+      seeker.setCurrentBuffer(new SingleByteBuff(encodedBuffer));
       encodedSeekers.add(seeker);
     }
     // test it!
@@ -278,12 +297,10 @@ public class TestSeekToBlockWithEncoders {
   }
 
   private void checkSeekingConsistency(List<DataBlockEncoder.EncodedSeeker> encodedSeekers,
-      KeyValue keyValue, KeyValue expected) {
+      Cell keyValue, KeyValue expected) {
     for (DataBlockEncoder.EncodedSeeker seeker : encodedSeekers) {
-      seeker.seekToKeyInBlock(
-          new KeyValue.KeyOnlyKeyValue(keyValue.getBuffer(), keyValue.getKeyOffset(), keyValue
-              .getKeyLength()), false);
-      Cell keyValue2 = seeker.getKeyValue();
+      seeker.seekToKeyInBlock(keyValue, false);
+      Cell keyValue2 = seeker.getCell();
       assertEquals(expected, keyValue2);
       seeker.rewind();
     }

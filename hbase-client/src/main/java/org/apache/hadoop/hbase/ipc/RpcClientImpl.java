@@ -23,6 +23,8 @@ import com.google.protobuf.Descriptors.MethodDescriptor;
 import com.google.protobuf.Message;
 import com.google.protobuf.Message.Builder;
 import com.google.protobuf.RpcCallback;
+import com.google.protobuf.RpcChannel;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
@@ -67,6 +69,7 @@ import org.apache.htrace.TraceScope;
 
 import javax.net.SocketFactory;
 import javax.security.sasl.SaslException;
+
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.Closeable;
@@ -1317,5 +1320,16 @@ public class RpcClientImpl extends AbstractRpcClient {
     }
 
     return connection;
+  }
+
+  @Override
+  public RpcChannel createRpcChannel(ServerName sn, User user, int rpcTimeout) throws IOException {
+    throw new IOException(
+        "Non-blocking rpc not supported in RpcClientImpl, please use AsyncRpcClient instead");
+  }
+
+  @Override
+  public boolean supportsNonBlockingInterface() {
+    return false;
   }
 }

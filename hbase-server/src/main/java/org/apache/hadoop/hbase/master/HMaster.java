@@ -88,6 +88,7 @@ import org.apache.hadoop.hbase.master.balancer.BalancerChore;
 import org.apache.hadoop.hbase.master.balancer.BaseLoadBalancer;
 import org.apache.hadoop.hbase.master.balancer.ClusterStatusChore;
 import org.apache.hadoop.hbase.master.balancer.LoadBalancerFactory;
+import org.apache.hadoop.hbase.master.balancer.SimpleLoadBalancer;
 import org.apache.hadoop.hbase.master.cleaner.HFileCleaner;
 import org.apache.hadoop.hbase.master.cleaner.LogCleaner;
 import org.apache.hadoop.hbase.master.handler.CreateTableHandler;
@@ -1312,12 +1313,24 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
         }
       }
 
+      boolean isSimpleLoadBalancer = this.balancer instanceof SimpleLoadBalancer;
+      boolean simpleLoadBalancerOverall = (isSimpleLoadBalancer &&
+              this.getConfiguration().getBoolean("hbase.master.loadbalance.bytableOverall", false));
+
       Map<TableName, Map<ServerName, List<HRegionInfo>>> assignmentsByTable =
-        this.assignmentManager.getRegionStates().getAssignmentsByTable();
+        this.assignmentManager.getRegionStates().getAssignmentsByTable(simpleLoadBalancerOverall,false);
 
       List<RegionPlan> plans = new ArrayList<RegionPlan>();
       //Give the balancer the current cluster state.
       this.balancer.setClusterStatus(getClusterStatus());
+      if (simpleLoadBalancerOverall){
+        LOG.debug("Preparing simpleLoadBalancerOverall");
+        ((SimpleLoadBalancer)this.balancer).setClusterLoad(
+                this.assignmentManager.getRegionStates().getAssignmentsByTable(simpleLoadBalancerOverall,true));
+        ((SimpleLoadBalancer)this.balancer).setBalanceOverall(true);
+      } else if (isSimpleLoadBalancer){
+        ((SimpleLoadBalancer)this.balancer).setBalanceOverall(false);
+      }
       for (Map<ServerName, List<HRegionInfo>> assignments : assignmentsByTable.values()) {
         List<RegionPlan> partialPlans = this.balancer.balanceCluster(assignments);
         if (partialPlans != null) plans.addAll(partialPlans);

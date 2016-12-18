@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -47,15 +46,22 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.compress.Compression.Algorithm;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
+import org.apache.hadoop.hbase.io.hfile.Cacheable.MemoryType;
+import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.nio.MultiByteBuff;
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ChecksumType;
 import org.apache.hadoop.hbase.util.ClassSize;
@@ -129,7 +135,7 @@ public class TestHFileBlock {
 
       // generate it or repeat, it should compress well
       if (0 < i && randomizer.nextFloat() < CHANCE_TO_REPEAT) {
-        row = keyValues.get(randomizer.nextInt(keyValues.size())).getRow();
+        row = CellUtil.cloneRow(keyValues.get(randomizer.nextInt(keyValues.size())));
       } else {
         row = new byte[FIELD_LENGTH];
         randomizer.nextBytes(row);
@@ -138,17 +144,16 @@ public class TestHFileBlock {
         family = new byte[FIELD_LENGTH];
         randomizer.nextBytes(family);
       } else {
-        family = keyValues.get(0).getFamily();
+        family = CellUtil.cloneFamily(keyValues.get(0));
       }
       if (0 < i && randomizer.nextFloat() < CHANCE_TO_REPEAT) {
-        qualifier = keyValues.get(
-            randomizer.nextInt(keyValues.size())).getQualifier();
+        qualifier = CellUtil.cloneQualifier(keyValues.get(randomizer.nextInt(keyValues.size())));
       } else {
         qualifier = new byte[FIELD_LENGTH];
         randomizer.nextBytes(qualifier);
       }
       if (0 < i && randomizer.nextFloat() < CHANCE_TO_REPEAT) {
-        value = keyValues.get(randomizer.nextInt(keyValues.size())).getValue();
+        value = CellUtil.cloneValue(keyValues.get(randomizer.nextInt(keyValues.size())));
       } else {
         value = new byte[FIELD_LENGTH];
         randomizer.nextBytes(value);
@@ -162,14 +167,14 @@ public class TestHFileBlock {
       if (!useTag) {
         keyValues.add(new KeyValue(row, family, qualifier, timestamp, value));
       } else {
-        keyValues.add(new KeyValue(row, family, qualifier, timestamp, value, new Tag[] { new Tag(
-            (byte) 1, Bytes.toBytes("myTagVal")) }));
+        keyValues.add(new KeyValue(row, family, qualifier, timestamp, value,
+            new Tag[] { new ArrayBackedTag((byte) 1, Bytes.toBytes("myTagVal")) }));
       }
     }
 
     // sort it and write to stream
     int totalSize = 0;
-    Collections.sort(keyValues, KeyValue.COMPARATOR);
+    Collections.sort(keyValues, CellComparator.COMPARATOR);
 
     for (KeyValue kv : keyValues) {
       totalSize += kv.getLength();
@@ -434,7 +439,7 @@ public class TestHFileBlock {
               assertTrue("Packed heapSize should be < unpacked heapSize",
                 packedHeapsize < blockUnpacked.heapSize());
             }
-            ByteBuffer actualBuffer = blockUnpacked.getBufferWithoutHeader();
+            ByteBuff actualBuffer = blockUnpacked.getBufferWithoutHeader();
             if (encoding != DataBlockEncoding.NONE) {
               // We expect a two-byte big-endian encoding id.
               assertEquals(
@@ -451,14 +456,16 @@ public class TestHFileBlock {
             expectedBuffer.rewind();
 
             // test if content matches, produce nice message
-            assertBuffersEqual(expectedBuffer, actualBuffer, algo, encoding, pread);
+            assertBuffersEqual(new SingleByteBuff(expectedBuffer), actualBuffer, algo, encoding,
+                pread);
 
             // test serialized blocks
             for (boolean reuseBuffer : new boolean[] { false, true }) {
               ByteBuffer serialized = ByteBuffer.allocate(blockFromHFile.getSerializedLength());
               blockFromHFile.serialize(serialized);
               HFileBlock deserialized =
-                (HFileBlock) blockFromHFile.getDeserializer().deserialize(serialized, reuseBuffer);
+                  (HFileBlock) blockFromHFile.getDeserializer().deserialize(
+                    new SingleByteBuff(serialized), reuseBuffer, MemoryType.EXCLUSIVE);
               assertEquals(
                 "Serialization did not preserve block state. reuseBuffer=" + reuseBuffer,
                 blockFromHFile, deserialized);
@@ -480,8 +487,8 @@ public class TestHFileBlock {
     return String.format("compression %s, encoding %s, pread %s", compression, encoding, pread);
   }
 
-  static void assertBuffersEqual(ByteBuffer expectedBuffer,
-      ByteBuffer actualBuffer, Compression.Algorithm compression,
+  static void assertBuffersEqual(ByteBuff expectedBuffer,
+      ByteBuff actualBuffer, Compression.Algorithm compression,
       DataBlockEncoding encoding, boolean pread) {
     if (!actualBuffer.equals(expectedBuffer)) {
       int prefix = 0;
@@ -503,7 +510,7 @@ public class TestHFileBlock {
    * Convert a few next bytes in the given buffer at the given position to
    * string. Used for error messages.
    */
-  private static String nextBytesToStr(ByteBuffer buf, int pos) {
+  private static String nextBytesToStr(ByteBuff buf, int pos) {
     int maxBytes = buf.limit() - pos;
     int numBytes = Math.min(16, maxBytes);
     return Bytes.toStringBinary(buf.array(), buf.arrayOffset() + pos,
@@ -592,7 +599,7 @@ public class TestHFileBlock {
               b = b.unpack(meta, hbr);
               // b's buffer has header + data + checksum while
               // expectedContents have header + data only
-              ByteBuffer bufRead = b.getBufferWithHeader();
+              ByteBuff bufRead = b.getBufferWithHeader();
               ByteBuffer bufExpected = expectedContents.get(i);
               boolean bytesAreCorrect = Bytes.compareTo(bufRead.array(),
                   bufRead.arrayOffset(),
@@ -614,7 +621,7 @@ public class TestHFileBlock {
                   bufRead.arrayOffset(), Math.min(32 + 10, bufRead.limit()));
                 if (detailedLogging) {
                   LOG.warn("expected header" +
-                           HFileBlock.toStringHeader(bufExpected) +
+                           HFileBlock.toStringHeader(new SingleByteBuff(bufExpected)) +
                            "\nfound    header" +
                            HFileBlock.toStringHeader(bufRead));
                   LOG.warn("bufread offset " + bufRead.arrayOffset() +
@@ -818,9 +825,9 @@ public class TestHFileBlock {
 
   protected void testBlockHeapSizeInternals() {
     if (ClassSize.is32BitJVM()) {
-      assertTrue(HFileBlock.BYTE_BUFFER_HEAP_SIZE == 64);
+      assertTrue(HFileBlock.MULTI_BYTE_BUFFER_HEAP_SIZE == 64);
     } else {
-      assertTrue(HFileBlock.BYTE_BUFFER_HEAP_SIZE == 80);
+      assertTrue(HFileBlock.MULTI_BYTE_BUFFER_HEAP_SIZE == 104);
     }
 
     for (int size : new int[] { 100, 256, 12345 }) {
@@ -836,9 +843,9 @@ public class TestHFileBlock {
       HFileBlock block = new HFileBlock(BlockType.DATA, size, size, -1, buf,
           HFileBlock.FILL_HEADER, -1, 
           0, meta);
-      long byteBufferExpectedSize =
-          ClassSize.align(ClassSize.estimateBase(buf.getClass(), true)
-              + HConstants.HFILEBLOCK_HEADER_SIZE + size);
+      long byteBufferExpectedSize = ClassSize.align(ClassSize.estimateBase(
+          new MultiByteBuff(buf).getClass(), true)
+          + HConstants.HFILEBLOCK_HEADER_SIZE + size);
       long hfileMetaSize =  ClassSize.align(ClassSize.estimateBase(HFileContext.class, true));
       long hfileBlockExpectedSize =
           ClassSize.align(ClassSize.estimateBase(HFileBlock.class, true));

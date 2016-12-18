@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.io.WritableUtils;
 import org.junit.Before;
@@ -193,7 +194,7 @@ public class TestByteBufferUtils {
     ByteBuffer dstBuffer = ByteBuffer.allocate(array.length);
     srcBuffer.put(array);
 
-    ByteBufferUtils.copyFromBufferToBuffer(dstBuffer, srcBuffer,
+    ByteBufferUtils.copyFromBufferToBuffer(srcBuffer, dstBuffer,
         array.length / 2, array.length / 4);
     for (int i = 0; i < array.length / 4; ++i) {
       assertEquals(srcBuffer.get(i + array.length / 2),
@@ -321,5 +322,106 @@ public class TestByteBufferUtils {
     assertArrayEquals(new byte[]{2,3,4}, copy);
     assertEquals(5, buffer.position());
     assertEquals(5, buffer.limit());
+  }
+
+  @Test
+  public void testToPrimitiveTypes() {
+    ByteBuffer buffer = ByteBuffer.allocate(15);
+    long l = 988L;
+    int i = 135;
+    short s = 7;
+    buffer.putLong(l);
+    buffer.putShort(s);
+    buffer.putInt(i);
+    assertEquals(l, ByteBufferUtils.toLong(buffer, 0));
+    assertEquals(s, ByteBufferUtils.toShort(buffer, 8));
+    assertEquals(i, ByteBufferUtils.toInt(buffer, 10));
+  }
+
+  @Test
+  public void testCopyFromArrayToBuffer() {
+    byte[] b = new byte[15];
+    b[0] = -1;
+    long l = 988L;
+    int i = 135;
+    short s = 7;
+    Bytes.putLong(b, 1, l);
+    Bytes.putShort(b, 9, s);
+    Bytes.putInt(b, 11, i);
+    ByteBuffer buffer = ByteBuffer.allocate(14);
+    ByteBufferUtils.copyFromArrayToBuffer(buffer, b, 1, 14);
+    buffer.rewind();
+    assertEquals(l, buffer.getLong());
+    assertEquals(s, buffer.getShort());
+    assertEquals(i, buffer.getInt());
+  }
+
+  @Test
+  public void testCopyFromBufferToArray() {
+    ByteBuffer buffer = ByteBuffer.allocate(15);
+    buffer.put((byte) -1);
+    long l = 988L;
+    int i = 135;
+    short s = 7;
+    buffer.putShort(s);
+    buffer.putInt(i);
+    buffer.putLong(l);
+    byte[] b = new byte[15];
+    ByteBufferUtils.copyFromBufferToArray(b, buffer, 1, 1, 14);
+    assertEquals(s, Bytes.toShort(b, 1));
+    assertEquals(i, Bytes.toInt(b, 3));
+    assertEquals(l, Bytes.toLong(b, 7));
+  }
+
+  @Test
+  public void testCompareTo() {
+    ByteBuffer bb1 = ByteBuffer.allocate(135);
+    ByteBuffer bb2 = ByteBuffer.allocate(135);
+    byte[] b = new byte[71];
+    fillBB(bb1, (byte) 5);
+    fillBB(bb2, (byte) 5);
+    fillArray(b, (byte) 5);
+    assertEquals(0, ByteBufferUtils.compareTo(bb1, 0, bb1.remaining(), bb2, 0, bb2.remaining()));
+    assertTrue(ByteBufferUtils.compareTo(bb1, 0, bb1.remaining(), b, 0, b.length) > 0);
+    bb2.put(134, (byte) 6);
+    assertTrue(ByteBufferUtils.compareTo(bb1, 0, bb1.remaining(), bb2, 0, bb2.remaining()) < 0);
+    bb2.put(6, (byte) 4);
+    assertTrue(ByteBufferUtils.compareTo(bb1, 0, bb1.remaining(), bb2, 0, bb2.remaining()) > 0);
+  }
+
+  @Test
+  public void testEquals() {
+    byte[] a = Bytes.toBytes("http://A");
+    ByteBuffer bb = ByteBuffer.wrap(a);
+
+    assertTrue(ByteBufferUtils.equals(HConstants.EMPTY_BYTE_BUFFER, 0, 0,
+      HConstants.EMPTY_BYTE_BUFFER, 0, 0));
+
+    assertFalse(ByteBufferUtils.equals(HConstants.EMPTY_BYTE_BUFFER, 0, 0, bb, 0, a.length));
+
+    assertFalse(ByteBufferUtils.equals(bb, 0, 0, HConstants.EMPTY_BYTE_BUFFER, 0, a.length));
+
+    assertTrue(ByteBufferUtils.equals(bb, 0, a.length, bb, 0, a.length));
+
+    assertTrue(ByteBufferUtils.equals(HConstants.EMPTY_BYTE_BUFFER, 0, 0,
+      HConstants.EMPTY_BYTE_ARRAY, 0, 0));
+
+    assertFalse(ByteBufferUtils.equals(HConstants.EMPTY_BYTE_BUFFER, 0, 0, a, 0, a.length));
+
+    assertFalse(ByteBufferUtils.equals(bb, 0, a.length, HConstants.EMPTY_BYTE_ARRAY, 0, 0));
+
+    assertTrue(ByteBufferUtils.equals(bb, 0, a.length, a, 0, a.length));
+  }
+
+  private static void fillBB(ByteBuffer bb, byte b) {
+    for (int i = bb.position(); i < bb.limit(); i++) {
+      bb.put(i, b);
+    }
+  }
+
+  private static void fillArray(byte[] bb, byte b) {
+    for (int i = 0; i < bb.length; i++) {
+      bb[i] = b;
+    }
   }
 }

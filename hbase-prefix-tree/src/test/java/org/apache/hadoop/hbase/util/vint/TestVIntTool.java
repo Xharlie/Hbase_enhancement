@@ -21,8 +21,10 @@ package org.apache.hadoop.hbase.util.vint;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Random;
 
+import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.junit.Assert;
 import org.junit.Test;
@@ -73,7 +75,8 @@ public class TestVIntTool {
 
   @Test
   public void testFromBytes() {
-    Assert.assertEquals(Integer.MAX_VALUE, UVIntTool.getInt(UVIntTool.MAX_VALUE_BYTES));
+    Assert.assertEquals(Integer.MAX_VALUE,
+      UVIntTool.getInt(new SingleByteBuff(ByteBuffer.wrap(UVIntTool.MAX_VALUE_BYTES)), 0));
   }
 
   @Test
@@ -82,7 +85,7 @@ public class TestVIntTool {
     for (int i = 0; i < 10000; ++i) {
       int value = random.nextInt(Integer.MAX_VALUE);
       byte[] bytes = UVIntTool.getBytes(value);
-      int roundTripped = UVIntTool.getInt(bytes);
+      int roundTripped = UVIntTool.getInt(new SingleByteBuff(ByteBuffer.wrap(bytes)), 0);
       Assert.assertEquals(value, roundTripped);
     }
   }

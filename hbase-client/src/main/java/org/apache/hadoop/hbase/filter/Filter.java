@@ -35,11 +35,11 @@ import org.apache.hadoop.hbase.exceptions.DeserializationException;
  * <ul>
  *   <li> {@link #reset()} : reset the filter state before filtering a new row. </li>
  *   <li> {@link #filterAllRemaining()}: true means row scan is over; false means keep going. </li>
- *   <li> {@link #filterRowKey(byte[],int,int)}: true means drop this row; false means include.</li>
- *   <li> {@link #filterKeyValue(Cell)}: decides whether to include or exclude this KeyValue.
+ *   <li> {@link #filterRowKey(Cell)}: true means drop this row; false means include.</li>
+ *   <li> {@link #filterKeyValue(Cell)}: decides whether to include or exclude this Cell.
  *        See {@link ReturnCode}. </li>
- *   <li> {@link #transform(KeyValue)}: if the KeyValue is included, let the filter transform the
- *        KeyValue. </li>
+ *   <li> {@link #transformCell(Cell)}: if the Cell is included, let the filter transform the
+ *        Cell. </li>
  *   <li> {@link #filterRowCells(List)}: allows direct modification of the final list to be submitted
  *   <li> {@link #filterRow()}: last chance to drop entire row based on the sequence of
  *        filter calls. Eg: filter a row if it doesn't contain a specified column. </li>
@@ -79,8 +79,24 @@ public abstract class Filter {
    * @param length length of the row key
    * @return true, remove entire row, false, include the row (maybe).
    * @throws IOException in case an I/O or an filter specific failure needs to be signaled.
+   * @deprecated As of release 2.0.0, this will be removed in HBase 3.0.0.
+   *             Instead use {@link #filterRowKey(Cell)}
    */
+  @Deprecated
   abstract public boolean filterRowKey(byte[] buffer, int offset, int length) throws IOException;
+
+  /**
+   * Filters a row based on the row key. If this returns true, the entire row will be excluded. If
+   * false, each KeyValue in the row will be passed to {@link #filterKeyValue(Cell)} below.
+   *
+   * Concrete implementers can signal a failure condition in their code by throwing an
+   * {@link IOException}.
+   *
+   * @param firstRowCell The first cell coming in the new row
+   * @return true, remove entire row, false, include the row (maybe).
+   * @throws IOException in case an I/O or an filter specific failure needs to be signaled.
+   */
+  abstract public boolean filterRowKey(Cell firstRowCell) throws IOException;
 
   /**
    * If this returns true, the scan will terminate.
@@ -123,7 +139,7 @@ public abstract class Filter {
    * @see org.apache.hadoop.hbase.KeyValue#shallowCopy()
    *      The transformed KeyValue is what is eventually returned to the client. Most filters will
    *      return the passed KeyValue unchanged.
-   * @see org.apache.hadoop.hbase.filter.KeyOnlyFilter#transform(KeyValue) for an example of a
+   * @see org.apache.hadoop.hbase.filter.KeyOnlyFilter#transformCell(Cell) for an example of a
    *      transformation.
    * 
    *      Concrete implementers can signal a failure condition in their code by throwing an
@@ -136,13 +152,12 @@ public abstract class Filter {
   abstract public Cell transformCell(final Cell v) throws IOException;
 
   /**
-   * WARNING: please to not override this method.  Instead override {@link #transformCell(Cell)}.
+   * WARNING: please to not override this method. Instead override {@link #transformCell(Cell)}.
    * This is for transition from 0.94 -> 0.96
    **/
   @Deprecated // use Cell transformCell(final Cell)
   abstract public KeyValue transform(final KeyValue currentKV) throws IOException;
- 
-  
+
   /**
    * Return codes for filterValue().
    */
@@ -213,7 +228,7 @@ public abstract class Filter {
    * @return KeyValue which must be next seeked. return null if the filter is not sure which key to
    *         seek to next.
    * @throws IOException
-   * Function is Deprecated. Use {@link #getNextCellHint(Cell)} instead.
+   * @deprecated Function is Deprecated. Use {@link #getNextCellHint(Cell)} instead.
    */
   @Deprecated
   abstract public KeyValue getNextKeyHint(final KeyValue currentKV) throws IOException;
@@ -230,7 +245,7 @@ public abstract class Filter {
    *         seek to next.
    * @throws IOException in case an I/O or an filter specific failure needs to be signaled.
    */
-  abstract public Cell getNextCellHint(final Cell currentKV) throws IOException;
+  abstract public Cell getNextCellHint(final Cell currentCell) throws IOException;
 
   /**
    * Check that given column family is essential for filter to check row. Most filters always return

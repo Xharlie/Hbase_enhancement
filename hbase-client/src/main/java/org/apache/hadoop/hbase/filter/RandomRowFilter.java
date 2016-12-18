@@ -96,7 +96,7 @@ public class RandomRowFilter extends FilterBase {
   }
 
   @Override
-  public boolean filterRowKey(byte[] buffer, int offset, int length) {
+  public boolean filterRowKey(Cell firstRowCell) {
     if (chance < 0) {
       // with a zero chance, the rows is always excluded
       filterOutRow = true;
@@ -108,6 +108,14 @@ public class RandomRowFilter extends FilterBase {
       filterOutRow = !(random.nextFloat() < chance);
     }
     return filterOutRow;
+  }
+
+  /**
+   * @deprecated use {@link #filterRowKey(Cell)} instead
+   */
+  @Override
+  public boolean filterRowKey(byte[] data, int offset, int length) {
+    return filterRowKey(null);
   }
 
   @Override

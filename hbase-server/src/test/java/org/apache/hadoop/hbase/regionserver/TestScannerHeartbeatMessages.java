@@ -26,8 +26,6 @@ import java.util.List;
 import java.util.concurrent.Callable;
 
 import org.apache.commons.lang.exception.ExceptionUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -40,7 +38,6 @@ import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.HTestConst;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
@@ -54,6 +51,7 @@ import org.apache.hadoop.hbase.regionserver.HRegion.RegionScannerImpl;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.log4j.Level;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -75,7 +73,6 @@ import com.google.protobuf.ServiceException;
  */
 @Category(MediumTests.class)
 public class TestScannerHeartbeatMessages {
-  final Log LOG = LogFactory.getLog(getClass());
 
   private final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 
@@ -458,9 +455,9 @@ public class TestScannerHeartbeatMessages {
     @Override
     protected void initializeKVHeap(List<KeyValueScanner> scanners,
         List<KeyValueScanner> joinedScanners, HRegion region) throws IOException {
-      this.storeHeap = new HeartbeatReversedKVHeap(scanners, region.getComparator());
+      this.storeHeap = new HeartbeatReversedKVHeap(scanners, region.getCellCompartor());
       if (!joinedScanners.isEmpty()) {
-        this.joinedHeap = new HeartbeatReversedKVHeap(joinedScanners, region.getComparator());
+        this.joinedHeap = new HeartbeatReversedKVHeap(joinedScanners, region.getCellCompartor());
       }
     }
   }
@@ -486,9 +483,9 @@ public class TestScannerHeartbeatMessages {
     @Override
     protected void initializeKVHeap(List<KeyValueScanner> scanners,
         List<KeyValueScanner> joinedScanners, HRegion region) throws IOException {
-      this.storeHeap = new HeartbeatKVHeap(scanners, region.getComparator());
+      this.storeHeap = new HeartbeatKVHeap(scanners, region.getCellCompartor());
       if (!joinedScanners.isEmpty()) {
-        this.joinedHeap = new HeartbeatKVHeap(joinedScanners, region.getComparator());
+        this.joinedHeap = new HeartbeatKVHeap(joinedScanners, region.getCellCompartor());
       }
     }
   }
@@ -498,7 +495,7 @@ public class TestScannerHeartbeatMessages {
    * cells. Useful for testing
    */
   private static final class HeartbeatKVHeap extends KeyValueHeap {
-    public HeartbeatKVHeap(List<? extends KeyValueScanner> scanners, KVComparator comparator)
+    public HeartbeatKVHeap(List<? extends KeyValueScanner> scanners, CellComparator comparator)
         throws IOException {
       super(scanners, comparator);
     }
@@ -524,7 +521,7 @@ public class TestScannerHeartbeatMessages {
    */
   private static final class HeartbeatReversedKVHeap extends ReversedKeyValueHeap {
     public HeartbeatReversedKVHeap(List<? extends KeyValueScanner> scanners, 
-        KVComparator comparator) throws IOException {
+        CellComparator comparator) throws IOException {
       super(scanners, comparator);
     }
 

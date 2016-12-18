@@ -107,12 +107,6 @@ public class TagRewriteCell implements Cell, SettableSequenceId, SettableTimesta
   }
 
   @Override
-  @Deprecated
-  public long getMvccVersion() {
-    return getSequenceId();
-  }
-
-  @Override
   public long getSequenceId() {
     return cell.getSequenceId();
   }
@@ -152,30 +146,6 @@ public class TagRewriteCell implements Cell, SettableSequenceId, SettableTimesta
   }
 
   @Override
-  @Deprecated
-  public byte[] getValue() {
-    return cell.getValue();
-  }
-
-  @Override
-  @Deprecated
-  public byte[] getFamily() {
-    return cell.getFamily();
-  }
-
-  @Override
-  @Deprecated
-  public byte[] getQualifier() {
-    return cell.getQualifier();
-  }
-
-  @Override
-  @Deprecated
-  public byte[] getRow() {
-    return cell.getRow();
-  }
-
-  @Override
   public long heapSize() {
     long sum = CellUtil.estimatedHeapSizeOf(cell) - cell.getTagsLength();
     sum += ClassSize.OBJECT;// this object itself
@@ -203,5 +173,25 @@ public class TagRewriteCell implements Cell, SettableSequenceId, SettableTimesta
   public void setSequenceId(long seqId) throws IOException {
     // The incoming cell is supposed to be SettableSequenceId type.
     CellUtil.setSequenceId(cell, seqId);
+  }
+  
+  @Override
+  public byte[] getValue() {
+    return cell.getValue();
+  }
+
+  @Override
+  public byte[] getFamily() {
+    return cell.getFamily();
+  }
+
+  @Override
+  public byte[] getQualifier() {
+    return cell.getQualifier();
+  }
+
+  @Override
+  public byte[] getRow() {
+    return cell.getRow();
   }
 }

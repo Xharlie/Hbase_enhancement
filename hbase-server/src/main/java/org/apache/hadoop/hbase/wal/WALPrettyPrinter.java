@@ -33,8 +33,6 @@ import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.commons.cli.PosixParser;
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -43,13 +41,14 @@ import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.TagUtil;
+import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.classification.InterfaceStability;
+import org.apache.hadoop.hbase.regionserver.wal.ProtobufLogReader;
+import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.codehaus.jackson.map.ObjectMapper;
-
-import org.apache.hadoop.hbase.regionserver.wal.ProtobufLogReader;
-// imports for things that haven't moved yet.
-import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 
 /**
  * WALPrettyPrinter prints the contents of a given WAL with a variety of
@@ -245,7 +244,7 @@ public class WALPrettyPrinter {
     }
 
     WAL.Reader log = WALFactory.createReader(fs, p, conf);
-    
+
     if (log instanceof ProtobufLogReader) {
       List<String> writerClsNames = ((ProtobufLogReader) log).getWriterClsNames();
       if (writerClsNames != null && writerClsNames.size() > 0) {
@@ -258,18 +257,18 @@ public class WALPrettyPrinter {
         }
         out.println();
       }
-      
+
       String cellCodecClsName = ((ProtobufLogReader) log).getCodecClsName();
       if (cellCodecClsName != null) {
         out.println("Cell Codec Class: " + cellCodecClsName);
       }
     }
-    
+
     if (outputJSON && !persistentOutput) {
       out.print("[");
       firstTxn = true;
     }
-    
+
     try {
       WAL.Entry entry;
       while ((entry = log.next()) != null) {
@@ -288,7 +287,7 @@ public class WALPrettyPrinter {
         for (Cell cell : edit.getCells()) {
           // add atomic operation to txn
           Map<String, Object> op = new HashMap<String, Object>(toStringMap(cell));
-          if (outputValues) op.put("value", Bytes.toStringBinary(cell.getValue()));
+          if (outputValues) op.put("value", Bytes.toStringBinary(CellUtil.cloneValue(cell)));
           // check row output filter
           if (row == null || ((String) op.get("row")).equals(row)) {
             actions.add(op);
@@ -341,12 +340,10 @@ public class WALPrettyPrinter {
     stringMap.put("vlen", cell.getValueLength());
     if (cell.getTagsLength() > 0) {
       List<String> tagsString = new ArrayList<String>();
-      Iterator<Tag> tagsIterator = CellUtil.tagsIterator(cell.getTagsArray(), cell.getTagsOffset(),
-          cell.getTagsLength());
+      Iterator<Tag> tagsIterator = CellUtil.tagsIterator(cell);
       while (tagsIterator.hasNext()) {
         Tag tag = tagsIterator.next();
-        tagsString.add((tag.getType()) + ":"
-            + Bytes.toStringBinary(tag.getBuffer(), tag.getTagOffset(), tag.getTagLength()));
+        tagsString.add((tag.getType()) + ":" + Bytes.toStringBinary(TagUtil.cloneValue(tag)));
       }
       stringMap.put("tag", tagsString);
     }

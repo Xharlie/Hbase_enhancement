@@ -434,6 +434,16 @@ public interface HConnection extends Connection {
   ClientService.BlockingInterface getClient(final ServerName serverName) throws IOException;
 
   /**
+   * Establishes a connection to the region server at the specified address, and returns an
+   * non-blocking region client protocol.
+   * @param serverName
+   * @return Non-blocking proxy for RegionServer
+   * @throws IOException if a remote or network exception occurs
+   */
+  @Deprecated
+  ClientService.Interface getAsyncClient(final ServerName serverName) throws IOException;
+
+  /**
    * Establishes a connection to the region server at the specified address.
    * @param serverName
    * @param getMaster do we check if master is alive

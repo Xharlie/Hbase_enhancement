@@ -28,8 +28,7 @@ import org.apache.hadoop.hbase.tool.HealthCheck;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVMClusterUtil.RegionServerThread;
 import org.apache.hadoop.util.Shell;
-import org.junit.After;
-import org.junit.Test;
+import org.junit.*;
 import org.junit.experimental.categories.Category;
 
 /**
@@ -38,37 +37,44 @@ import org.junit.experimental.categories.Category;
 @Category(SmallTests.class)
 public class TestNodeHealthCheckChoreDirect {
   private static final Log LOG = LogFactory.getLog(TestNodeHealthCheckChore.class);
-  private static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
+  private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static final int HEALTH_DIRECTCHECK_TIMEOUT = 5000;
+  private static Configuration conf;
 
   @After
-  public void cleanUp() throws IOException {
+  public void tearDown() throws Exception {
     // delete and recreate the test directory, ensuring a clean test dir between tests
-    Path testDir = UTIL.getDataTestDir();
-    FileSystem fs = UTIL.getTestFileSystem();
+    TEST_UTIL.shutdownMiniCluster();
+    Path testDir = TEST_UTIL.getDataTestDir();
+    FileSystem fs = TEST_UTIL.getTestFileSystem();
     fs.delete(testDir, true);
     if (!fs.mkdirs(testDir)) throw new IOException("Failed mkdir " + testDir);
   }
 
+  @BeforeClass
+  public static void setUpBeforeClass() {
+    conf = TEST_UTIL.getConfiguration();
+    conf.setBoolean("hbase.assignment.usezk", true);
+  }
+
+  @Before
+  public void setUp() throws Exception {
+    TEST_UTIL.startMiniCluster(1);
+  }
   /**
    * Test Health Check
    */
   @Test(timeout = 60000)
   public void testHealthCheckWithNoOnlineRegions() throws Exception {
-    HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
-    Configuration conf = TEST_UTIL.getConfiguration();
-    conf.setBoolean("hbase.assignment.usezk", true);
+    MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
     try {
-      TEST_UTIL.startMiniCluster(1);
       String table = "testHealthCheck";
-      MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
       HBaseAdmin admin = TEST_UTIL.getHBaseAdmin();
       HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(table));
       desc.addFamily(new HColumnDescriptor("cf"));
-      admin.createTable(desc, Bytes.toBytes("A"), Bytes.toBytes("Z"), 10);
+      admin.createTable(desc, null);
       TEST_UTIL.waitUntilAllRegionsAssigned(TableName.valueOf(table));
       mini.startRegionServer();
-
       DirectHealthCheck dhc;
       DirectHealthChecker dhcer = new DirectHealthChecker();
       int i = 0;
@@ -80,20 +86,19 @@ public class TestNodeHealthCheckChoreDirect {
       }
     } catch (Exception e) {
       // TODO: handle exception
-    } finally {
-      TEST_UTIL.shutdownMiniCluster();
+      int i = 0;
+      while (i < 2) {
+        mini.abortRegionServer(i);
+        mini.waitForRegionServerToStop(mini.getRegionServer(i++).getServerName(), 10000);
+      }
     }
   }
 
   @Test(timeout = 60000)
   public void testHealthCheckSelectRegions() {
-    HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
-    Configuration conf = TEST_UTIL.getConfiguration();
-    conf.setBoolean("hbase.assignment.usezk", true);
+    MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
     try {
-      TEST_UTIL.startMiniCluster(1);
       String table = "testHealthCheck";
-      MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
       HBaseAdmin admin = TEST_UTIL.getHBaseAdmin();
       HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(table));
       desc.addFamily(new HColumnDescriptor("cf"));
@@ -122,25 +127,14 @@ public class TestNodeHealthCheckChoreDirect {
       }
     } catch (Exception e) {
       // TODO: handle exception
-    } finally {
-      try {
-        TEST_UTIL.shutdownMiniCluster();
-      } catch (Exception e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
     }
   }
 
   @Test(timeout = 60000)
   public void testHealthCheckWithRSKilledBeforeInit() {
-    HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
-    Configuration conf = TEST_UTIL.getConfiguration();
-    conf.setBoolean("hbase.assignment.usezk", true);
+    MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
     try {
-      TEST_UTIL.startMiniCluster(1);
       String table = "testHealthCheck";
-      MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
       HBaseAdmin admin = TEST_UTIL.getHBaseAdmin();
       HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(table));
       desc.addFamily(new HColumnDescriptor("cf"));
@@ -163,25 +157,14 @@ public class TestNodeHealthCheckChoreDirect {
       assertTrue(true);
     } catch (Exception e) {
       // TODO: handle exception
-    } finally {
-      try {
-        TEST_UTIL.shutdownMiniCluster();
-      } catch (Exception e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
     }
   }
 
   @Test(timeout = 160000)
   public void testHealthCheckWithRSKilledAfterInit() {
-    HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
-    Configuration conf = TEST_UTIL.getConfiguration();
-    conf.setBoolean("hbase.assignment.usezk", true);
+    MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
     try {
-      TEST_UTIL.startMiniCluster(1);
       String table = "testHealthCheck";
-      MiniHBaseCluster mini = TEST_UTIL.getMiniHBaseCluster();
       HBaseAdmin admin = TEST_UTIL.getHBaseAdmin();
       HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(table));
       desc.addFamily(new HColumnDescriptor("cf"));
@@ -203,13 +186,6 @@ public class TestNodeHealthCheckChoreDirect {
       LOG.info("Health check get exception", e);
       assertTrue(false);
     } catch (Exception e) {
-    } finally {
-      try {
-        TEST_UTIL.shutdownMiniCluster();
-      } catch (Exception e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
     }
   }
 }

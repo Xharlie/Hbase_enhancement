@@ -29,6 +29,7 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.protobuf.generated.AdminProtos.AdminService;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ClientService;
+import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ClientService.Interface;
 import org.apache.hadoop.hbase.security.User;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -126,6 +127,12 @@ public class ConnectionUtils {
       public ClientService.BlockingInterface getClient(
           ServerName sn) throws IOException {
         return serverName.equals(sn) ? client : super.getClient(sn);
+      }
+
+      @Override
+      public Interface getAsyncClient(ServerName sn) throws IOException {
+        // we don't need any ASYNC client when communicating with local server
+        throw new IOException("Non-blocking mode not supported for local server connection");
       }
     };
   }

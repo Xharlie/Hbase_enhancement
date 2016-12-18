@@ -39,7 +39,7 @@
   <groupId>org.apache.hbase</groupId>
   <artifactId>hbase</artifactId>
   <packaging>pom</packaging>
-  <version>1.1.2-adp-1.0.8.2</version>
+  <version>1.1.2-adp-1.0.9.4</version>
   <name>HBase of Ali-search Data Platform</name>
   <description>
     Apache HBase is the Hadoop database. Use it when you need
@@ -1224,7 +1224,7 @@
     <procedure.test.jar>hbase-procedure-${project.version}-tests.jar</procedure.test.jar>
     <it.test.jar>hbase-it-${project.version}-tests.jar</it.test.jar>
     <annotations.test.jar>hbase-annotations-${project.version}-tests.jar</annotations.test.jar>
-    <surefire.version>2.18</surefire.version>
+    <surefire.version>2.18.1</surefire.version>
     <surefire.provider>surefire-junit47</surefire.provider>
     <!-- default: run small & medium, medium with 2 threads -->
     <surefire.skipFirstPart>false</surefire.skipFirstPart>

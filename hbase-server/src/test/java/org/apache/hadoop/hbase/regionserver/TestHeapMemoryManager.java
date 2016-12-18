@@ -34,6 +34,7 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.io.hfile.*;
+import org.apache.hadoop.hbase.io.hfile.HFileBlock;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.client.ClusterConnection;
 import org.apache.hadoop.hbase.io.util.HeapMemorySizeUtil;
@@ -401,6 +402,10 @@ public class TestHeapMemoryManager {
     @Override
     public BlockCache[] getBlockCaches() {
       return null;
+    }
+
+    @Override
+    public void returnBlock(BlockCacheKey cacheKey, Cacheable buf) {
     }
   }
 

@@ -23,6 +23,7 @@ import java.util.List;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -39,7 +40,7 @@ public class TestByteRangeWithKVSerialization {
     pbr.put((byte) (tagsLen >> 8 & 0xff));
     pbr.put((byte) (tagsLen & 0xff));
     pbr.put(kv.getTagsArray(), kv.getTagsOffset(), tagsLen);
-    pbr.putVLong(kv.getMvccVersion());
+    pbr.putVLong(kv.getSequenceId());
   }
 
   static KeyValue readCell(PositionedByteRange pbr) throws Exception {
@@ -64,7 +65,7 @@ public class TestByteRangeWithKVSerialization {
     int kvCount = 1000000;
     List<KeyValue> kvs = new ArrayList<KeyValue>(kvCount);
     int totalSize = 0;
-    Tag[] tags = new Tag[] { new Tag((byte) 1, "tag1") };
+    Tag[] tags = new Tag[] { new ArrayBackedTag((byte) 1, "tag1") };
     for (int i = 0; i < kvCount; i++) {
       KeyValue kv = new KeyValue(Bytes.toBytes(i), FAMILY, QUALIFIER, i, VALUE, tags);
       kv.setSequenceId(i);
@@ -87,7 +88,7 @@ public class TestByteRangeWithKVSerialization {
       Assert.assertTrue(Bytes.equals(kv.getTagsArray(), kv.getTagsOffset(),
           kv.getTagsLength(), kv1.getTagsArray(), kv1.getTagsOffset(),
           kv1.getTagsLength()));
-      Assert.assertEquals(kv1.getMvccVersion(), kv.getMvccVersion());
+      Assert.assertEquals(kv1.getSequenceId(), kv.getSequenceId());
     }
   }
 }

@@ -88,3 +88,31 @@ t-search-adp-hbase-server-1_0_8_2-aquila:
   pkgpara:
     jdk_version: jdk1.7
     mvn_version: maven3
+t-search-adp-hbase-server-1_0_9-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_9_1-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-client-1_0_9_1-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-server-1_0_9_2-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+t-search-adp-hbase-server-1_0_9_3-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1
+t-search-adp-hbase-server-1_0_9_4-aquila:
+  pkgpara:
+    jdk_version: jdk1.7
+    mvn_version: maven3
+    NO_TAG: 1

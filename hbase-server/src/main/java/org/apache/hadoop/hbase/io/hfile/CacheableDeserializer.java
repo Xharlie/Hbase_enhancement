@@ -18,9 +18,10 @@
 package org.apache.hadoop.hbase.io.hfile;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.io.hfile.Cacheable.MemoryType;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 
 /**
  * Interface for a deserializer. Throws an IOException if the serialized data is
@@ -33,17 +34,17 @@ public interface CacheableDeserializer<T extends Cacheable> {
    *
    * @return T the deserialized object.
    */
-  T deserialize(ByteBuffer b) throws IOException;
+  T deserialize(ByteBuff b) throws IOException;
 
   /**
-   * 
    * @param b
    * @param reuse true if Cacheable object can use the given buffer as its
    *          content
+   * @param memType the {@link MemoryType} of the buffer
    * @return T the deserialized object.
    * @throws IOException
    */
-  T deserialize(ByteBuffer b, boolean reuse) throws IOException;
+  T deserialize(ByteBuff b, boolean reuse, MemoryType memType) throws IOException;
 
   /**
    * Get the identifier of this deserialiser. Identifier is unique for each

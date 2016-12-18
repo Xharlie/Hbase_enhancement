@@ -19,9 +19,9 @@
 package org.apache.hadoop.hbase.regionserver;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.KeepDeletedCells;
-import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.conf.Configuration;
@@ -42,7 +42,7 @@ public class ScanInfo {
   private long ttl;
   private KeepDeletedCells keepDeletedCells;
   private long timeToPurgeDeletes;
-  private KVComparator comparator;
+  private CellComparator comparator;
   private long tableMaxRowSize;
   private boolean usePread;
   private long cellsPerTimeoutCheck;
@@ -62,7 +62,7 @@ public class ScanInfo {
    * @param comparator The store's comparator
    */
   public ScanInfo(final Configuration conf, final HColumnDescriptor family, final long ttl,
-      final long timeToPurgeDeletes, final KVComparator comparator) {
+      final long timeToPurgeDeletes, final CellComparator comparator) {
     this(conf, family.getName(), family.getMinVersions(), family.getMaxVersions(), ttl, family
         .getKeepDeletedCells(), timeToPurgeDeletes, comparator);
   }
@@ -80,7 +80,7 @@ public class ScanInfo {
    */
   public ScanInfo(final Configuration conf, final byte[] family, final int minVersions,
       final int maxVersions, final long ttl, final KeepDeletedCells keepDeletedCells,
-      final long timeToPurgeDeletes, final KVComparator comparator) {
+      final long timeToPurgeDeletes, final CellComparator comparator) {
     this.family = family;
     this.minVersions = minVersions;
     this.maxVersions = maxVersions;
@@ -145,7 +145,7 @@ public class ScanInfo {
     return timeToPurgeDeletes;
   }
 
-  public KVComparator getComparator() {
+  public CellComparator getComparator() {
     return comparator;
   }
 }

@@ -128,7 +128,8 @@ public class DirectHealthCheck {
         if (!regionIndex.contains(t)) {
           regionIndex.add(t);
           Region region = onlineRegions.get(temp);
-          if (!isRegionBelongToHqueue((HRegion) region)) {
+          // exclude Hqueue region and empty region
+          if (!isRegionBelongToHqueue((HRegion) region) && region.getStartKey().length != 0) {
             selectedRegions.add((HRegion) region);
           }
         }
@@ -147,7 +148,7 @@ public class DirectHealthCheck {
             + selectedRegions.size() + " regions with loopCount: " + loopCount);
     LOG.info("selected regions: ");
     for (HRegion sr : selectedRegions) {
-      LOG.info(sr.getRegionInfo().getEncodedName() + "  ");
+      LOG.info(sr.getRegionInfo().getRegionNameAsString() + "  ");
     }
     return selectedRegions;
   }
@@ -158,29 +159,33 @@ public class DirectHealthCheck {
     ProbeResult probeResult = null;
     // get all failed probe
     long startTime = System.currentTimeMillis();
-    long endTime = startTime + opTimeout;
+    long deadlineTime = startTime + opTimeout;
     long timeout = 0;
-    Date date = new Date();
+    Date dateStart = new Date(startTime);
+    Date dateDeadline = new Date(deadlineTime);
+    Date dateCurrent = new Date();
     for (FutureTask<ProbeResult> task : tasks) {
       try {
         //this will waste long time if many regions get timeout ?
-        timeout = endTime - System.currentTimeMillis();
-        LOG.info("healthCheckDebug: starttime:" + date + "; end time:" + endTime + "; timeout:" + timeout + "current:" + System.currentTimeMillis());
+        long currentTime = System.currentTimeMillis();
+        timeout = deadlineTime - currentTime;
+        dateCurrent.setTime(currentTime);
+        LOG.info("health Check individual check: start time:" + dateStart + "; deadline time:" + dateDeadline + "; current time:"
+                + dateCurrent + "; target region: " + map.get(task).getRegionInfo().getRegionNameAsString());
         probeResult = task.get((timeout < 0) ? 0 : timeout, TimeUnit.MILLISECONDS);
         if (probeResult != null) {
           failedRegionList.add(probeResult);
         }
       } catch (InterruptedException | ExecutionException | TimeoutException e) {
-        e.printStackTrace();
         HRegion region = map.get(task);
         failedRegionList.add(new ProbeResult(region.getRegionInfo().getRegionName(), false, "timeout; Started at:"
-                + date.toString() + "; takes more than " + opTimeout + " miliseconds"));
+                + dateStart.toString() + "; takes more than " + opTimeout + " miliseconds"));
         Thread.currentThread().interrupt();
         continue;
       } catch (Exception e) {
         HRegion region = map.get(task);
         failedRegionList.add(new ProbeResult(region.getRegionInfo().getRegionName(), false, "Exception; Started at:"
-                + date.toString() + "; Trace: " + e.getStackTrace()));
+                + dateStart.toString() + "; Trace: " + e.getStackTrace()));
         continue;
       }
     }
@@ -234,6 +239,7 @@ public class DirectHealthCheck {
     for (ProbeResult fr : failedRegions) {
       LOG.info("Health Check, get failed regions :" + fr.toString());
     }
+    if(failedRegions.size()==0) LOG.info("Health Check, no failed regions.");
     probeExecutor.shutdown();
     return succeed;
   }

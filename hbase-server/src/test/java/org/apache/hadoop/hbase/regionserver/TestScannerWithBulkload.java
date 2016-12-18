@@ -26,6 +26,13 @@ import junit.framework.Assert;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellUtil;
+
+import org.apache.hadoop.hbase.client.RegionLocator;
+import org.apache.hadoop.hbase.client.Table;
+import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HTableDescriptor;
@@ -93,13 +100,18 @@ public class TestScannerWithBulkload {
     scanner = table.getScanner(scan);
     result = scanner.next();
     while (result != null) {
-      List<KeyValue> kvs = result.getColumn(Bytes.toBytes("col"), Bytes.toBytes("q"));
-      for (KeyValue _kv : kvs) {
-        if (Bytes.toString(_kv.getRow()).equals("row1")) {
-          System.out.println(Bytes.toString(_kv.getRow()));
-          System.out.println(Bytes.toString(_kv.getQualifier()));
-          System.out.println(Bytes.toString(_kv.getValue()));
-          Assert.assertEquals("version3", Bytes.toString(_kv.getValue()));
+      List<Cell> cells = result.getColumnCells(Bytes.toBytes("col"), Bytes.toBytes("q"));
+      for (Cell _c : cells) {
+        if (Bytes.toString(_c.getRowArray(), _c.getRowOffset(), _c.getRowLength())
+            .equals("row1")) {
+          System.out
+              .println(Bytes.toString(_c.getRowArray(), _c.getRowOffset(), _c.getRowLength()));
+          System.out.println(Bytes.toString(_c.getQualifierArray(), _c.getQualifierOffset(),
+            _c.getQualifierLength()));
+          System.out.println(
+            Bytes.toString(_c.getValueArray(), _c.getValueOffset(), _c.getValueLength()));
+          Assert.assertEquals("version3",
+            Bytes.toString(_c.getValueArray(), _c.getValueOffset(), _c.getValueLength()));
         }
       }
       result = scanner.next();
@@ -111,13 +123,18 @@ public class TestScannerWithBulkload {
   private Result scanAfterBulkLoad(ResultScanner scanner, Result result, String expctedVal)
       throws IOException {
     while (result != null) {
-      List<KeyValue> kvs = result.getColumn(Bytes.toBytes("col"), Bytes.toBytes("q"));
-      for (KeyValue _kv : kvs) {
-        if (Bytes.toString(_kv.getRow()).equals("row1")) {
-          System.out.println(Bytes.toString(_kv.getRow()));
-          System.out.println(Bytes.toString(_kv.getQualifier()));
-          System.out.println(Bytes.toString(_kv.getValue()));
-          Assert.assertEquals(expctedVal, Bytes.toString(_kv.getValue()));
+      List<Cell> cells = result.getColumnCells(Bytes.toBytes("col"), Bytes.toBytes("q"));
+      for (Cell _c : cells) {
+        if (Bytes.toString(_c.getRowArray(), _c.getRowOffset(), _c.getRowLength())
+            .equals("row1")) {
+          System.out
+              .println(Bytes.toString(_c.getRowArray(), _c.getRowOffset(), _c.getRowLength()));
+          System.out.println(Bytes.toString(_c.getQualifierArray(), _c.getQualifierOffset(),
+            _c.getQualifierLength()));
+          System.out.println(
+            Bytes.toString(_c.getValueArray(), _c.getValueOffset(), _c.getValueLength()));
+          Assert.assertEquals(expctedVal,
+            Bytes.toString(_c.getValueArray(), _c.getValueOffset(), _c.getValueLength()));
         }
       }
       result = scanner.next();
@@ -185,9 +202,11 @@ public class TestScannerWithBulkload {
 
     ResultScanner scanner = table.getScanner(scan);
     Result result = scanner.next();
-    List<KeyValue> kvs = result.getColumn(Bytes.toBytes("col"), Bytes.toBytes("q"));
-    Assert.assertEquals(1, kvs.size());
-    Assert.assertEquals("version1", Bytes.toString(kvs.get(0).getValue()));
+    List<Cell> cells = result.getColumnCells(Bytes.toBytes("col"), Bytes.toBytes("q"));
+    Assert.assertEquals(1, cells.size());
+    Cell _c = cells.get(0);
+    Assert.assertEquals("version1",
+      Bytes.toString(_c.getValueArray(), _c.getValueOffset(), _c.getValueLength()));
     scanner.close();
     return table;
   }
@@ -261,13 +280,18 @@ public class TestScannerWithBulkload {
     scanner = table.getScanner(scan);
     result = scanner.next();
     while (result != null) {
-      List<KeyValue> kvs = result.getColumn(Bytes.toBytes("col"), Bytes.toBytes("q"));
-      for (KeyValue _kv : kvs) {
-        if (Bytes.toString(_kv.getRow()).equals("row1")) {
-          System.out.println(Bytes.toString(_kv.getRow()));
-          System.out.println(Bytes.toString(_kv.getQualifier()));
-          System.out.println(Bytes.toString(_kv.getValue()));
-          Assert.assertEquals("version3", Bytes.toString(_kv.getValue()));
+      List<Cell> cells = result.getColumnCells(Bytes.toBytes("col"), Bytes.toBytes("q"));
+      for (Cell _c : cells) {
+        if (Bytes.toString(_c.getRowArray(), _c.getRowOffset(), _c.getRowLength())
+            .equals("row1")) {
+          System.out
+              .println(Bytes.toString(_c.getRowArray(), _c.getRowOffset(), _c.getRowLength()));
+          System.out.println(Bytes.toString(_c.getQualifierArray(), _c.getQualifierOffset(),
+            _c.getQualifierLength()));
+          System.out.println(
+            Bytes.toString(_c.getValueArray(), _c.getValueOffset(), _c.getValueLength()));
+          Assert.assertEquals("version3",
+            Bytes.toString(_c.getValueArray(), _c.getValueOffset(), _c.getValueLength()));
         }
       }
       result = scanner.next();
