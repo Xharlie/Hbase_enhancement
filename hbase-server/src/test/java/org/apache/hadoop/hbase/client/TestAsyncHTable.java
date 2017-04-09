@@ -18,9 +18,6 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -29,6 +26,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -49,7 +48,6 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Threads;
 import org.junit.After;
 import org.junit.AfterClass;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Rule;
@@ -58,6 +56,11 @@ import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
 import com.google.protobuf.Message;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Class to test Async Call Method of HTable.Spins up the minicluster once at
@@ -174,7 +177,7 @@ public class TestAsyncHTable {
     Object[] results = new Object[puts.size()];
     htable.asyncBatch(puts, results, new CustomAsyncBatchCallback(results));
 
-    waitUntilEqual(successCount, errorCount, 10, 60 * 1000);
+    waitUntilEqual(successCount, errorCount, batchSize, 60 * 1000);
     LOG.debug("Succeed put operation number: " + successCount.get());
     LOG.debug("Failed put operation number: " + errorCount.get());
     assertEquals(successCount.get(), TEST_UTIL.countRows(htable));
@@ -206,7 +209,7 @@ public class TestAsyncHTable {
     // ht.asyncBatch(gets, null, new CustomAsyncBatchCallback(results));
 
     waitUntilEqual(successCount, errorCount, batchSize, 60 * 1000);
-    Assert.assertTrue(future.isDone());
+    assertTrue(future.isDone());
     LOG.debug("Succeed get operation number: " + successCount.get());
     LOG.debug("Failed get operation number: " + errorCount.get());
     LOG.debug("Results: " + Arrays.asList(results));
@@ -358,10 +361,10 @@ public class TestAsyncHTable {
 
     waitUntilEqual(successCount, errorCount, expectedOperationCount, 60 * 1000);
     if (errorCount.get() == 0) {
-      Assert.assertEquals("Expected " + expectedEmptyResultCnt + " empty results but actually "
-          + emptyResultCount.get(), expectedEmptyResultCnt, emptyResultCount.get());
-      Assert.assertEquals("Expected " + normalResultCount + " normal results but actually "
-          + normalResultCount.get(), expectedNormalResultCnt, normalResultCount.get());
+      assertEquals("Expected " + expectedEmptyResultCnt + " empty results but actually "
+              + emptyResultCount.get(), expectedEmptyResultCnt, emptyResultCount.get());
+      assertEquals("Expected " + normalResultCount + " normal results but actually "
+              + normalResultCount.get(), expectedNormalResultCnt, normalResultCount.get());
     }
     LOG.debug("Succeed get operation number: " + successCount.get());
     LOG.debug("Failed get operation number: " + errorCount.get());
@@ -399,7 +402,199 @@ public class TestAsyncHTable {
     LOG.debug("Failed delete operation number: " + errorCount.get());
     int numOfRowsAfterDelete = TEST_UTIL.countRows(htable);
     LOG.debug("Rows before delete: " + numOfRows + ", rows after: " + numOfRowsAfterDelete);
-    Assert.assertTrue(numOfRows > numOfRowsAfterDelete);
+    assertTrue(numOfRows > numOfRowsAfterDelete);
+
+    htable.close();
+  }
+
+  @Test(timeout = 60000)
+  public void testListenableFuture() throws Exception {
+    final byte[] table = Bytes.toBytes(name.getMethodName());
+    HTable htable = TEST_UTIL.createTable(table, COLUMN_FAMILY,
+            new byte[][]{Bytes.toBytes("thread2"), Bytes.toBytes("thread4")});
+    final AtomicInteger successCount = new AtomicInteger(0);
+    final AtomicInteger errorCount = new AtomicInteger(0);
+
+    class CustomListener implements Listener<Result> {
+
+      String name;
+      final AtomicInteger successCount = new AtomicInteger(0);
+      final AtomicInteger errorCount = new AtomicInteger(0);
+
+      public CustomListener(String name) {
+        this.name = name;
+      }
+
+      @Override
+      public void onComplete(Result val) {
+        successCount.incrementAndGet();
+      }
+
+      @Override
+      public void onError(Throwable e) {
+        errorCount.incrementAndGet();
+      }
+
+      public void reset() {
+        successCount.set(0);
+        errorCount.set(0);
+      }
+    }
+
+    //List<Listener<Result>> listeners = new ArrayList<CustomListener>();
+    final List<CustomListener> listeners = new ArrayList<CustomListener>();
+    int listenerNum = 10;
+    for (int num = 0; num < listenerNum; num++) {
+      listeners.add(new CustomListener("listener-" + num));
+    }
+
+    class Reset {
+      public void counters() {
+        successCount.set(0);
+        errorCount.set(0);
+        for (CustomListener listener : listeners) {
+          listener.reset();
+        }
+      }
+    }
+
+    // Do put in multi threads
+    runFutureThreads(table, ActionType.PUT, threadsNum, operationPerThread, successCount,
+            errorCount, listeners);
+    int rowNum = TEST_UTIL.countRows(htable);
+    for (CustomListener listener : listeners) {
+      assertEquals(listener.successCount.get(), rowNum);
+      assertEquals(listener.errorCount.get(), threadsNum*operationPerThread - rowNum);
+    }
+
+    // Reset counters
+    new Reset().counters();
+
+    // Do get in multi threads
+    runFutureThreads(table, ActionType.GET, threadsNum, operationPerThread, successCount,
+            errorCount, listeners);
+    for (CustomListener listener : listeners) {
+      assertEquals(listener.successCount.get(), TEST_UTIL.countRows(htable));
+      assertEquals(listener.errorCount.get(), 0);
+    }
+
+    // Reset counters
+    new Reset().counters();
+
+    // Do delete in multi threads
+    runFutureThreads(table, ActionType.DELETE, threadsNum, operationPerThread, successCount,
+            errorCount, listeners);
+    for (CustomListener listener : listeners) {
+      assertEquals(listener.successCount.get(), threadsNum*operationPerThread);
+      assertEquals(listener.errorCount.get(), TEST_UTIL.countRows(htable));
+    }
+
+    htable.close();
+  }
+
+  @Test(timeout = 60000)
+  public void testBatchListenableFuture() throws Exception {
+    final byte[] table = Bytes.toBytes(name.getMethodName());
+    HTable htable = TEST_UTIL.createTable(table, COLUMN_FAMILY,
+            new byte[][]{Bytes.toBytes("thread2"), Bytes.toBytes("thread4")});
+    int batchSize = 10;
+    final ExecutorService listenerExecutorService = Executors.newCachedThreadPool();
+
+    class CustomListener implements Listener<Object[]> {
+
+      String name;
+      final AtomicInteger successCount = new AtomicInteger(0);
+      final AtomicInteger errorCount = new AtomicInteger(0);
+      Boolean batchFailed = false;
+
+      public CustomListener(String name) {
+        this.name = name;
+      }
+
+      @Override
+      public void onComplete(Object[] vals) {
+        for (Object val : vals) {
+          if (val == null || val instanceof Throwable) {
+            errorCount.incrementAndGet();
+            LOG.debug(name + " error count:" + errorCount.get());
+          } else {
+            successCount.incrementAndGet();
+            LOG.debug(name + " success count:" + successCount.get());
+          }
+        }
+      }
+
+      @Override
+      public void onError(Throwable e) {
+        batchFailed = true;
+        LOG.debug(name + " batch opt failed");
+      }
+
+      public void reset() {
+        successCount.set(0);
+        errorCount.set(0);
+      }
+    }
+
+    final List<CustomListener> listeners = new ArrayList<CustomListener>();
+    int listenerNum = 10;
+    for (int num = 0; num < listenerNum; num++) {
+      listeners.add(new CustomListener("listener-" + num));
+    }
+
+    class Reset {
+      public void counters() {
+        for (CustomListener listener : listeners) {
+          listener.reset();
+        }
+      }
+    }
+
+    List<Row> puts = new ArrayList<Row>();
+    for (int i = 0; i < batchSize; i++) {
+      byte[] row = Bytes.toBytes("thread" + i);
+      Put put = new Put(row);
+      put.addColumn(COLUMN_FAMILY, qualifier, row);
+      puts.add(put);
+    }
+    Object[] results = new Object[puts.size()];
+    AsyncFuture future = htable.asyncBatch(puts, results);
+    for (CustomListener listener : listeners) {
+      Futures.addListener(future, listener, listenerExecutorService);
+    }
+
+    future.get();
+    assertTrue(future.isDone());
+    for (CustomListener listener : listeners) {
+      waitUntilEqual(listener.successCount, listener.errorCount, batchSize, 60 * 1000);
+      assertFalse(listener.batchFailed);
+      assertEquals(listener.errorCount.get(), 0);
+      assertEquals(listener.successCount.get(), TEST_UTIL.countRows(htable));
+    }
+
+    // Reset counters
+    new Reset().counters();
+
+    List<Row> gets = new ArrayList<Row>();
+    for (int i = 0; i < batchSize; i++) {
+      byte[] row = Bytes.toBytes("thread" + i);
+      Get get = new Get(row);
+      gets.add(get);
+    }
+    results = new Object[gets.size()];
+    future = htable.asyncBatch(gets, results);
+    for (CustomListener listener : listeners) {
+      Futures.addListener(future, listener, listenerExecutorService);
+    }
+
+    future.get();
+    assertTrue(future.isDone());
+    for (CustomListener listener : listeners) {
+      waitUntilEqual(listener.successCount, listener.errorCount, batchSize, 60 * 1000);
+      assertFalse(listener.batchFailed);
+      assertEquals(listener.errorCount.get(), 0);
+      assertEquals(listener.successCount.get(), TEST_UTIL.countRows(htable));
+    }
 
     htable.close();
   }
@@ -414,7 +609,7 @@ public class TestAsyncHTable {
 
     // Do put in multi threads
     runFutureThreads(table, ActionType.PUT, threadsNum, operationPerThread, successCount,
-      errorCount);
+            errorCount, null);
     assertEquals(successCount.get(), TEST_UTIL.countRows(htable));
 
     // Reset counters
@@ -423,7 +618,7 @@ public class TestAsyncHTable {
 
     // Do get in multi threads
     runFutureThreads(table, ActionType.GET, threadsNum, operationPerThread, successCount,
-      errorCount);
+      errorCount, null);
 
     // Reset counters
     successCount.set(0);
@@ -431,7 +626,7 @@ public class TestAsyncHTable {
 
     // Do delete in multi threads
     runFutureThreads(table, ActionType.DELETE, threadsNum, operationPerThread, successCount,
-      errorCount);
+            errorCount, null);
     assertEquals(0, TEST_UTIL.countRows(htable));
 
     htable.close();
@@ -597,12 +792,14 @@ public class TestAsyncHTable {
    * @throws InterruptedException if any thread interrupted
    * @throws IOException if any error occurs
    */
-  private void runFutureThreads(byte[] table, final ActionType actionType, int threadsNum,
+  private <S extends Listener> void runFutureThreads(byte[] table, final ActionType actionType, int threadsNum,
       int operationPerThread, final AtomicInteger successCount,
-      final AtomicInteger errorCount) throws InterruptedException, IOException {
-    final Collection<Future<Result>> futures =
-        Collections.synchronizedCollection(new ArrayList<Future<Result>>());
+      final AtomicInteger errorCount, final List<S> listeners) throws InterruptedException, IOException {
+    final Collection<AsyncFuture<Result>> futures =
+        Collections.synchronizedCollection(new ArrayList<AsyncFuture<Result>>());
     Thread[] opThreads = new Thread[threadsNum];
+
+    final ExecutorService listenerExecutorService = Executors.newCachedThreadPool();
     // launch threads
     for (int i = 0; i < threadsNum; i++) {
       final String threadPrefix = "thread" + i + "-";
@@ -611,7 +808,7 @@ public class TestAsyncHTable {
         @Override
         public void doOperation(AsyncableHTableInterface ht, byte[] row) {
           try {
-            Future<Result> future = null;
+            AsyncFuture<Result> future = null;
             switch (actionType) {
             case GET:
               Get get = new Get(row);
@@ -626,6 +823,12 @@ public class TestAsyncHTable {
               Delete delete = new Delete(row);
               future = ht.asyncDelete(delete);
               break;
+            }
+
+            if (future != null && listeners != null) {
+              for (Listener listener : listeners) {
+                Futures.addListener(future, listener, listenerExecutorService);
+              }
             }
             futures.add(future);
           } catch (Exception e) {
@@ -642,7 +845,7 @@ public class TestAsyncHTable {
     }
     // Get result
     LOG.debug("Start to get " + actionType.name() + " results: " + futures.size());
-    for (Future<Result> future : futures) {
+    for (AsyncFuture<Result> future : futures) {
       try {
         Result result = future.get();
         LOG.debug("Received result: " + result + " for " + actionType.name() + ": " + future);

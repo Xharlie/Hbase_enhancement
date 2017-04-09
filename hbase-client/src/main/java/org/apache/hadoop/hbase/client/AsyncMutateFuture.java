@@ -19,7 +19,6 @@
 package org.apache.hadoop.hbase.client;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -69,8 +68,7 @@ public class AsyncMutateFuture extends AsyncFuture<Result> {
       public void processError(Throwable exception) {
         if (exception instanceof DoNotRetryIOException) {
           toThrow = (DoNotRetryIOException) exception;
-          isDone = true;
-          latch.countDown();
+          markDone();
           return;
         }
         // add exception to the exception list
@@ -111,6 +109,7 @@ public class AsyncMutateFuture extends AsyncFuture<Result> {
     executionTime = System.currentTimeMillis() - startTime;
     isDone = true;
     latch.countDown();
+    notifyListener();
   }
 
   @Override

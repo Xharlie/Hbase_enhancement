@@ -85,11 +85,6 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
     if (toThrow != null) {
       throw new ExecutionException(toThrow);
     }
-    if (!exceptions.isEmpty()) {
-      RetriesExhaustedException cause =
-          new RetriesExhaustedException(numAttempts.get() - 1, exceptions);
-      throw new ExecutionException(cause);
-    }
     return toReturn;
   }
 
@@ -134,11 +129,6 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
     }
     if (toThrow != null) {
       throw new ExecutionException(toThrow);
-    }
-    if (!exceptions.isEmpty()) {
-      RetriesExhaustedException cause =
-          new RetriesExhaustedException(numAttempts.get() - 1, exceptions);
-      throw new ExecutionException(cause);
     }
     return toReturn;
   }
@@ -221,6 +211,8 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
               table.connection.updateCachedLocations(table.getName(), regionName, row.getRow(),
                 result, server);
             }
+            LOG.warn("Action on row: " + Bytes.toString(sentAction.getAction().getRow())
+                + " failed and (possibly) will retry, detailed exception:", throwable);
             // we set error anyway, will get overwritten if succeed in retry
             // notice that we don't support replica read here
             results[sentAction.getOriginalIndex()] = throwable;
@@ -255,6 +247,8 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
             .getRow(), throwable, server);
 
         for (Action<Row> action : actions) {
+          LOG.warn("Action on row: " + Bytes.toString(action.getAction().getRow())
+              + " failed and (possibly) will retry, detailed exception:", throwable);
           // we set error anyway, will get overwritten if succeed in retry
           // notice that we don't support replica read here
           results[action.getOriginalIndex()] = throwable;
@@ -267,12 +261,12 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
     @Override
     public void processError(Throwable exception, List<Action<Row>> toRetry) {
       if (exception instanceof DoNotRetryIOException) {
-        if (exceptions.isEmpty()) {
-          toThrow = (DoNotRetryIOException) exception;
-        } else {
-          exceptions
-              .add(new ThrowableWithExtraContext(exception, System.currentTimeMillis(), null));
+        if (!exceptions.isEmpty()) {
+          LOG.debug("Encountered DoNotRetryIOException after retried " + numAttempts.get()
+              + " times, historical exceptions: " + exceptions);
+
         }
+        toThrow = (DoNotRetryIOException) exception;
         for (int i = 0; i < getActions().size(); i++) {
           latch.countDown();
           getActionsInProgress().decrementAndGet();
@@ -322,6 +316,7 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
   protected void markDone(){
     executionTime = System.currentTimeMillis() - startTime;
     isDone = true;
+    notifyListener();
   }
 
   @Override

@@ -32235,7 +32235,7 @@ public final class ClientProtos {
                   case 0:
                       return impl.get(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetRequest)request);
                   case 1:
-                      return impl.mutate(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateRequest)request);
+                      return impl.mutate(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateRequest)request, responseTK);
                   case 2:
                       return impl.scan(controller, (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ScanRequest)request);
                   case 3:
@@ -32622,6 +32622,11 @@ public final class ClientProtos {
           org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateRequest request)
           throws com.google.protobuf.ServiceException;
 
+      public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateResponse mutate(
+          com.google.protobuf.RpcController controller,
+          org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateRequest request, Object responseTK)
+          throws com.google.protobuf.ServiceException;
+
       public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ScanResponse scan(
           com.google.protobuf.RpcController controller,
           org.apache.hadoop.hbase.protobuf.generated.ClientProtos.ScanRequest request)
@@ -32671,6 +32676,17 @@ public final class ClientProtos {
           org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetResponse.getDefaultInstance());
       }
 
+
+      public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateResponse mutate(
+          com.google.protobuf.RpcController controller,
+          org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateRequest request, Object responseTK)
+          throws com.google.protobuf.ServiceException {
+        return (org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateResponse) channel.callBlockingMethod(
+          getDescriptor().getMethods().get(1),
+          controller,
+          request,
+          org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateResponse.getDefaultInstance());
+      }
 
       public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MutateResponse mutate(
           com.google.protobuf.RpcController controller,

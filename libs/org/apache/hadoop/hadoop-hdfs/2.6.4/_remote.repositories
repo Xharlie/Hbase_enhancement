@@ -1,0 +1,5 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Tue May 31 21:13:48 CST 2016
+hadoop-hdfs-2.6.4.jar>apache\ release=
+hadoop-hdfs-2.6.4.pom>apache\ release=
+hadoop-hdfs-2.6.4-tests.jar>apache\ release=

@@ -1,0 +1,12 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Fri Jul 15 14:10:42 CST 2016
+http\://mvnonline.alibaba-inc.com/mvn/repository/.lastUpdated=1468563042726
+http\://repository.apache.org/snapshots/.lastUpdated=1468563042665
+http\://download.java.net/maven/2/.lastUpdated=1462246537639
+http\://repository.jboss.org/nexus/content/groups/public-jboss/.lastUpdated=1462246538901
+https\://repository.apache.org/content/repositories/releases/.lastUpdated=1462246534923
+http\://scala-tools.org/repo-releases/.lastUpdated=1468563042021
+http\://download.java.net/maven/2/.error=
+http\://scala-tools.org/repo-releases/.error=
+https\://repository.apache.org/content/repositories/releases/.error=
+http\://repository.apache.org/snapshots/.error=

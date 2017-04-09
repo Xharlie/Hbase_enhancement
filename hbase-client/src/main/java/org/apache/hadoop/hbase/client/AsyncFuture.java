@@ -24,12 +24,15 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.google.common.base.Preconditions;
+import com.google.common.util.concurrent.ExecutionList;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
@@ -44,19 +47,21 @@ import com.google.protobuf.Message;
  */
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
-public abstract class AsyncFuture<V> implements Future<V>{
+public abstract class AsyncFuture<V> implements Future<V> {
   protected HTable table;
   protected int maxAttempts = 1;// at least try once
   protected AtomicInteger numAttempts = new AtomicInteger(0);
   protected IOException toThrow; // exception to throw
   protected V toReturn; // result to return
   // tracking exceptions during retry
-  protected ArrayList<ThrowableWithExtraContext> exceptions =
-      new ArrayList<RetriesExhaustedException.ThrowableWithExtraContext>();
+  // must be thread safe since this list might be updated in different callbacks
+  protected List<ThrowableWithExtraContext> exceptions = Collections
+      .synchronizedList(new ArrayList<RetriesExhaustedException.ThrowableWithExtraContext>());
   protected volatile boolean isCanceled = false;
   protected volatile boolean isDone = false;
   protected final long startTime = System.currentTimeMillis();
   protected volatile long executionTime = -1;
+  protected ExecutionList executionList = new ExecutionList();
 
   // set core pool size to 10 to avoid too many idle threads
   private static final ScheduledThreadPoolExecutor retryExecutor =
@@ -171,5 +176,51 @@ public abstract class AsyncFuture<V> implements Future<V>{
       return true;
     }
     return false;
+  }
+
+  /**
+   * Registers a listener to be {@linkplain Executor#execute(Runnable) run} on the given executor.
+   * The listener will run when the {@code Future}'s computation is {@linkplain AsyncFuture#isDone()
+   * complete} or, if the computation is already complete, immediately.
+   *
+   * @param listener The listener to invoke when {@code future} is completed.
+   * @param executor The executor to run {@code listener} when the future completes.
+   */
+  public AsyncFuture addListener(final Listener<V> listener, Executor executor) {
+    Preconditions.checkNotNull(listener, "Listener was null.");
+    Preconditions.checkNotNull(executor, "Executor was null.");
+
+    synchronized (executionList) {
+      executionList.add(new Runnable() {
+        @Override
+        public void run() {
+          V val;
+          try {
+            val = get();
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            listener.onError(e);
+            return;
+          } catch (ExecutionException e) {
+            e.printStackTrace();
+            listener.onError(e.getCause());
+            return;
+          }
+          listener.onComplete(val);
+        }
+      }, executor);
+
+      if (isDone) {
+        notifyListener();
+      }
+    }
+
+    return this;
+  }
+
+  protected void notifyListener() {
+    synchronized (executionList) {
+      executionList.execute();
+    }
   }
 }

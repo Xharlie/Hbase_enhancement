@@ -2,16 +2,22 @@ package org.apache.hadoop.hbase.regionserver;
 
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.Message;
+import com.google.protobuf.ServiceException;
 import com.google.protobuf.TextFormat;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.*;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Mutation;
+import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.RetriesExhaustedException;
 import org.apache.hadoop.hbase.exceptions.FailedSanityCheckException;
 import org.apache.hadoop.hbase.ipc.Call;
 import org.apache.hadoop.hbase.ipc.PayloadCarryingRpcController;
 import org.apache.hadoop.hbase.ipc.RpcServer;
+import org.apache.hadoop.hbase.ipc.ServerNotRunningYetException;
 import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
+import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.ResponseConverter;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse;
@@ -27,24 +33,24 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicLong;
+
 
 /**
  * Created by xharlie on 7/25/16.
  */
 public class ResponseToolKit {
 
-    public Region region;
-    public MultiResponse.Builder responseBuilder;
+    protected static final Log LOG = LogFactory.getLog(ResponseToolKit.class);
+    public HRegion hregion;
+    public MultiResponse.Builder multiResponseBuilder;
+    public ClientProtos.MutateResponse.Builder mutateResponseBuilder;
     public PayloadCarryingRpcController controller;
     public RegionActionResult.Builder regionActionResultBuilder;
     public List<CellScannable> cellsToReturn;
     public List<ClientProtos.Action> mutations;
     public Map<byte[], List<Cell>>[] familyMaps;
-    public long addedSize = 0;
-    public long txid;
     public Durability durability;
-    public List<MultiVersionConsistencyControl.WriteEntry> writeEntryList;
-    public WALEdit[] walEdits;
     public RpcServer.Call call;
     public long receiveTime;
     public long startTime;
@@ -58,14 +64,22 @@ public class ResponseToolKit {
     public long before;
     public Throwable errorThrowable = null;
     public String error = null;
-//    public BatchOperationInProgress<?> batchOp;
+    public HRegion.BatchOperationInProgress<?> batchOp;
+    public Mutation mutation;
+    public boolean responded;
+    public Mutation[] mArray;
 
-    public void setResponseToolKit(Region region, MultiResponse.Builder responseBuilder,
+    public void setMultiResponseToolKit(Region region, MultiResponse.Builder responseBuilder,
                     RegionActionResult.Builder regionActionResultBuilder, List<CellScannable> cellsToReturn ){
-        this.region = region;
-        this.responseBuilder = responseBuilder;
+        this.hregion = (HRegion)region;
+        this.multiResponseBuilder = responseBuilder;
         this.regionActionResultBuilder = regionActionResultBuilder;
         this.cellsToReturn = cellsToReturn;
+    }
+
+    public void setMutateResponseToolKit(Region region, ClientProtos.MutateResponse.Builder responseBuilder){
+        this.hregion = (HRegion)region;
+        this.mutateResponseBuilder = responseBuilder;
     }
 
     public void setRegionServer(HRegionServer regionServer){
@@ -83,33 +97,57 @@ public class ResponseToolKit {
         this.md = md;
         this.param = param;
         durability = Durability.USE_DEFAULT;
-        writeEntryList = new LinkedList<>();
+    }
+
+    public Throwable addMutateException(Throwable errorThrowable, OperationStatus[] retCodeDetails) {
+        Throwable err = null;
+        if (errorThrowable != null) {
+            err = errorThrowable;
+        } else {
+            if (retCodeDetails[0].equals(HConstants.OperationStatusCode.SANITY_CHECK_FAILURE)) {
+                err = new FailedSanityCheckException(retCodeDetails[0].getExceptionMsg());
+            } else if (retCodeDetails[0].getOperationStatusCode().equals(HConstants.OperationStatusCode.BAD_FAMILY)) {
+                err = new NoSuchColumnFamilyException(retCodeDetails[0].getExceptionMsg());
+            }
+        }
+        if (err != null) err = new ServiceException(err);
+        try {
+            regionServer.checkFileSystem();
+        } catch (Exception ie) {
+            err = ie;
+        }
+        return err;
     }
 
     public void respond(OperationStatus[] retCodeDetails, Throwable errorThrowable, String error) throws IOException{
-        addResultToBuilder(retCodeDetails);
-        if (regionServer.metricsRegionServer != null) {
-            long after = EnvironmentEdgeManager.currentTime();
-            if (batchContainsPuts) {
-                regionServer.metricsRegionServer.updatePut(after - before);
+        responded = true;
+        Message result;
+        Throwable err = errorThrowable;
+        String errString = error;
+        if (multiResponseBuilder != null) {
+            addResultToBuilder(retCodeDetails);
+            result = multiResponseBuilder.build();
+        } else if (mutateResponseBuilder != null) {
+            err = addMutateException(errorThrowable, retCodeDetails);
+            if (err == null) {
+                addResult(mutateResponseBuilder, null, controller);
+            } else {
+                errString = err.getMessage();
             }
-            if (batchContainsDelete) {
-                regionServer.metricsRegionServer.updateDelete(after - before);
-            }
+            mutateResponseBuilder.setProcessed(true);
+            result = mutateResponseBuilder.build();
+        } else {
+            LOG.fatal("Both multiResponseBuilder and mutateResponseBuilder is null when responding");
+            return;
         }
-        responseBuilder.addRegionActionResult(regionActionResultBuilder.build());
-        // Load the controller with the Cells to return.
-        if (cellsToReturn != null && !cellsToReturn.isEmpty() && controller != null) {
-            controller.setCellScanner(CellUtil.createCellScanner(cellsToReturn));
-        }
-        Message result = responseBuilder.build();
         RpcServer.updateCallMetrics(startTime, receiveTime, result, call, status, md, param);
         if (!call.isDelayed() || !call.isReturnValueDelayed()) {
             CellScanner cells = controller != null ? controller.cellScanner() : null;
-            call.setResponse(result, cells, errorThrowable, error);
+            call.setResponse(result, cells, err, errString);
         }
         this.call.sendResponseIfReady();
     }
+
 
     private static ClientProtos.ResultOrException getResultOrException(
             final ClientProtos.Result r, final int index, final ClientProtos.RegionLoadStats stats) {
@@ -123,6 +161,18 @@ public class ResponseToolKit {
     private static ClientProtos.ResultOrException getResultOrException(
             final ClientProtos.ResultOrException.Builder builder, final int index) {
         return builder.setIndex(index).build();
+    }
+
+    private void addResult(final ClientProtos.MutateResponse.Builder builder, final Result result,
+                           final PayloadCarryingRpcController rpcc) {
+        if (result == null) return;
+        if (call != null && call.isClientCellBlockSupport()) {
+            builder.setResult(ProtobufUtil.toResultNoData(result));
+            rpcc.setCellScanner(result.cellScanner());
+        } else {
+            ClientProtos.Result pbr = ProtobufUtil.toResult(result);
+            builder.setResult(pbr);
+        }
     }
 
     public void addResultToBuilder(OperationStatus[] codes){
@@ -148,18 +198,28 @@ public class ResponseToolKit {
                 case SUCCESS:
                     regionActionResultBuilder.addResultOrException(getResultOrException(
                             ClientProtos.Result.getDefaultInstance(), index,
-                            ((HRegion)region).getRegionStats()));
+                            hregion.getRegionStats()));
                     break;
             }
         }
+        if (regionServer.metricsRegionServer != null) {
+            long after = EnvironmentEdgeManager.currentTime();
+            if (batchContainsPuts) {
+                regionServer.metricsRegionServer.updatePut(after - before);
+            }
+            if (batchContainsDelete) {
+                regionServer.metricsRegionServer.updateDelete(after - before);
+            }
+        }
+        multiResponseBuilder.addRegionActionResult(regionActionResultBuilder.build());
+        // Load the controller with the Cells to return.
+        if (cellsToReturn != null && !cellsToReturn.isEmpty() && controller != null) {
+            controller.setCellScanner(CellUtil.createCellScanner(cellsToReturn));
+        }
     }
 
-    public Region getRegion() {
-        return region;
-    }
-
-    public void setRegion(Region region) {
-        this.region = region;
+    public HRegion getRegion() {
+        return hregion;
     }
 
     public List<ClientProtos.Action> getMutations() {
@@ -168,14 +228,6 @@ public class ResponseToolKit {
 
     public void setMutations(List<ClientProtos.Action> mutations) {
         this.mutations = mutations;
-    }
-
-    public MultiResponse.Builder getResponseBuilder() {
-        return responseBuilder;
-    }
-
-    public void setResponseBuilder(MultiResponse.Builder responseBuilder) {
-        this.responseBuilder = responseBuilder;
     }
 
     public PayloadCarryingRpcController getController() {

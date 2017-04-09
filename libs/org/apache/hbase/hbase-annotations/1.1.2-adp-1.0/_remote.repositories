@@ -1,0 +1,5 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Tue May 31 21:05:12 CST 2016
+hbase-annotations-1.1.2-adp-1.0.pom>=
+hbase-annotations-1.1.2-adp-1.0-tests.jar>=
+hbase-annotations-1.1.2-adp-1.0.jar>=

@@ -1,0 +1,6 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Tue May 31 21:05:29 CST 2016
+hbase-protocol-1.1.2-adp-1.0.pom>=
+hbase-protocol-1.1.2-adp-1.0-tests.jar>=
+hbase-protocol-1.1.2-adp-1.0.jar>=
+hbase-protocol-1.1.2-adp-1.0-sources.jar>=

@@ -1,0 +1,6 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Fri Jul 15 14:13:20 CST 2016
+httpclient-4.1.2.jar>tbmirror=
+httpclient-4.1.2.pom>apache\ release=
+httpclient-4.1.2.pom>tbmirror=
+httpclient-4.1.2.jar>apache\ release=

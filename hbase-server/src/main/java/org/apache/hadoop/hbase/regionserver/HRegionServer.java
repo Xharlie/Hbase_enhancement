@@ -157,9 +157,12 @@ import org.apache.hadoop.hbase.util.ServerRegionReplicaUtil;
 import org.apache.hadoop.hbase.util.Sleeper;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.util.VersionInfo;
+import org.apache.hadoop.hbase.wal.BoundedGroupingStrategy;
 import org.apache.hadoop.hbase.wal.DefaultWALProvider;
+import org.apache.hadoop.hbase.wal.RegionGroupingProvider;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALFactory;
+import org.apache.hadoop.hbase.wal.WALProvider;
 import org.apache.hadoop.hbase.zookeeper.ClusterStatusTracker;
 import org.apache.hadoop.hbase.zookeeper.MasterAddressTracker;
 import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
@@ -507,6 +510,47 @@ public class HRegionServer extends HasThread implements
   public void setDirectHealthCheckNumUnhealthy(int directHealthCheckNumUnhealthy){
     this.directHealthCheckNumUnhealthy = directHealthCheckNumUnhealthy;
   }
+
+  public int getAllPreAppendQueueSize() {
+    if (!(walFactory.getWALProvider() instanceof RegionGroupingProvider)) return 0;
+    RegionGroupingProvider provider = (RegionGroupingProvider)walFactory.getWALProvider();
+    int amount = 0;
+    for (String regionGP : provider.cachedRegion.keySet()){
+      HRegionGroupProcess hrgp = provider.cachedRegion.get(regionGP);
+      if (hrgp != null) {
+        amount += hrgp.getAllPreAppendQueueSize();
+      }
+    }
+    return amount;
+  }
+
+  public int getAllSyncFinishQueueSize() {
+    if (!(walFactory.getWALProvider() instanceof RegionGroupingProvider)) return 0;
+    RegionGroupingProvider provider = (RegionGroupingProvider)walFactory.getWALProvider();
+    int amount = 0;
+    for (String regionGP : provider.cachedRegion.keySet()){
+      HRegionGroupProcess hrgp = provider.cachedRegion.get(regionGP);
+      if (hrgp != null) {
+        amount += hrgp.getAllSyncFinishQueueSize();
+      }
+    }
+    return amount;
+  }
+
+  public int getAllAsyncFinishQueueSize() {
+    if (!(walFactory.getWALProvider() instanceof RegionGroupingProvider)) return 0;
+    RegionGroupingProvider provider = (RegionGroupingProvider)walFactory.getWALProvider();
+    int amount = 0;
+    for (String regionGP : provider.cachedRegion.keySet()){
+      HRegionGroupProcess hrgp = provider.cachedRegion.get(regionGP);
+      if (hrgp != null) {
+        amount += hrgp.getAllAsyncFinishQueueSize();
+      }
+    }
+    return amount;
+  }
+
+
 
   /**
    * Configuration manager is used to register/deregister and notify the configuration observers

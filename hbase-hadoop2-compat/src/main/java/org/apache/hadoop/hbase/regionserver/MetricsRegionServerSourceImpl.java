@@ -337,7 +337,13 @@ public class MetricsRegionServerSourceImpl
           .addGauge(Interns.info(DIRECT_HEALTH_CHECK_FAILED_RATIO, DIRECT_HEALTH_CHECK_FAILED_RARIO_DESC),
               rsWrap.getDirectHealthCheckFailedRatio())
           .addCounter(Interns.info(DIRECT_HEALTH_CHECK_NUM_UNHEALTHY, DIRECT_HEALTH_CHECK_NUM_UNHEALTHY_DESC),
-                      rsWrap.getDirectHealthCheckNumUnhealthy());
+                      rsWrap.getDirectHealthCheckNumUnhealthy())
+          .addGauge(Interns.info(PREAPPEND_QUEUE_SIZE, PREAPPEND_QUEUE_SIZE_DESC),
+                  rsWrap.getPreAppendQueueSize())
+          .addGauge(Interns.info(SYNCFINISH_QUEUE_SIZE, SYNCFINISH_QUEUE_SIZE_DESC),
+              rsWrap.getSyncFinishQueueSize())
+          .addGauge(Interns.info(ASYNCFINISH_QUEUE_SIZE, ASYNCFINISH_QUEUE_SIZE_DESC),
+              rsWrap.getAsyncFinishQueueSize());
     }
 
     metricsRegistry.snapshot(mrb, all);

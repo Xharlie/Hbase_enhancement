@@ -87,6 +87,9 @@ class MetricsRegionServerWrapperImpl
   private volatile long directHealthCheckSelectedRegionCount = 0L;
   private volatile double directHealthCheckFailedRatio = 0L;
   private volatile int directHealthCheckNumUnhealthy = 0;
+  private volatile int preAppendQueueSize = 0;
+  private volatile int syncFinishQueueSize = 0;
+  private volatile int asyncFinishQueueSize = 0;
 
   private CacheStats cacheStats;
   private ScheduledExecutorService executor;
@@ -534,6 +537,21 @@ class MetricsRegionServerWrapperImpl
     return directHealthCheckNumUnhealthy;
   }
 
+  @Override
+  public int getPreAppendQueueSize() {
+    return preAppendQueueSize;
+  }
+
+  @Override
+  public int getSyncFinishQueueSize() {
+    return syncFinishQueueSize;
+  }
+
+  @Override
+  public int getAsyncFinishQueueSize() {
+    return asyncFinishQueueSize;
+  }
+
   /**
    * This is the runnable that will be executed on the executor every PERIOD number of seconds
    * It will take metrics/numbers from all of the regions and use them to compute point in
@@ -709,6 +727,9 @@ class MetricsRegionServerWrapperImpl
         directHealthCheckSelectedRegionCount = regionServer.getDirectHealthCheckSelectedRegionCount();
         directHealthCheckFailedRatio = regionServer.getDirectHealthCheckFailedRatio();
         directHealthCheckNumUnhealthy = regionServer.getDirectHealthCheckNumUnhealthy();
+        preAppendQueueSize = regionServer.getAllPreAppendQueueSize();
+        syncFinishQueueSize = regionServer.getAllSyncFinishQueueSize();
+        asyncFinishQueueSize = regionServer.getAllAsyncFinishQueueSize();
       } catch (Throwable e) {
         LOG.warn("Caught exception! Will suppress and retry.", e);
       }

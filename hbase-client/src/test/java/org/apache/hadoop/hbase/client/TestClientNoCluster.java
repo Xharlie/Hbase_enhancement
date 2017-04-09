@@ -491,6 +491,12 @@ public class TestClientNoCluster extends Configured implements Tool {
     }
 
     @Override
+    public MutateResponse mutate(RpcController controller,
+        MutateRequest request, Object responseTK) throws ServiceException {
+      throw new NotImplementedException();
+    }
+
+    @Override
     public ScanResponse scan(RpcController controller,
         ScanRequest request) throws ServiceException {
       // Presume it is a scan of meta for now. Not all scans provide a region spec expecting

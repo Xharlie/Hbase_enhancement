@@ -33,6 +33,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.regionserver.HRegionGroupProcess;
 import org.apache.hadoop.hbase.regionserver.wal.FSHLog;
 import org.apache.hadoop.hbase.regionserver.wal.MetricsWAL;
 // imports for classes still in regionserver.wal
@@ -57,7 +58,7 @@ import org.apache.hadoop.hbase.util.FSUtils;
  * (ref {@link WALFactory}) and defaults to the defaultProvider.
  */
 @InterfaceAudience.Private
-class RegionGroupingProvider implements WALProvider {
+public class RegionGroupingProvider implements WALProvider {
   private static final Log LOG = LogFactory.getLog(RegionGroupingProvider.class);
 
   /**
@@ -131,13 +132,15 @@ class RegionGroupingProvider implements WALProvider {
   private static final String META_WAL_GROUP_NAME = "meta";
 
   protected final ConcurrentMap<String, FSHLog> cached = new ConcurrentHashMap<String, FSHLog>();
+  public final ConcurrentMap<String, HRegionGroupProcess> cachedRegion =
+          new ConcurrentHashMap<String, HRegionGroupProcess>();
   /**
    * we synchronized on walCacheLock to prevent wal recreation in different threads
    */
   final Object walCacheLock = new Object();
 
 
-  protected RegionGroupingStrategy strategy = null;
+  public RegionGroupingStrategy strategy = null;
   private List<WALActionsListener> listeners = null;
   private String providerId = null;
   private Configuration conf = null;
@@ -182,6 +185,29 @@ class RegionGroupingProvider implements WALProvider {
             DefaultWALProvider.getWALDirectoryName(providerId), HConstants.HREGION_OLDLOGDIR_NAME,
             conf, listeners, true, hlogPrefix, isMeta ? META_WAL_PROVIDER_ID : null);
     final FSHLog extant = cached.putIfAbsent(groupName, log);
+    // create the HRegionGroupProcess along with wal
+    HRegionGroupProcess regionGP = new HRegionGroupProcess(log);
+    if (this.strategy instanceof BoundedGroupingStrategy)
+      regionGP.indexInGroupCache = ((BoundedGroupingStrategy) this.strategy).indexInGroupCache;
+    HRegionGroupProcess extantRGP = cachedRegion.putIfAbsent(groupName, regionGP);
+    if(extantRGP != null) {
+      regionGP.close();
+      if (null == extant) {
+        extantRGP.hlog = log;
+        extantRGP.wal = log;
+        log.hrgp = extantRGP;
+      }
+    } else {
+      if (null == extant) {
+        regionGP.hlog = log;
+        regionGP.wal = log;
+        log.hrgp = regionGP;
+      } else {
+        regionGP.hlog = extant;
+        regionGP.wal = extant;
+        extant.hrgp = regionGP;
+      }
+    }
     if (null != extant) {
       log.close();
       return extant;
@@ -219,6 +245,7 @@ class RegionGroupingProvider implements WALProvider {
     for (FSHLog wal : cached.values()) {
       try {
         wal.shutdown();
+        wal.hrgp.close();
       } catch (IOException exception) {
         LOG.error("Problem shutting down provider '" + wal + "': " + exception.getMessage());
         LOG.debug("Details of problem shutting down provider '" + wal + "'", exception);
@@ -237,6 +264,7 @@ class RegionGroupingProvider implements WALProvider {
     for (FSHLog wal : cached.values()) {
       try {
         wal.close();
+        wal.hrgp.close();
       } catch (IOException exception) {
         LOG.error("Problem closing provider '" + wal + "': " + exception.getMessage());
         LOG.debug("Details of problem shutting down provider '" + wal + "'", exception);

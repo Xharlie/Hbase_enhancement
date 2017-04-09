@@ -156,6 +156,7 @@ import org.apache.hadoop.hbase.regionserver.compactions.CompactionContext;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionThroughputControllerFactory;
 import org.apache.hadoop.hbase.regionserver.compactions.NoLimitCompactionThroughputController;
 import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
+import org.apache.hadoop.hbase.regionserver.wal.FSHLog;
 import org.apache.hadoop.hbase.regionserver.wal.HLogKey;
 import org.apache.hadoop.hbase.regionserver.wal.MetricsWAL;
 import org.apache.hadoop.hbase.regionserver.wal.ReplayHLogKey;
@@ -294,7 +295,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   final AtomicLong compactionNumFilesCompacted = new AtomicLong(0L);
   final AtomicLong compactionNumBytesCompacted = new AtomicLong(0L);
 
-  private final WAL wal;
+  public final WAL wal;
   private final HRegionFileSystem fs;
   protected final Configuration conf;
   private final Configuration baseConf;
@@ -585,33 +586,31 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     new ReentrantReadWriteLock();
 
   // Stop updates lock
-  private final ReentrantReadWriteLock updatesLock =
+  public final ReentrantReadWriteLock updatesLock =
     new ReentrantReadWriteLock();
   private boolean splitRequest;
   private byte[] explicitSplitPoint = null;
 
-  private final MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
+  public final MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
 
   // Coprocessor host
-  private RegionCoprocessorHost coprocessorHost;
+  public RegionCoprocessorHost coprocessorHost;
 
-  private HTableDescriptor htableDescriptor = null;
+  public HTableDescriptor htableDescriptor = null;
   private RegionSplitPolicy splitPolicy;
   private FlushPolicy flushPolicy;
 
-  private final MetricsRegion metricsRegion;
+  public final MetricsRegion metricsRegion;
   private final MetricsRegionWrapperImpl metricsRegionWrapper;
   private final Durability durability;
   private final boolean regionStatsEnabled;
 
   // check if region belongs to hqueue
-  private boolean isHQueueRegion = false;
+  public boolean isHQueueRegion = false;
   // final preBatchMutate lock for hqueue
-  private final ReentrantLock hqueueLock = new ReentrantLock();
+  public final ReentrantLock hqueueLock = new ReentrantLock();
   // lock for mvcc preassignment
   private final ReentrantLock preAssignMvccLock = new ReentrantLock();
-
-  private final AsyncSyncer[] asyncSyncers;
 
   /**
    * HRegion constructor. This constructor should only be used for testing and
@@ -767,13 +766,6 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       if ("com.etao.hadoop.hbase.queue.coprocessor.HQueueCoprocessor".equals(coprocessor)) {
         isHQueueRegion = true;
       }
-    }
-    int syncerNum = this.conf.getInt("hbase.regionserver.syncer.count", 10);
-    asyncSyncers= new AsyncSyncer[syncerNum];
-    final String n = Thread.currentThread().getName();
-    for (int i = 0; i < asyncSyncers.length; ++i) {
-      asyncSyncers[i] = new AsyncSyncer(n + "-HRegion.AsyncSyncer" + i, this);
-      asyncSyncers[i].start();
     }
   }
 
@@ -2706,15 +2698,35 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     }
   }
 
+  public void put(ResponseToolKit responseToolKit) throws IOException {
+    checkReadOnly();
+
+    // Do a rough check that we have resources to accept a write.  The check is
+    // 'rough' in that between the resource check and the call to obtain a
+    // read lock, resources may run out.  For now, the thought is that this
+    // will be extremely rare; we'll deal with it when it happens.
+    checkResources();
+    startRegionOperation(Operation.PUT);
+    try {
+      // All edits for the given row (across all column families) must happen atomically.
+      ((FSHLog)wal).hrgp.addRequest(responseToolKit);
+//      doBatchMutate(responseToolKit);
+    } catch (InterruptedException e) {
+      LOG.fatal("HRegion.put");
+    } finally {
+      closeRegionOperation(Operation.PUT);
+    }
+  }
+
   /**
    * Struct-like class that tracks the progress of a batch operation,
    * accumulating status codes and tracking the index at which processing
    * is proceeding.
    */
   public abstract static class BatchOperationInProgress<T> {
-    T[] operations;
-    int nextIndexToProcess = 0;
-    OperationStatus[] retCodeDetails;
+    public T[] operations;
+    volatile int nextIndexToProcess = 0;
+    public OperationStatus[] retCodeDetails;
     WALEdit[] walEditsFromCoprocessors;
 
     public BatchOperationInProgress(T[] operations) {
@@ -2737,7 +2749,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     }
   }
 
-  private static class MutationBatch extends BatchOperationInProgress<Mutation> {
+  public static class MutationBatch extends BatchOperationInProgress<Mutation> {
     private long nonceGroup;
     private long nonce;
     public MutationBatch(Mutation[] operations, long nonceGroup, long nonce) {
@@ -2840,6 +2852,10 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     return batchMutate(mutations, HConstants.NO_NONCE, HConstants.NO_NONCE);
   }
 
+  public OperationStatus[] batchMutate(Mutation[] mutations, ResponseToolKit responseToolKit) throws IOException {
+    return batchMutate(mutations, HConstants.NO_NONCE, HConstants.NO_NONCE, responseToolKit);
+  }
+
   @Override
   public OperationStatus[] batchReplay(MutationReplay[] mutations, long replaySeqId)
       throws IOException {
@@ -2916,7 +2932,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
                                 final ResponseToolKit responseTK) throws IOException {
     boolean initialized = false;
     Operation op = batchOp.isInReplay() ? Operation.REPLAY_BATCH_MUTATE : Operation.BATCH_MUTATE;
-    responseTK.walEdits = new WALEdit[batchOp.operations.length];
+    responseTK.batchOp = batchOp;
     startRegionOperation(op);
     try {
       responseTK.familyMaps = new Map[batchOp.operations.length];
@@ -2932,7 +2948,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
           }
           initialized = true;
         }
-        doMiniBatchMutation(batchOp, responseTK);
+//        doMiniBatchMutation(batchOp, responseTK);
       }
     } catch (Throwable e) {
       responseTK.errorThrowable = e;
@@ -2940,40 +2956,11 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       throw e;
     } finally {
       closeRegionOperation(op);
-      switch(durability) {
-      case SYNC_WAL:
-      case FSYNC_WAL:
-        AsyncSyncer chosenSyncer = null;
-        boolean hasIdleSyncer = false;
-        for (int i = 0; i < asyncSyncers.length; ++i) {
-          if (!asyncSyncers[i].isSyncing()) {
-            hasIdleSyncer = true;
-            chosenSyncer = asyncSyncers[i];
-            break;
-          }
-        }
-        if (!hasIdleSyncer) {
-          int idx = (int)(responseTK.txid  % asyncSyncers.length);
-          chosenSyncer = asyncSyncers[idx];
-        }
-        synchronized (chosenSyncer.pendingSyncsLock) {
-          chosenSyncer.pendingSyncs.add(new Pair<BatchOperationInProgress<?>,
-                  ResponseToolKit>(batchOp, responseTK));
-        }
-        chosenSyncer.notifySyncLock();
-        break;
-      default:
-        long newSize = this.addAndGetGlobalMemstoreSize(syncAndResponse(batchOp, responseTK));
-        if (isFlushSize(newSize)) {
-          requestFlush();
-        }
-        responseTK.respond(batchOp.retCodeDetails, responseTK.errorThrowable, responseTK.error);
-      }
     }
     return batchOp.retCodeDetails;
   }
 
-  private void doPreMutationHook(BatchOperationInProgress<?> batchOp)
+  public void doPreMutationHook(BatchOperationInProgress<?> batchOp)
       throws IOException {
     /* Run coprocessor pre hook outside of locks to avoid deadlock */
     WALEdit walEdit = new WALEdit();
@@ -3014,6 +3001,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
   @SuppressWarnings("unchecked")
   private long doMiniBatchMutation(BatchOperationInProgress<?> batchOp) throws IOException {
+    LOG.fatal("old doMiniBatchMutation");
     boolean isInReplay = batchOp.isInReplay();
     // variable to note if all Put items are for the same CF -- metrics related
     boolean putsCfSetConsistent = true;
@@ -3452,487 +3440,515 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     }
   }
 
-  private void doMiniBatchMutation(BatchOperationInProgress<?> batchOp, ResponseToolKit responseTK) throws IOException {
-    boolean isInReplay = batchOp.isInReplay();
-    // variable to note if all Put items are for the same CF -- metrics related
-    boolean putsCfSetConsistent = true;
-    //The set of columnFamilies first seen for Put.
-    Set<byte[]> putsCfSet = null;
-    // variable to note if all Delete items are for the same CF -- metrics related
-    boolean deletesCfSetConsistent = true;
-    //The set of columnFamilies first seen for Delete.
-    Set<byte[]> deletesCfSet = null;
-
-    long currentNonceGroup = HConstants.NO_NONCE, currentNonce = HConstants.NO_NONCE;
-    WALEdit walEdit = new WALEdit(isInReplay);
-    MultiVersionConsistencyControl.WriteEntry writeEntry = null;
-    long txid = 0;
-    boolean doRollBackMemstore = false;
-    boolean locked = false;
-
-    /** Keep track of the locks we hold so we can release them in finally clause */
-    List<RowLock> acquiredRowLocks = Lists.newArrayListWithCapacity(batchOp.operations.length);
-    // reference family maps directly so coprocessors can mutate them if desired
-    // We try to set up a batch in the range [firstIndex,lastIndexExclusive)
-    int firstIndex = batchOp.nextIndexToProcess;
-    int lastIndexExclusive = firstIndex;
-    boolean success = false;
-    int noOfPuts = 0, noOfDeletes = 0;
-    WALKey walKey = null;
-    long mvccNum = 0;
-    try {
-      // ------------------------------------
-      // STEP 1. Try to acquire as many locks as we can, and ensure
-      // we acquire at least one.
-      // ----------------------------------
-      int numReadyToWrite = 0;
-      long now = EnvironmentEdgeManager.currentTime();
-      while (lastIndexExclusive < batchOp.operations.length) {
-        Mutation mutation = batchOp.getMutation(lastIndexExclusive);
-        boolean isPutMutation = mutation instanceof Put;
-
-        Map<byte[], List<Cell>> familyMap = mutation.getFamilyCellMap();
-        // store the family map reference to allow for mutations
-        responseTK.familyMaps[lastIndexExclusive] = familyMap;
-
-        // skip anything that "ran" already
-        if (batchOp.retCodeDetails[lastIndexExclusive].getOperationStatusCode()
-                != OperationStatusCode.NOT_RUN) {
-          lastIndexExclusive++;
-          continue;
-        }
-
-        try {
-          if (isPutMutation) {
-            // Check the families in the put. If bad, skip this one.
-            if (isInReplay) {
-              removeNonExistentColumnFamilyForReplay(familyMap);
-            } else {
-              checkFamilies(familyMap.keySet());
-            }
-            checkTimestamps(mutation.getFamilyCellMap(), now);
-          } else {
-            prepareDelete((Delete) mutation);
-          }
-          checkRow(mutation.getRow(), "doMiniBatchMutation");
-        } catch (NoSuchColumnFamilyException nscf) {
-          LOG.warn("No such column family in batch mutation", nscf);
-          batchOp.retCodeDetails[lastIndexExclusive] = new OperationStatus(
-                  OperationStatusCode.BAD_FAMILY, nscf.getMessage());
-          lastIndexExclusive++;
-          continue;
-        } catch (FailedSanityCheckException fsce) {
-          LOG.warn("Batch Mutation did not pass sanity check", fsce);
-          batchOp.retCodeDetails[lastIndexExclusive] = new OperationStatus(
-                  OperationStatusCode.SANITY_CHECK_FAILURE, fsce.getMessage());
-          lastIndexExclusive++;
-          continue;
-        } catch (WrongRegionException we) {
-          LOG.warn("Batch mutation had a row that does not belong to this region", we);
-          batchOp.retCodeDetails[lastIndexExclusive] = new OperationStatus(
-                  OperationStatusCode.SANITY_CHECK_FAILURE, we.getMessage());
-          lastIndexExclusive++;
-          continue;
-        }
-
-        // ignore row lock for hqueue
-        if (!isHQueueRegion) {
-          // If we haven't got any rows in our batch, we should block to get the next one.
-          RowLock rowLock = null;
-          try {
-            rowLock = getRowLock(mutation.getRow(), true);
-          } catch (IOException ioe) {
-            LOG.warn(
-                    "Failed getting lock in batch put, row=" + Bytes.toStringBinary(mutation.getRow()),
-                    ioe);
-          }
-          if (rowLock == null) {
-            // We failed to grab another lock
-            break; // stop acquiring more rows for this batch
-          } else {
-            acquiredRowLocks.add(rowLock);
-          }
-        }
-
-        lastIndexExclusive++;
-        numReadyToWrite++;
-
-        if (isPutMutation) {
-          // If Column Families stay consistent through out all of the
-          // individual puts then metrics can be reported as a mutliput across
-          // column families in the first put.
-          if (putsCfSet == null) {
-            putsCfSet = mutation.getFamilyCellMap().keySet();
-          } else {
-            putsCfSetConsistent = putsCfSetConsistent
-                    && mutation.getFamilyCellMap().keySet().equals(putsCfSet);
-          }
-        } else {
-          if (deletesCfSet == null) {
-            deletesCfSet = mutation.getFamilyCellMap().keySet();
-          } else {
-            deletesCfSetConsistent = deletesCfSetConsistent
-                    && mutation.getFamilyCellMap().keySet().equals(deletesCfSet);
-          }
-        }
-      }
-
-      // we should record the timestamp only after we have acquired the rowLock,
-      // otherwise, newer puts/deletes are not guaranteed to have a newer timestamp
-      now = EnvironmentEdgeManager.currentTime();
-      byte[] byteNow = Bytes.toBytes(now);
-
-      // Nothing to put/delete -- an exception in the above such as NoSuchColumnFamily?
-      if (numReadyToWrite <= 0) return;
-
-      // We've now grabbed as many mutations off the list as we can
-
-      // ------------------------------------
-      // STEP 2. Update any LATEST_TIMESTAMP timestamps
-      // ----------------------------------
-      for (int i = firstIndex; !isInReplay && i < lastIndexExclusive; i++) {
-        // skip invalid
-        if (batchOp.retCodeDetails[i].getOperationStatusCode()
-                != OperationStatusCode.NOT_RUN) continue;
-
-        Mutation mutation = batchOp.getMutation(i);
-        if (mutation instanceof Put) {
-          updateCellTimestamps(responseTK.familyMaps[i].values(), byteNow);
-          noOfPuts++;
-        } else {
-          prepareDeleteTimestamps(mutation, responseTK.familyMaps[i], byteNow);
-          noOfDeletes++;
-        }
-        rewriteCellTags(responseTK.familyMaps[i], mutation);
-      }
-
-      lock(this.updatesLock.readLock(), numReadyToWrite);
-      locked = true;
-
-      // lock the mvcc begin and preBatchMutate process for hqueue
-      if (isHQueueRegion) {
-        hqueueLock.lock();
-      }
-
-      // calling the pre CP hook for batch mutation
-      if (!isInReplay && coprocessorHost != null) {
-        MiniBatchOperationInProgress<Mutation> miniBatchOp =
-                new MiniBatchOperationInProgress<Mutation>(batchOp.getMutationsForCoprocs(),
-                        batchOp.retCodeDetails, batchOp.walEditsFromCoprocessors, firstIndex, lastIndexExclusive);
-        if (coprocessorHost.preBatchMutate(miniBatchOp)) return;
-      }
-
-      // ------------------------------------
-      // STEP 3. Build WAL edit
-      // ----------------------------------
-      for (int i = firstIndex; i < lastIndexExclusive; i++) {
-        // Skip puts that were determined to be invalid during preprocessing
-        if (batchOp.retCodeDetails[i].getOperationStatusCode() != OperationStatusCode.NOT_RUN) {
-          continue;
-        }
-
-        Mutation m = batchOp.getMutation(i);
-        Durability tmpDur = getEffectiveDurability(m.getDurability());
-        if (tmpDur.ordinal() > responseTK.durability.ordinal()) {
-          responseTK.durability = tmpDur;
-        }
-        if (tmpDur == Durability.SKIP_WAL) {
-          recordMutationWithoutWal(m.getFamilyCellMap());
-          continue;
-        }
-
-        long nonceGroup = batchOp.getNonceGroup(i), nonce = batchOp.getNonce(i);
-        // In replay, the batch may contain multiple nonces. If so, write WALEdit for each.
-        // Given how nonces are originally written, these should be contiguous.
-        // They don't have to be, it will still work, just write more WALEdits than needed.
-        if (nonceGroup != currentNonceGroup || nonce != currentNonce) {
-          if (walEdit.size() > 0) {
-            assert isInReplay;
-            if (!isInReplay) {
-              throw new IOException("Multiple nonces per batch and not in replay");
-            }
-            // txid should always increase, so having the one from the last call is ok.
-            // we use HLogKey here instead of WALKey directly to support legacy coprocessors.
-            walKey = new ReplayHLogKey(this.getRegionInfo().getEncodedNameAsBytes(),
-                    this.htableDescriptor.getTableName(), now, m.getClusterIds(),
-                    currentNonceGroup, currentNonce, mvcc);
-            txid = this.wal.append(this.htableDescriptor, this.getRegionInfo(), walKey,
-                    walEdit, true);
-            walEdit = new WALEdit(isInReplay);
-            walKey = null;
-          }
-          currentNonceGroup = nonceGroup;
-          currentNonce = nonce;
-        }
-
-        // Add WAL edits by CP
-        WALEdit fromCP = batchOp.walEditsFromCoprocessors[i];
-        if (fromCP != null) {
-          for (Cell cell : fromCP.getCells()) {
-            walEdit.add(cell);
-          }
-        }
-        addFamilyMapToWALEdit(responseTK.familyMaps[i], walEdit);
-      }
-
-      // -------------------------
-      // STEP 4. Append the final edit to WAL. Do not sync wal.
-      // -------------------------
-      Mutation mutation = batchOp.getMutation(firstIndex);
-      if (isInReplay) {
-        // use wal key from the original
-        walKey = new ReplayHLogKey(this.getRegionInfo().getEncodedNameAsBytes(),
-                this.htableDescriptor.getTableName(), WALKey.NO_SEQUENCE_ID, now,
-                mutation.getClusterIds(), currentNonceGroup, currentNonce, mvcc);
-        long replaySeqId = batchOp.getReplaySequenceId();
-        walKey.setOrigLogSeqNum(replaySeqId);
-        if (walEdit.size() > 0) {
-          txid =
-                  this.wal.append(this.htableDescriptor, this.getRegionInfo(), walKey, walEdit, true);
-        }
-      } else {
-        try {
-          if (!isHQueueRegion) {
-            preAssignMvccLock.lock();
-            writeEntry = mvcc.beginMemstoreInsert();
-          }
-          if (walEdit.size() > 0) {
-            // we use HLogKey here instead of WALKey directly to support legacy coprocessors.
-            walKey = new HLogKey(this.getRegionInfo().getEncodedNameAsBytes(),
-                    this.htableDescriptor.getTableName(), WALKey.NO_SEQUENCE_ID, now,
-                    mutation.getClusterIds(), currentNonceGroup, currentNonce, mvcc);
-            walKey.setPreAssignedWriteEntry(writeEntry);
-            txid =
-                    this.wal.append(this.htableDescriptor, this.getRegionInfo(), walKey, walEdit, true);
-          } else {
-            // If this is a skip wal operation just get the read point from mvcc
-            walKey = this.appendEmptyEdit(this.wal, writeEntry);
-          }
-        } finally {
-          if (!isHQueueRegion) {
-            preAssignMvccLock.unlock();
-          }
-        }
-      }
-
-      // unlock for hqueue
-      // EHB-401: the correctness of unlocking before invoking FSWALEntry#getWriteEntry depends on
-      // the logic that FSHLog#disruptor uses single-thread executor and single handler thus
-      // FSWALEntry#stampRegionSequenceId is called sequentially. It's necessary to pay attention to the
-      // change of FSHLog#disruptor.
-      if (isHQueueRegion) {
-        hqueueLock.unlock();
-      }
-
-      // ------------------------------------
-      // Acquire the latest mvcc number
-      // ----------------------------------
-      if (!isInReplay) {
-        if (writeEntry == null) {
-          writeEntry = walKey.getWriteEntry();
-        } else {
-          if (writeEntry != walKey.getWriteEntry()) {
-            throw new RuntimeException("Preassigned write entry changed!");
-          }
-        }
-        mvccNum = writeEntry.getWriteNumber();
-      } else {
-        mvccNum = batchOp.getReplaySequenceId();
-      }
-
-      // ------------------------------------
-      // STEP 5. Write back to memstore
-      // Write to memstore. It is ok to write to memstore
-      // first without syncing the WAL because we do not roll
-      // forward the memstore MVCC. The MVCC will be moved up when
-      // the complete operation is done. These changes are not yet
-      // visible to scanners till we update the MVCC. The MVCC is
-      // moved only when the sync is complete.
-      // ----------------------------------
-      long addedSize = 0;
-      for (int i = firstIndex; i < lastIndexExclusive; i++) {
-        if (batchOp.retCodeDetails[i].getOperationStatusCode()
-                != OperationStatusCode.NOT_RUN) {
-          continue;
-        }
-        doRollBackMemstore = true; // If we have a failure, we need to clean what we wrote
-        addedSize += applyFamilyMapToMemstore(responseTK.familyMaps[i], mvccNum, isInReplay);
-      }
-
-      // -------------------------------
-      // STEP 6. Release row locks, etc.
-      // -------------------------------
-      if (locked) {
-        this.updatesLock.readLock().unlock();
-        locked = false;
-      }
-      releaseRowLocks(acquiredRowLocks);
-      doRollBackMemstore = false;
-      responseTK.txid = txid;
-      for (int i = firstIndex; i < lastIndexExclusive; i++) {
-        responseTK.walEdits[i] = walEdit;
-      }
-      responseTK.addedSize += addedSize;
-      success=true;
-    } finally {
-      // if the wal sync was unsuccessful, remove keys from memstore
-      if (doRollBackMemstore) {
-        for (int j = firstIndex; j < lastIndexExclusive; j++) {
-          for (List<Cell> cells : responseTK.familyMaps[j].values()) {
-            rollbackMemstore(cells);
-          }
-        }
-        if (writeEntry != null) mvcc.advanceMemstore(writeEntry);
-      } else {
-        //        mvcc.completeMemstoreInsert(writeEntry);
-        if (writeEntry != null) responseTK.writeEntryList.add(writeEntry);
-      }
-
-      if (locked) {
-        this.updatesLock.readLock().unlock();
-      }
-      releaseRowLocks(acquiredRowLocks);
-
-      // See if the column families were consistent through the whole thing.
-      // if they were then keep them. If they were not then pass a null.
-      // null will be treated as unknown.
-      // Total time taken might be involving Puts and Deletes.
-      // Split the time for puts and deletes based on the total number of Puts and Deletes.
-
-      if (noOfPuts > 0) {
-        // There were some Puts in the batch.
-        if (this.metricsRegion != null) {
-          this.metricsRegion.updatePut();
-        }
-      }
-      if (noOfDeletes > 0) {
-        // There were some Deletes in the batch.
-        if (this.metricsRegion != null) {
-          this.metricsRegion.updateDelete();
-        }
-      }
-      if (!success) {
-        for (int i = firstIndex; i < lastIndexExclusive; i++) {
-          if (batchOp.retCodeDetails[i].getOperationStatusCode() == OperationStatusCode.NOT_RUN) {
-            batchOp.retCodeDetails[i] = OperationStatus.FAILURE;
-          }
-        }
-
-        if (coprocessorHost != null && !batchOp.isInReplay()) {
-          // call the coprocessor hook to do any finalization steps
-          // after the put is done
-          MiniBatchOperationInProgress<Mutation> miniBatchOp =
-                  new MiniBatchOperationInProgress<Mutation>(batchOp.getMutationsForCoprocs(),
-                          batchOp.retCodeDetails, batchOp.walEditsFromCoprocessors, firstIndex,
-                          lastIndexExclusive);
-          coprocessorHost.postBatchMutateIndispensably(miniBatchOp, success);
-        }
-      }
-      batchOp.nextIndexToProcess = lastIndexExclusive;
-      // unlock for hqueue
-      if (isHQueueRegion && hqueueLock.isHeldByCurrentThread()) {
-        hqueueLock.unlock();
-      }
-    }
-  }
-
-  public long syncAndResponse(BatchOperationInProgress<?> batchOp, ResponseToolKit responseTK) throws IOException {
-    boolean doRollBackMemstore = false;
-    boolean isInReplay = batchOp.isInReplay();
-    int firstIndex = 0;
-    int lastIndexExclusive = batchOp.nextIndexToProcess;
-    Iterator it = responseTK.writeEntryList.iterator();
-    boolean success = false;
-    try {
-      // -------------------------
-      // STEP 7. Sync wal.
-      // -------------------------
-      if (responseTK.txid != 0) {
-        syncOrDefer(responseTK.txid, responseTK.durability);
-      }
-
-      doRollBackMemstore = false;
-      // calling the post CP hook for batch mutation
-      if (!isInReplay && coprocessorHost != null) {
-        MiniBatchOperationInProgress<Mutation> miniBatchOp =
-                new MiniBatchOperationInProgress<Mutation>(batchOp.getMutationsForCoprocs(),
-                        batchOp.retCodeDetails, batchOp.walEditsFromCoprocessors, firstIndex, lastIndexExclusive);
-        coprocessorHost.postBatchMutate(miniBatchOp);
-      }
-
-      // ------------------------------------------------------------------
-      // STEP 8. Advance mvcc. This will make this put visible to scanners and getters.
-      // ------------------------------------------------------------------
-
-      while (it.hasNext()) {
-        mvcc.completeMemstoreInsert((WriteEntry) it.next());
-      }
-      if (isInReplay) {
-        mvcc.advanceTo(batchOp.getReplaySequenceId());
-      }
-
-      for (int i = firstIndex; i < lastIndexExclusive; i++) {
-        if (batchOp.retCodeDetails[i] == OperationStatus.NOT_RUN) {
-          batchOp.retCodeDetails[i] = OperationStatus.SUCCESS;
-        }
-      }
-
-      // ------------------------------------
-      // STEP 9. Run coprocessor post hooks. This should be done after the wal is
-      // synced so that the coprocessor contract is adhered to.
-      // ------------------------------------
-      if (!isInReplay && coprocessorHost != null) {
-        for (int i = firstIndex; i < lastIndexExclusive; i++) {
-          // only for successful puts
-          if (batchOp.retCodeDetails[i].getOperationStatusCode()
-                  != OperationStatusCode.SUCCESS) {
-            continue;
-          }
-          Mutation m = batchOp.getMutation(i);
-          if (m instanceof Put) {
-            coprocessorHost.postPut((Put) m, responseTK.walEdits[i], m.getDurability());
-          } else {
-            coprocessorHost.postDelete((Delete) m, responseTK.walEdits[i], m.getDurability());
-          }
-        }
-      }
-      success = true;
-      return responseTK.addedSize;
-    } finally {
-      // if the wal sync was unsuccessful, remove keys from memstore
-      if (doRollBackMemstore) {
-        for (int j = 0; j < responseTK.familyMaps.length; j++) {
-          for (List<Cell> cells : responseTK.familyMaps[j].values()) {
-            rollbackMemstore(cells);
-          }
-        }
-        while (it.hasNext()) {
-          mvcc.advanceMemstore((WriteEntry) it.next());
-        }
-      } else {
-        while (it.hasNext()) {
-          mvcc.completeMemstoreInsert((WriteEntry) it.next());
-        }
-      }
-
-      if (!success) {
-        for (int i = firstIndex; i < lastIndexExclusive; i++) {
-          if (batchOp.retCodeDetails[i].getOperationStatusCode() == HConstants.OperationStatusCode.NOT_RUN) {
-            batchOp.retCodeDetails[i] = OperationStatus.FAILURE;
-          }
-        }
-      }
-      if (coprocessorHost != null && !batchOp.isInReplay()) {
-        // call the coprocessor hook to do any finalization steps
-        // after the put is done
-        MiniBatchOperationInProgress<Mutation> miniBatchOp =
-                new MiniBatchOperationInProgress<Mutation>(batchOp.getMutationsForCoprocs(),
-                        batchOp.retCodeDetails, batchOp.walEditsFromCoprocessors, firstIndex,
-                        lastIndexExclusive);
-        coprocessorHost.postBatchMutateIndispensably(miniBatchOp, success);
-      }
-    }
-  }
+//  private void doMiniBatchMutation(BatchOperationInProgress<?> batchOp, ResponseToolKit responseTK) throws IOException {
+//    boolean isInReplay = batchOp.isInReplay();
+//    // variable to note if all Put items are for the same CF -- metrics related
+//    boolean putsCfSetConsistent = true;
+//    //The set of columnFamilies first seen for Put.
+//    Set<byte[]> putsCfSet = null;
+//    // variable to note if all Delete items are for the same CF -- metrics related
+//    boolean deletesCfSetConsistent = true;
+//    //The set of columnFamilies first seen for Delete.
+//    Set<byte[]> deletesCfSet = null;
+//
+//    long currentNonceGroup = HConstants.NO_NONCE, currentNonce = HConstants.NO_NONCE;
+//    WALEdit walEdit = new WALEdit(isInReplay);
+//    MultiVersionConsistencyControl.WriteEntry writeEntry = null;
+//    long txid = -1;
+//    boolean doRollBackMemstore = false;
+//    boolean locked = false;
+//
+//    /** Keep track of the locks we hold so we can release them in finally clause */
+//    List<RowLock> acquiredRowLocks = Lists.newArrayListWithCapacity(batchOp.operations.length);
+//    // reference family maps directly so coprocessors can mutate them if desired
+//    // We try to set up a batch in the range [firstIndex,lastIndexExclusive)
+//    int firstIndex = batchOp.nextIndexToProcess;
+//    int lastIndexExclusive = firstIndex;
+//    boolean success = false;
+//    int noOfPuts = 0, noOfDeletes = 0;
+//    WALKey walKey = null;
+//    long mvccNum = 0;
+//    try {
+//      // ------------------------------------
+//      // STEP 1. Try to acquire as many locks as we can, and ensure
+//      // we acquire at least one.
+//      // ----------------------------------
+//      int numReadyToWrite = 0;
+//      long now = EnvironmentEdgeManager.currentTime();
+//      while (lastIndexExclusive < batchOp.operations.length) {
+//        Mutation mutation = batchOp.getMutation(lastIndexExclusive);
+//        boolean isPutMutation = mutation instanceof Put;
+//
+//        Map<byte[], List<Cell>> familyMap = mutation.getFamilyCellMap();
+//        // store the family map reference to allow for mutations
+//        responseTK.familyMaps[lastIndexExclusive] = familyMap;
+//
+//        // skip anything that "ran" already
+//        if (batchOp.retCodeDetails[lastIndexExclusive].getOperationStatusCode()
+//                != OperationStatusCode.NOT_RUN) {
+//          lastIndexExclusive++;
+//          continue;
+//        }
+//
+//        try {
+//          if (isPutMutation) {
+//            // Check the families in the put. If bad, skip this one.
+//            if (isInReplay) {
+//              removeNonExistentColumnFamilyForReplay(familyMap);
+//            } else {
+//              checkFamilies(familyMap.keySet());
+//            }
+//            checkTimestamps(mutation.getFamilyCellMap(), now);
+//          } else {
+//            prepareDelete((Delete) mutation);
+//          }
+//          checkRow(mutation.getRow(), "doMiniBatchMutation");
+//        } catch (NoSuchColumnFamilyException nscf) {
+//          LOG.warn("No such column family in batch mutation", nscf);
+//          batchOp.retCodeDetails[lastIndexExclusive] = new OperationStatus(
+//                  OperationStatusCode.BAD_FAMILY, nscf.getMessage());
+//          lastIndexExclusive++;
+//          continue;
+//        } catch (FailedSanityCheckException fsce) {
+//          LOG.warn("Batch Mutation did not pass sanity check", fsce);
+//          batchOp.retCodeDetails[lastIndexExclusive] = new OperationStatus(
+//                  OperationStatusCode.SANITY_CHECK_FAILURE, fsce.getMessage());
+//          lastIndexExclusive++;
+//          continue;
+//        } catch (WrongRegionException we) {
+//          LOG.warn("Batch mutation had a row that does not belong to this region", we);
+//          batchOp.retCodeDetails[lastIndexExclusive] = new OperationStatus(
+//                  OperationStatusCode.SANITY_CHECK_FAILURE, we.getMessage());
+//          lastIndexExclusive++;
+//          continue;
+//        }
+//
+//        // ignore row lock for hqueue
+//        if (!isHQueueRegion) {
+//          // If we haven't got any rows in our batch, we should block to get the next one.
+//          RowLock rowLock = null;
+//          try {
+//            rowLock = getRowLock(mutation.getRow(), true);
+//          } catch (IOException ioe) {
+//            LOG.warn(
+//                    "Failed getting lock in batch put, row=" + Bytes.toStringBinary(mutation.getRow()),
+//                    ioe);
+//          }
+//          if (rowLock == null) {
+//            // We failed to grab another lock
+//            break; // stop acquiring more rows for this batch
+//          } else {
+//            acquiredRowLocks.add(rowLock);
+//          }
+//        }
+//
+//        lastIndexExclusive++;
+//        numReadyToWrite++;
+//
+//        if (isPutMutation) {
+//          // If Column Families stay consistent through out all of the
+//          // individual puts then metrics can be reported as a mutliput across
+//          // column families in the first put.
+//          if (putsCfSet == null) {
+//            putsCfSet = mutation.getFamilyCellMap().keySet();
+//          } else {
+//            putsCfSetConsistent = putsCfSetConsistent
+//                    && mutation.getFamilyCellMap().keySet().equals(putsCfSet);
+//          }
+//        } else {
+//          if (deletesCfSet == null) {
+//            deletesCfSet = mutation.getFamilyCellMap().keySet();
+//          } else {
+//            deletesCfSetConsistent = deletesCfSetConsistent
+//                    && mutation.getFamilyCellMap().keySet().equals(deletesCfSet);
+//          }
+//        }
+//      }
+//
+//      // we should record the timestamp only after we have acquired the rowLock,
+//      // otherwise, newer puts/deletes are not guaranteed to have a newer timestamp
+//      now = EnvironmentEdgeManager.currentTime();
+//      byte[] byteNow = Bytes.toBytes(now);
+//
+//      // Nothing to put/delete -- an exception in the above such as NoSuchColumnFamily?
+//      if (numReadyToWrite <= 0) return;
+//
+//      // We've now grabbed as many mutations off the list as we can
+//
+//      // ------------------------------------
+//      // STEP 2. Update any LATEST_TIMESTAMP timestamps
+//      // ----------------------------------
+//      for (int i = firstIndex; !isInReplay && i < lastIndexExclusive; i++) {
+//        // skip invalid
+//        if (batchOp.retCodeDetails[i].getOperationStatusCode()
+//                != OperationStatusCode.NOT_RUN) continue;
+//
+//        Mutation mutation = batchOp.getMutation(i);
+//        if (mutation instanceof Put) {
+//          updateCellTimestamps(responseTK.familyMaps[i].values(), byteNow);
+//          noOfPuts++;
+//        } else {
+//          prepareDeleteTimestamps(mutation, responseTK.familyMaps[i], byteNow);
+//          noOfDeletes++;
+//        }
+//        rewriteCellTags(responseTK.familyMaps[i], mutation);
+//      }
+//
+//      lock(this.updatesLock.readLock(), numReadyToWrite);
+//      locked = true;
+//
+//      // lock the mvcc begin and preBatchMutate process for hqueue
+//      if (isHQueueRegion) {
+//        hqueueLock.lock();
+//      }
+//
+//      // calling the pre CP hook for batch mutation
+//      if (!isInReplay && coprocessorHost != null) {
+//        MiniBatchOperationInProgress<Mutation> miniBatchOp =
+//                new MiniBatchOperationInProgress<Mutation>(batchOp.getMutationsForCoprocs(),
+//                        batchOp.retCodeDetails, batchOp.walEditsFromCoprocessors, firstIndex, lastIndexExclusive);
+//        if (coprocessorHost.preBatchMutate(miniBatchOp)) return;
+//      }
+//
+//      // ------------------------------------
+//      // STEP 3. Build WAL edit
+//      // ----------------------------------
+//      for (int i = firstIndex; i < lastIndexExclusive; i++) {
+//        // Skip puts that were determined to be invalid during preprocessing
+//        if (batchOp.retCodeDetails[i].getOperationStatusCode() != OperationStatusCode.NOT_RUN) {
+//          continue;
+//        }
+//
+//        Mutation m = batchOp.getMutation(i);
+//        Durability tmpDur = getEffectiveDurability(m.getDurability());
+//        if (tmpDur.ordinal() > responseTK.durability.ordinal()) {
+//          responseTK.durability = tmpDur;
+//        }
+//        if (tmpDur == Durability.SKIP_WAL) {
+//          recordMutationWithoutWal(m.getFamilyCellMap());
+//          continue;
+//        }
+//
+//        long nonceGroup = batchOp.getNonceGroup(i), nonce = batchOp.getNonce(i);
+//        // In replay, the batch may contain multiple nonces. If so, write WALEdit for each.
+//        // Given how nonces are originally written, these should be contiguous.
+//        // They don't have to be, it will still work, just write more WALEdits than needed.
+//        if (nonceGroup != currentNonceGroup || nonce != currentNonce) {
+//          if (walEdit.size() > 0) {
+//            assert isInReplay;
+//            if (!isInReplay) {
+//              throw new IOException("Multiple nonces per batch and not in replay");
+//            }
+//            // txid should always increase, so having the one from the last call is ok.
+//            // we use HLogKey here instead of WALKey directly to support legacy coprocessors.
+//            walKey = new ReplayHLogKey(this.getRegionInfo().getEncodedNameAsBytes(),
+//                    this.htableDescriptor.getTableName(), now, m.getClusterIds(),
+//                    currentNonceGroup, currentNonce, mvcc);
+//            walKey.setMultiIndex(firstIndex, lastIndexExclusive);
+//            txid = this.wal.append(this.htableDescriptor, this.getRegionInfo(), walKey,
+//                    walEdit, true);
+//            walEdit = new WALEdit(isInReplay);
+//            walKey = null;
+//            LOG.fatal("$$$$");
+//          }
+//          currentNonceGroup = nonceGroup;
+//          currentNonce = nonce;
+//        }
+//
+//        // Add WAL edits by CP
+//        WALEdit fromCP = batchOp.walEditsFromCoprocessors[i];
+//        if (fromCP != null) {
+//          for (Cell cell : fromCP.getCells()) {
+//            walEdit.add(cell);
+//          }
+//        }
+//        addFamilyMapToWALEdit(responseTK.familyMaps[i], walEdit);
+//      }
+//      walEdit.responseTK = responseTK;
+//
+//      // -------------------------
+//      // STEP 4. Append the final edit to WAL. Do not sync wal.
+//      // -------------------------
+//      Mutation mutation = batchOp.getMutation(firstIndex);
+//      if (isInReplay) {
+//        // use wal key from the original
+//        walKey = new ReplayHLogKey(this.getRegionInfo().getEncodedNameAsBytes(),
+//                this.htableDescriptor.getTableName(), WALKey.NO_SEQUENCE_ID, now,
+//                mutation.getClusterIds(), currentNonceGroup, currentNonce, mvcc);
+//        walKey.setMultiIndex(firstIndex, lastIndexExclusive);
+//        long replaySeqId = batchOp.getReplaySequenceId();
+//        walKey.setOrigLogSeqNum(replaySeqId);
+//        if (walEdit.size() > 0) {
+//          txid = this.wal.append(this.htableDescriptor, this.getRegionInfo(), walKey, walEdit, true);
+//        }
+//      } else {
+//        try {
+////          if (!isHQueueRegion) {
+////            preAssignMvccLock.lock();
+//            writeEntry = mvcc.beginMemstoreInsert();
+////          }
+//          if (walEdit.size() > 0) {
+//            // we use HLogKey here instead of WALKey directly to support legacy coprocessors.
+//            walKey = new HLogKey(this.getRegionInfo().getEncodedNameAsBytes(),
+//                    this.htableDescriptor.getTableName(), WALKey.NO_SEQUENCE_ID, now,
+//                    mutation.getClusterIds(), currentNonceGroup, currentNonce, mvcc);
+//            walKey.setPreAssignedWriteEntry(writeEntry);
+//            walKey.setMultiIndex(firstIndex, lastIndexExclusive);
+//            txid = this.wal.append(this.htableDescriptor, this.getRegionInfo(), walKey, walEdit, true);
+//          } else {
+//            // If this is a skip wal operation just get the read point from mvcc
+//            walKey = new HLogKey(getRegionInfo().getEncodedNameAsBytes(),
+//                    getRegionInfo().getTable(), WALKey.NO_SEQUENCE_ID, 0, null,
+//                    HConstants.NO_NONCE, HConstants.NO_NONCE, getMVCC());
+//            walKey.setMultiIndex(firstIndex, lastIndexExclusive);
+//            txid = this.appendEmptyEdit(this.wal, writeEntry, walKey, responseTK);
+//          }
+//        } finally {
+////          if (!isHQueueRegion) {
+////            preAssignMvccLock.unlock();
+////          }
+//        }
+//      }
+//      // unlock for hqueue
+//      // EHB-401: the correctness of unlocking before invoking FSWALEntry#getWriteEntry depends on
+//      // the logic that FSHLog#disruptor uses single-thread executor and single handler thus
+//      // FSWALEntry#stampRegionSequenceId is called sequentially. It's necessary to pay attention to the
+//      // change of FSHLog#disruptor.
+//      if (isHQueueRegion) {
+//        hqueueLock.unlock();
+//      }
+//
+//      // ------------------------------------
+//      // Acquire the latest mvcc number
+//      // ----------------------------------
+//      if (!isInReplay) {
+//        if (writeEntry == null) {
+//          writeEntry = walKey.getWriteEntry();
+//        } else {
+//          if (writeEntry != walKey.getWriteEntry()) {
+//            throw new RuntimeException("Preassigned write entry changed!");
+//          }
+//        }
+//        mvccNum = writeEntry.getWriteNumber();
+//      } else {
+//        mvccNum = batchOp.getReplaySequenceId();
+//      }
+//
+//      // ------------------------------------
+//      // STEP 5. Write back to memstore
+//      // Write to memstore. It is ok to write to memstore
+//      // first without syncing the WAL because we do not roll
+//      // forward the memstore MVCC. The MVCC will be moved up when
+//      // the complete operation is done. These changes are not yet
+//      // visible to scanners till we update the MVCC. The MVCC is
+//      // moved only when the sync is complete.
+//      // ----------------------------------
+//      long addedSize = 0;
+//      for (int i = firstIndex; i < lastIndexExclusive; i++) {
+//        if (batchOp.retCodeDetails[i].getOperationStatusCode()
+//                != OperationStatusCode.NOT_RUN) {
+//          continue;
+//        }
+//        doRollBackMemstore = true; // If we have a failure, we need to clean what we wrote
+//        addedSize += applyFamilyMapToMemstore(responseTK.familyMaps[i], mvccNum, isInReplay);
+//      }
+//
+//      // -------------------------------
+//      // STEP 6. Release row locks, etc.
+//      // -------------------------------
+//      if (locked) {
+//        this.updatesLock.readLock().unlock();
+//        locked = false;
+//      }
+//      releaseRowLocks(acquiredRowLocks);
+//      for (int i = firstIndex; i < lastIndexExclusive; i++) {
+//        responseTK.walEdits[i] = walEdit;
+//      }
+//      responseTK.addedSize += addedSize;
+//      success = true;
+//    } catch (Exception e) {
+//      LOG.fatal("********** exception!: ", e);
+//    } finally {
+//      // if the wal sync was unsuccessful, remove keys from memstore
+//      int readyToSync = 0;
+//      if (doRollBackMemstore && !success) {
+//        LOG.fatal("#########3769  doRollBackMemstore :" + walKey.getWriteEntry());
+//        for (int j = firstIndex; j < lastIndexExclusive; j++) {
+//          for (List<Cell> cells : responseTK.familyMaps[j].values()) {
+//            rollbackMemstore(cells);
+//          }
+//        }
+//        if (writeEntry != null) {
+//          mvcc.advanceMemstore(writeEntry);
+//          LOG.fatal("#########3777  writeEntry != null advanceMemstore :" + walKey.getWriteEntry());
+//        } else {
+//          LOG.fatal("#########3777  writeEntry == null :" + walKey.getWriteEntry());
+//        }
+//      } else {
+//        if (walKey != null) {
+//          readyToSync = 1;
+//        }
+//      }
+//
+//      if (locked) {
+//        this.updatesLock.readLock().unlock();
+//      }
+//      releaseRowLocks(acquiredRowLocks);
+//
+//      // See if the column families were consistent through the whole thing.
+//      // if they were then keep them. If they were not then pass a null.
+//      // null will be treated as unknown.
+//      // Total time taken might be involving Puts and Deletes.
+//      // Split the time for puts and deletes based on the total number of Puts and Deletes.
+//
+//      if (noOfPuts > 0) {
+//        // There were some Puts in the batch.
+//        if (this.metricsRegion != null) {
+//          this.metricsRegion.updatePut();
+//        }
+//      }
+//      if (noOfDeletes > 0) {
+//        // There were some Deletes in the batch.
+//        if (this.metricsRegion != null) {
+//          this.metricsRegion.updateDelete();
+//        }
+//      }
+//      if (!success) {
+//        for (int i = firstIndex; i < lastIndexExclusive; i++) {
+//          if (batchOp.retCodeDetails[i].getOperationStatusCode() == OperationStatusCode.NOT_RUN) {
+//            batchOp.retCodeDetails[i] = OperationStatus.FAILURE;
+//          }
+//        }
+//
+//        if (coprocessorHost != null && !batchOp.isInReplay()) {
+//          // call the coprocessor hook to do any finalization steps
+//          // after the put is done
+//          MiniBatchOperationInProgress<Mutation> miniBatchOp =
+//                  new MiniBatchOperationInProgress<Mutation>(batchOp.getMutationsForCoprocs(),
+//                          batchOp.retCodeDetails, batchOp.walEditsFromCoprocessors, firstIndex,
+//                          lastIndexExclusive);
+//          coprocessorHost.postBatchMutateIndispensably(miniBatchOp, success);
+//        }
+//      }
+//
+//      batchOp.nextIndexToProcess = lastIndexExclusive;
+//      if (walKey != null) {
+//        synchronized (walKey) {
+//          walKey.finishPreSync = 10 + readyToSync;
+//          walKey.notify();
+//        }
+//      }
+//      // unlock for hqueue
+//      if (isHQueueRegion && hqueueLock.isHeldByCurrentThread()) {
+//        hqueueLock.unlock();
+//      }
+//    }
+//  }
+//
+//  public long syncAndResponse(ResponseToolKit responseTK, WALKey walKey, int a,int b,int c,int d) throws IOException {
+//    String checkString = walKey.toString();
+//    int check = walKey.finishPreSync;
+//    if (check < 11) {
+//      LOG.fatal("######### not readyToSync1 :" + checkString + "; a =" + a +
+//              "; b =" + b + "; c =" + c + "; d =" + d + "; check =" + check );
+//      LOG.fatal("######### not readyToSync2 :" + walKey + "; " + walKey.getWriteEntry() + " ; " + walKey.finishPreSync);
+//      return responseTK.addedSize;
+//    }
+//    boolean doRollBackMemstore = true;
+//    boolean isInReplay = responseTK.batchOp.isInReplay();
+//    int firstIndex = walKey.firstIndex;
+//    int lastIndexExclusive = walKey.lastIndexExclusive;
+//    WriteEntry writeEntry = walKey.getWriteEntry();
+//    boolean success = false;
+//    try {
+//      // -------------------------
+//      // STEP 7. Sync wal.
+//      // -------------------------
+//      syncOrDefer(walKey.sequence, responseTK.durability);
+//
+//      doRollBackMemstore = false;
+//      // calling the post CP hook for batch mutation
+//      if (!isInReplay && coprocessorHost != null) {
+//        MiniBatchOperationInProgress<Mutation> miniBatchOp =
+//                new MiniBatchOperationInProgress<Mutation>(responseTK.batchOp.getMutationsForCoprocs(),
+//                        responseTK.batchOp.retCodeDetails, responseTK.batchOp.walEditsFromCoprocessors,
+//                        firstIndex, lastIndexExclusive);
+//        coprocessorHost.postBatchMutate(miniBatchOp);
+//      }
+//
+//      // ------------------------------------------------------------------
+//      // STEP 8. Advance mvcc. This will make this put visible to scanners and getters.
+//      // ------------------------------------------------------------------
+//
+//      if (writeEntry != null) {
+//        mvcc.completeMemstoreInsert(writeEntry);
+//        writeEntry = null;
+//      } else if (isInReplay) {
+//        // ensure that the sequence id of the region is at least as big as orig log seq id
+//        mvcc.advanceTo(responseTK.batchOp.getReplaySequenceId());
+//      } else {
+//        LOG.fatal("######### writeEntry == null :" + walKey.getWriteEntry());
+//      }
+//
+//      for (int i = firstIndex; i < lastIndexExclusive; i++) {
+//        if (responseTK.batchOp.retCodeDetails[i] == OperationStatus.NOT_RUN) {
+//          responseTK.batchOp.retCodeDetails[i] = OperationStatus.SUCCESS;
+//        }
+//      }
+//
+//      // ------------------------------------
+//      // STEP 9. Run coprocessor post hooks. This should be done after the wal is
+//      // synced so that the coprocessor contract is adhered to.
+//      // ------------------------------------
+//      if (!isInReplay && coprocessorHost != null) {
+//        for (int i = firstIndex; i < lastIndexExclusive; i++) {
+//          // only for successful puts
+//          if (responseTK.batchOp.retCodeDetails[i].getOperationStatusCode()
+//                  != OperationStatusCode.SUCCESS) {
+//            continue;
+//          }
+//          Mutation m = responseTK.batchOp.getMutation(i);
+//          if (m instanceof Put) {
+//            coprocessorHost.postPut((Put) m, responseTK.walEdits[i], m.getDurability());
+//          } else {
+//            coprocessorHost.postDelete((Delete) m, responseTK.walEdits[i], m.getDurability());
+//          }
+//        }
+//      }
+//      success = true;
+//      return responseTK.addedSize;
+//    } finally {
+//      // if the wal sync was unsuccessful, remove keys from memstore
+//      if (doRollBackMemstore) {
+//        for (int j = 0; j < responseTK.familyMaps.length; j++) {
+//          for (List<Cell> cells : responseTK.familyMaps[j].values()) {
+//            rollbackMemstore(cells);
+//          }
+//        }
+//        if (writeEntry != null) mvcc.advanceMemstore(writeEntry);
+//      } else if (writeEntry != null) {
+//        mvcc.completeMemstoreInsert(writeEntry);
+//      }
+//
+//      if (!success) {
+//        for (int i = firstIndex; i < lastIndexExclusive; i++) {
+//          if (responseTK.batchOp.retCodeDetails[i].getOperationStatusCode()
+//                  == HConstants.OperationStatusCode.NOT_RUN) {
+//            responseTK.batchOp.retCodeDetails[i] = OperationStatus.FAILURE;
+//          }
+//        }
+//      }
+//      if (coprocessorHost != null && !responseTK.batchOp.isInReplay()) {
+//        // call the coprocessor hook to do any finalization steps
+//        // after the put is done
+//        MiniBatchOperationInProgress<Mutation> miniBatchOp =
+//                new MiniBatchOperationInProgress<Mutation>(responseTK.batchOp.getMutationsForCoprocs(),
+//                        responseTK.batchOp.retCodeDetails, responseTK.batchOp.walEditsFromCoprocessors,
+//                        firstIndex, lastIndexExclusive);
+//        coprocessorHost.postBatchMutateIndispensably(miniBatchOp, success);
+//      }
+//    }
+//  }
 
   /**
    * Returns effective durability from the passed durability and
@@ -4168,6 +4184,16 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     }
   }
 
+  private void doBatchMutate(Mutation mutation, ResponseToolKit responseToolKit) throws IOException {
+    // Currently this is only called for puts and deletes, so no nonces.
+    OperationStatus[] batchMutate = this.batchMutate(new Mutation[] { mutation }, responseToolKit);
+    if (batchMutate[0].getOperationStatusCode().equals(OperationStatusCode.SANITY_CHECK_FAILURE)) {
+      throw new FailedSanityCheckException(batchMutate[0].getExceptionMsg());
+    } else if (batchMutate[0].getOperationStatusCode().equals(OperationStatusCode.BAD_FAMILY)) {
+      throw new NoSuchColumnFamilyException(batchMutate[0].getExceptionMsg());
+    }
+  }
+
   /**
    * Complete taking the snapshot on the region. Writes the region info and adds references to the
    * working snapshot directory.
@@ -4238,7 +4264,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    * We throw RegionTooBusyException if above memstore limit
    * and expect client to retry using some kind of backoff
   */
-  private void checkResources() throws RegionTooBusyException {
+  public void checkResources() throws RegionTooBusyException {
     // If catalog region, do not impose resource constraints or block updates.
     if (this.getRegionInfo().isMetaRegion()) return;
 
@@ -4310,7 +4336,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    * new entries.
    * @throws IOException
    */
-  private long applyFamilyMapToMemstore(Map<byte[], List<Cell>> familyMap,
+  public long applyFamilyMapToMemstore(Map<byte[], List<Cell>> familyMap,
     long mvccNum, boolean isInReplay) throws IOException {
     long size = 0;
 
@@ -4342,7 +4368,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    * called when a Put/Delete has updated memstore but subsequently fails to update
    * the wal. This method is then invoked to rollback the memstore.
    */
-  private void rollbackMemstore(List<Cell> memstoreCells) {
+  public void rollbackMemstore(List<Cell> memstoreCells) {
     int kvsRolledback = 0;
 
     for (Cell cell : memstoreCells) {
@@ -4365,7 +4391,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    * During replay, there could exist column families which are removed between region server
    * failure and replay
    */
-  private void removeNonExistentColumnFamilyForReplay(
+  public void removeNonExistentColumnFamilyForReplay(
       final Map<byte[], List<Cell>> familyMap) {
     List<byte[]> nonExistentList = null;
     for (byte[] family : familyMap.keySet()) {
@@ -4413,7 +4439,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    * @param familyMap map of family->edits
    * @param walEdit the destination entry to append into
    */
-  private void addFamilyMapToWALEdit(Map<byte[], List<Cell>> familyMap,
+  public void addFamilyMapToWALEdit(Map<byte[], List<Cell>> familyMap,
       WALEdit walEdit) {
     for (List<Cell> edits : familyMap.values()) {
       assert edits instanceof RandomAccess;
@@ -8483,7 +8509,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    * Update counters for numer of puts without wal and the size of possible data loss.
    * These information are exposed by the region server metrics.
    */
-  private void recordMutationWithoutWal(final Map<byte [], List<Cell>> familyMap) {
+  public void recordMutationWithoutWal(final Map<byte [], List<Cell>> familyMap) {
     numMutationsWithoutWAL.increment();
     if (numMutationsWithoutWAL.get() <= 1) {
       LOG.info("writing data to region " + this +
@@ -8514,7 +8540,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
    * if failed to get the lock in time. Throw InterruptedIOException
    * if interrupted while waiting for the lock.
    */
-  private void lock(final Lock lock, final int multiplier)
+  public void lock(final Lock lock, final int multiplier)
       throws RegionTooBusyException, InterruptedIOException {
     try {
       final long waitTime = Math.min(maxBusyWaitDuration,
@@ -8831,6 +8857,33 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
       getMVCC().advanceMemstore(key.getWriteEntry());
     }
     return key;
+  }
+
+  /**
+   * Append a faked WALEdit in order to get a long sequence number and wal syncer will just ignore
+   * the WALEdit append later.
+   * @param wal
+   * @param writeEntry Preassigned writeEntry, if any
+   * @return Return the key used appending with no sync and no append.
+   * @throws IOException
+   */
+  public long appendEmptyEdit(final WAL wal, WriteEntry writeEntry, WALKey key,
+                   ResponseToolKit responseTK) throws IOException {
+    // we use HLogKey here instead of WALKey directly to support legacy coprocessors.
+    key.setPreAssignedWriteEntry(writeEntry);
+    // Call append but with an empty WALEdit.  The returned seqeunce id will not be associated
+    // with any edit and we can be sure it went in after all outstanding appends.
+    long txid = -1;
+    try {
+      WALEdit emptyEdit = new WALEdit();
+      key.walEdit = emptyEdit;
+      txid = wal.append(getTableDesc(), getRegionInfo(), key, emptyEdit, false);
+    } catch (Throwable t) {
+      LOG.warn("Failed to append an empty edit to wal.", t);
+      // If exception, our mvcc won't get cleaned up by client, so do it here.
+      getMVCC().advanceMemstore(key.getWriteEntry());
+    }
+    return txid;
   }
 
   /**

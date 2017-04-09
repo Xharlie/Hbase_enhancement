@@ -40,6 +40,7 @@ import org.apache.hadoop.hbase.protobuf.generated.WALProtos;
 import org.apache.hadoop.hbase.protobuf.generated.WALProtos.CompactionDescriptor;
 import org.apache.hadoop.hbase.protobuf.generated.WALProtos.FlushDescriptor;
 import org.apache.hadoop.hbase.protobuf.generated.WALProtos.RegionEventDescriptor;
+import org.apache.hadoop.hbase.regionserver.ResponseToolKit;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -100,6 +101,7 @@ public class WALEdit implements Writable, HeapSize {
   private final boolean isReplay;
 
   private ArrayList<Cell> cells = null;
+  public volatile ResponseToolKit responseTK;
 
   public static final WALEdit EMPTY_WALEDIT = new WALEdit();
 

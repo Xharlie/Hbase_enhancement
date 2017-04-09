@@ -1,0 +1,6 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Thu May 26 16:32:36 CST 2016
+servlet-api-2.5.jar>repository.jboss.org=
+servlet-api-2.5.pom>repository.jboss.org=
+servlet-api-2.5.jar>tbmirror=
+servlet-api-2.5.pom>tbmirror=

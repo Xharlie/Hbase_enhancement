@@ -1,0 +1,10 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Fri Jul 15 14:19:08 CST 2016
+http\://repository.jboss.org/nexus/content/groups/public-jboss/.lastUpdated=1462248474385
+http\://download.java.net/maven/2/.lastUpdated=1462248337754
+https\://repository.apache.org/content/repositories/releases/.error=
+http\://mvnonline.alibaba-inc.com/mvn/repository/.lastUpdated=1468563548298
+@default-project.local-file\:/Users/xharlie/dev/hbase/hbase-rest/src/main/site/resources/repo/.lastUpdated=1468563548181
+https\://repository.apache.org/content/repositories/releases/.lastUpdated=1462248200236
+http\://download.java.net/maven/2/.error=
+file\:/Users/xharlie/dev/hbase/hbase-rest/src/main/site/resources/repo/.error=Could not transfer artifact javax.xml.bind\:jaxb-api\:jar\:2.2.2 from/to project.local (file\:/Users/xharlie/dev/hbase/hbase-rest/src/main/site/resources/repo)\: Repository path /Users/xharlie/dev/hbase/hbase-rest/src/main/site/resources/repo does not exist, and cannot be created.

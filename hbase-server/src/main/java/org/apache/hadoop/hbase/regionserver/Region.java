@@ -504,6 +504,13 @@ public interface Region extends ConfigurationObserver {
   void put(Put put) throws IOException;
 
   /**
+   * Puts some data in the table in an SEDA put path.
+   * @param put
+   * @throws IOException
+   */
+  void put(ResponseToolKit responseToolKit) throws IOException;
+
+  /**
    * Listener class to enable callers of
    * bulkLoadHFile() to perform any necessary
    * pre/post processing of a given bulkload call

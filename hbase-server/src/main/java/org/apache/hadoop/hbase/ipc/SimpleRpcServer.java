@@ -252,15 +252,6 @@ public class SimpleRpcServer extends RpcServer {
       return this.connection != null && this.connection.codec != null;
     }
 
-    @Override
-    public long disconnectSince() {
-      if (!getConnection().isConnectionOpen()) {
-        return System.currentTimeMillis() - timestamp;
-      } else {
-        return -1L;
-      }
-    }
-
     public long getSize() {
       return this.size;
     }

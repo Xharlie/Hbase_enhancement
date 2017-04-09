@@ -36,8 +36,10 @@ import java.util.NavigableMap;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -45,6 +47,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -68,13 +71,18 @@ import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.exceptions.TimeoutIOException;
+import org.apache.hadoop.hbase.regionserver.HRegion;
+import org.apache.hadoop.hbase.regionserver.HRegionGroupProcess;
+import org.apache.hadoop.hbase.regionserver.ResponseToolKit;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.hbase.util.DrainBarrier;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.HasThread;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.DefaultWALProvider;
 import org.apache.hadoop.hbase.wal.WAL;
@@ -213,7 +221,7 @@ public class FSHLog implements WAL {
    * {@link #highestUnsyncedSequence} for case where we have an append where a sync has not yet
    * come in for it.  Maintained by the syncing threads.
    */
-  private final AtomicLong highestSyncedSequence = new AtomicLong(0);
+  private AtomicLong highestSyncedSequence = new AtomicLong(0);
 
   /**
    * file system instance
@@ -237,12 +245,12 @@ public class FSHLog implements WAL {
   /**
    * Prefix of a WAL file, usually the region server name it is hosted on.
    */
-  private final String logFilePrefix;
+  public final String logFilePrefix;
 
   /**
    * Suffix included on generated wal file names 
    */
-  private final String logFileSuffix;
+  public final String logFileSuffix;
 
   /**
    * Prefix used when checking for wal membership.
@@ -251,12 +259,17 @@ public class FSHLog implements WAL {
 
   private final WALCoprocessorHost coprocessorHost;
 
+  public HRegionGroupProcess hrgp;
   /**
    * conf object
    */
-  protected final Configuration conf;
+  public final Configuration conf;
   /** Listeners that are called on WAL events. */
   private final List<WALActionsListener> listeners = new CopyOnWriteArrayList<WALActionsListener>();
+
+  public long getHighestSyncedSequence() {
+    return this.highestSyncedSequence.get();
+  }
 
   @Override
   public void registerWALActionsListener(final WALActionsListener listener) {
@@ -322,7 +335,7 @@ public class FSHLog implements WAL {
   private final AtomicBoolean shutdown = new AtomicBoolean(false);
 
   // The timestamp (in ms) when the log file was created.
-  private final AtomicLong filenum = new AtomicLong(-1);
+  public final AtomicLong filenum = new AtomicLong(-1);
 
   // Number of transactions in the current Wal.
   private final AtomicInteger numEntries = new AtomicInteger(0);
@@ -330,6 +343,9 @@ public class FSHLog implements WAL {
   // If > than this size, roll the log.
   private final long logrollsize;
 
+  private volatile boolean demandSync;
+
+  public Syncer syncer;
   /**
    * The total size of wal
    */
@@ -345,7 +361,11 @@ public class FSHLog implements WAL {
   /** Number of log close errors tolerated before we abort */
   private final int closeErrorsTolerated;
 
+  private final int syncTriggerThreshold;
+
   private final AtomicInteger closeErrorCount = new AtomicInteger();
+
+  public int syncLockWaitInterval;
 
   // Region sequence id accounting across flushes and for knowing when we can GC a WAL.  These
   // sequence id numbers are by region and unrelated to the ring buffer sequence number accounting
@@ -486,7 +506,6 @@ public class FSHLog implements WAL {
     this.fullPathLogDir = new Path(rootDir, logDir);
     this.fullPathArchiveDir = new Path(rootDir, archiveDir);
     this.conf = conf;
-
     if (!fs.exists(fullPathLogDir) && !fs.mkdirs(fullPathLogDir)) {
       throw new IOException("Unable to mkdir " + fullPathLogDir);
     }
@@ -560,7 +579,8 @@ public class FSHLog implements WAL {
     this.lowReplicationRollLimit =
       conf.getInt("hbase.regionserver.hlog.lowreplication.rolllimit", 5);
     this.closeErrorsTolerated = conf.getInt("hbase.regionserver.logroll.errors.tolerated", 0);
-    int maxHandlersCount = conf.getInt(HConstants.REGION_SERVER_HANDLER_COUNT, 200);
+    int maxHandlersCount = conf.getInt("hbase.regionserver.hlog.syncfutures.size",
+            conf.getInt(HConstants.REGION_SERVER_HANDLER_COUNT, 200));
 
     LOG.info("WAL configuration: blocksize=" + StringUtils.byteDesc(blocksize) +
       ", rollsize=" + StringUtils.byteDesc(this.logrollsize) +
@@ -570,6 +590,8 @@ public class FSHLog implements WAL {
     // rollWriter sets this.hdfs_out if it can.
     rollWriter();
 
+    this.syncLockWaitInterval = conf.getInt("hbase.regionserver.hlog.sync.wait.interval", 10);
+    this.syncTriggerThreshold = conf.getInt("hbase.regionserver.hlog.sync.trigger.threshold", 100);
     this.slowSyncNs =
         1000000 * conf.getInt("hbase.regionserver.hlog.slowsync.ms",
           DEFAULT_SLOW_SYNC_TIME_MS);
@@ -595,15 +617,17 @@ public class FSHLog implements WAL {
     // Advance the ring buffer sequence so that it starts from 1 instead of 0,
     // because SyncFuture.NOT_DONE = 0.
     this.disruptor.getRingBuffer().next();
-    this.ringBufferEventHandler =
-      new RingBufferEventHandler(conf.getInt("hbase.regionserver.hlog.syncer.count", 5),
-        maxHandlersCount);
+    this.ringBufferEventHandler = new RingBufferEventHandler(1, maxHandlersCount);
+//      new RingBufferEventHandler(conf.getInt("hbase.regionserver.hlog.syncer.count", 1),
+//        maxHandlersCount);
     this.disruptor.handleExceptionsWith(new RingBufferExceptionHandler());
     this.disruptor.handleEventsWith(new RingBufferEventHandler [] {this.ringBufferEventHandler});
     // Presize our map of SyncFutures by handler objects.
     this.syncFuturesByHandler = new ConcurrentHashMap<Thread, SyncFuture>(maxHandlersCount);
     // Starting up threads in constructor is a no no; Interface should have an init call.
     this.disruptor.start();
+    this.syncer = new Syncer(Thread.currentThread().getName() +"-Syncer");
+    this.syncer.start();
   }
 
   /**
@@ -1196,6 +1220,7 @@ public class FSHLog implements WAL {
       }
       // With disruptor down, this is safe to let go.
       if (this.appendExecutor !=  null) this.appendExecutor.shutdown();
+      if (this.syncer != null) this.syncer.interrupt();
 
       // Tell our listeners that the log is closing
       if (!this.listeners.isEmpty()) {
@@ -1253,6 +1278,73 @@ public class FSHLog implements WAL {
       this.disruptor.getRingBuffer().publish(sequence);
     }
     return sequence;
+  }
+
+  public class Syncer extends HasThread {
+
+    public volatile int finishProcessorNeedWakeUp;
+    public Syncer(String name) {
+      super(name);
+    }
+
+    public Object syncLock = new Object();
+    public Object hrgbNotifyLock = new Object();
+
+    public void notifySyncLock () {
+      synchronized (this.syncLock) {
+        demandSync = true;
+        this.syncLock.notify();
+      }
+    }
+
+    public void run() {
+      long copyOfHighestUnsyncedSequence = 0;
+      long copyOfHighestSyncedSequence = 0;
+      long start;
+      try {
+        while (!this.isInterrupted()) {
+          // 1. wait until AsyncWriter has written data to HDFS and
+          //    called setWrittenTxid to wake up us
+          synchronized (this.syncLock) {
+            while (!demandSync) {
+              this.syncLock.wait();
+            }
+          }
+          demandSync = false;
+          start = System.nanoTime();
+          Throwable lastException = null;
+          try {
+            Trace.addTimelineAnnotation("syncing writer");
+            copyOfHighestUnsyncedSequence = highestUnsyncedSequence;
+            copyOfHighestSyncedSequence = highestSyncedSequence.get();
+            writer.sync();
+            Trace.addTimelineAnnotation("writer synced");
+            highestSyncedSequence.set(copyOfHighestUnsyncedSequence);
+          } catch (IOException e) {
+            LOG.error("Error syncing, request close of WAL", e);
+            lastException = e;
+          } catch (Exception e) {
+            LOG.warn("UNEXPECTED", e);
+            lastException = e;
+          } finally {
+            if (lastException != null) requestLogRoll();
+            else checkLogRoll();
+          }
+          postSync(System.nanoTime() - start,
+            (int)(copyOfHighestUnsyncedSequence - copyOfHighestSyncedSequence));
+          synchronized (hrgbNotifyLock) {
+            if (finishProcessorNeedWakeUp > 0) {
+              hrgbNotifyLock.notifyAll();
+            }
+          }
+        }
+      } catch (InterruptedException e) {
+        // Presume legit interrupt.
+        Thread.currentThread().interrupt();
+      } catch (Throwable t) {
+        LOG.warn("UNEXPECTED, continuing", t);
+      }
+    }
   }
 
   /**
@@ -1349,17 +1441,18 @@ public class FSHLog implements WAL {
      * @return Current highest synced sequence.
      */
     private long updateHighestSyncedSequence(long sequence) {
-      long currentHighestSyncedSequence;
-      // Set the highestSyncedSequence IFF our current sequence id is the 'highest'.
-      do {
-        currentHighestSyncedSequence = highestSyncedSequence.get();
-        if (currentHighestSyncedSequence >= sequence) {
-          // Set the sync number to current highwater mark; might be able to let go more
-          // queued sync futures
-          sequence = currentHighestSyncedSequence;
-          break;
-        }
-      } while (!highestSyncedSequence.compareAndSet(currentHighestSyncedSequence, sequence));
+//      long currentHighestSyncedSequence;
+//      // Set the highestSyncedSequence IFF our current sequence id is the 'highest'.
+//      do {
+//        currentHighestSyncedSequence = highestSyncedSequence;
+//        if (currentHighestSyncedSequence >= sequence) {
+//          // Set the sync number to current highwater mark; might be able to let go more
+//          // queued sync futures
+//          sequence = currentHighestSyncedSequence;
+//          break;
+//        }
+//      } while (!highestSyncedSequence.compareAndSet(currentHighestSyncedSequence, sequence));
+      highestSyncedSequence.set(sequence);
       return sequence;
     }
 
@@ -1394,9 +1487,11 @@ public class FSHLog implements WAL {
           Throwable lastException = null;
           try {
             Trace.addTimelineAnnotation("syncing writer");
+            long copyOfHighestUnsyncedSequence = highestUnsyncedSequence;
             writer.sync();
             Trace.addTimelineAnnotation("writer synced");
-            currentSequence = updateHighestSyncedSequence(currentSequence);
+            currentSequence = updateHighestSyncedSequence(
+                    Math.max(currentSequence, copyOfHighestUnsyncedSequence));
           } catch (IOException e) {
             LOG.error("Error syncing, request close of WAL", e);
             lastException = e;
@@ -2000,7 +2095,6 @@ public class FSHLog implements WAL {
       // the WAL is reset. It is important that we not short-circuit and exit early this method.
       // It is important that we always go through the attainSafePoint on the end. Another thread,
       // the log roller may be waiting on a signal from us here and will just hang without it.
-
       try {
         if (truck.hasSyncFuturePayload()) {
           this.syncFutures[this.syncFuturesCount++] = truck.unloadSyncFuturePayload();
@@ -2020,7 +2114,7 @@ public class FSHLog implements WAL {
               // Return to keep processing events coming off the ringbuffer
               return;
             }
-            append(entry);
+            append(entry, endOfBatch);
           } catch (Exception e) {
             // Failed append. Record the exception.
             this.exception = e;
@@ -2127,7 +2221,7 @@ public class FSHLog implements WAL {
      * @param entry
      * @throws Exception
      */
-    void append(final FSWALEntry entry) throws Exception {
+    void append(final FSWALEntry entry, boolean endOfBatch) throws Exception {
       // TODO: WORK ON MAKING THIS APPEND FASTER. DOING WAY TOO MUCH WORK WITH CPs, PBing, etc.
       atHeadOfRingBufferEventHandlerAppend();
 
@@ -2166,6 +2260,9 @@ public class FSHLog implements WAL {
         writer.append(entry);
         assert highestUnsyncedSequence < entry.getSequence();
         highestUnsyncedSequence = entry.getSequence();
+        if (endOfBatch || highestUnsyncedSequence >= highestSyncedSequence.get() + syncTriggerThreshold) {
+          syncer.notifySyncLock();
+        }
         Long lRegionSequenceId = Long.valueOf(regionSequenceId);
         highestRegionSequenceIds.put(encodedRegionName, lRegionSequenceId);
         if (entry.isInMemstore()) {

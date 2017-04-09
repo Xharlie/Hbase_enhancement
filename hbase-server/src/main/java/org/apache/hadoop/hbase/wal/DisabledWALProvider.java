@@ -34,6 +34,7 @@ import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 // imports for things that haven't moved from regionserver.wal yet.
+import org.apache.hadoop.hbase.regionserver.HRegionGroupProcess;
 import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
 import org.apache.hadoop.hbase.regionserver.wal.WALCoprocessorHost;
 import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
@@ -50,7 +51,7 @@ class DisabledWALProvider implements WALProvider {
 
   private static final Log LOG = LogFactory.getLog(DisabledWALProvider.class);
 
-  WAL disabled;
+  DisabledWAL disabled;
 
   @Override
   public void init(final WALFactory factory, final Configuration conf,
@@ -62,6 +63,8 @@ class DisabledWALProvider implements WALProvider {
       providerId = "defaultDisabled";
     }
     disabled = new DisabledWAL(new Path(FSUtils.getRootDir(conf), providerId), conf, null);
+    HRegionGroupProcess regionGP = new HRegionGroupProcess(disabled);
+    disabled.hrgp = regionGP;
   }
 
   @Override
@@ -77,9 +80,11 @@ class DisabledWALProvider implements WALProvider {
   @Override
   public void shutdown() throws IOException {
     disabled.shutdown();
+    disabled.hrgp.close();
   }
 
   private static class DisabledWAL implements WAL {
+    public HRegionGroupProcess hrgp;
     protected final List<WALActionsListener> listeners =
         new CopyOnWriteArrayList<WALActionsListener>();
     protected final Path path;

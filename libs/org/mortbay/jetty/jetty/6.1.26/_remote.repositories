@@ -1,0 +1,6 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Fri Jul 15 14:17:34 CST 2016
+jetty-6.1.26.jar>tbmirror=
+jetty-6.1.26.pom>tbmirror=
+jetty-6.1.26.jar>repository.jboss.org=
+jetty-6.1.26.pom>repository.jboss.org=

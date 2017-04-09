@@ -117,7 +117,8 @@ public class CallRunner {
       }
       // Set the response for undelayed calls and delayed calls with
       // undelayed responses.
-      if(resultPair != null && !resultPair.getSecond().getResponseDelegated()) {
+      // We should send response if call has exeception or has no exception and is not delegated.
+      if(resultPair == null || resultPair != null &&  !resultPair.getSecond().getResponseDelegated()) {
         if (!call.isDelayed() || !call.isReturnValueDelayed()) {
           Message param = resultPair != null ? resultPair.getFirst() : null;
           CellScanner cells = resultPair != null ? resultPair.getSecond().cellScanner() : null;

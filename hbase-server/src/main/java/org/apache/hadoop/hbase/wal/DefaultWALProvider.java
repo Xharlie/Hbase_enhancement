@@ -37,6 +37,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.regionserver.HRegionGroupProcess;
 import org.apache.hadoop.hbase.util.FSUtils;
 
 // imports for things that haven't moved from regionserver.wal yet.
@@ -126,6 +127,8 @@ public class DefaultWALProvider implements WALProvider {
                 getWALDirectoryName(factory.factoryId), HConstants.HREGION_OLDLOGDIR_NAME, conf,
                 listeners, true, logPrefix,
                 META_WAL_PROVIDER_ID.equals(providerId) ? META_WAL_PROVIDER_ID : null);
+        HRegionGroupProcess regionGP = new HRegionGroupProcess(log);
+        log.hrgp = regionGP;
       }
     }
     return log;
@@ -138,7 +141,10 @@ public class DefaultWALProvider implements WALProvider {
 
   @Override
   public void shutdown() throws IOException {
-    if (log != null) log.shutdown();
+    if (log != null) {
+      log.shutdown();
+      log.hrgp.close();
+    }
   }
 
   // should be package private; more visible for use in FSHLog

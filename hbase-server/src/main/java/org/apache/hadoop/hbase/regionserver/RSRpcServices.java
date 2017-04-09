@@ -695,7 +695,11 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
           long before = EnvironmentEdgeManager.currentTime();
           try {
             Get get = ProtobufUtil.toGet(action.getGet());
-            r = get(get, ((HRegion) region), closeCallBack, context);
+            if (context != null) {
+              r = get(get, ((HRegion) region), closeCallBack, context);
+            } else {
+              r = region.get(get);
+            }
           } finally {
             if (regionServer.metricsRegionServer != null) {
               regionServer.metricsRegionServer.updateGet(
@@ -1018,8 +1022,8 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       responseTK.batchContainsPuts = batchContainsPuts;
       responseTK.batchContainsDelete = batchContainsDelete;
       responseTK.before = before;
-      OperationStatus codes[] = ((HRegion) responseTK.getRegion()).batchMutate(mArray, HConstants.NO_NONCE,
-              HConstants.NO_NONCE, responseTK);
+      responseTK.mArray = mArray;
+      ((HRegion) responseTK.getRegion()).put(responseTK);
       return true;
     } catch (IOException ie) {
       for (int i = 0; i < responseTK.getMutations().size(); i++) {
@@ -2364,13 +2368,13 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
 
     long nonceGroup = request.hasNonceGroup() ? request.getNonceGroup() : HConstants.NO_NONCE;
 
-    // this will contain all the cells that we need to return. It's created later, if needed.
+    // this will contain all the cells that we need to return. It's cre许秋汉ated later, if needed.
     List<CellScannable> cellsToReturn = null;
     MultiResponse.Builder responseBuilder = MultiResponse.newBuilder();
     RegionActionResult.Builder regionActionResultBuilder = RegionActionResult.newBuilder();
     Boolean processed = null;
     RegionScannersCloseCallBack closeCallBack = null;
-    RpcCallContext context = null;
+    RpcCallContext context = RpcServer.getCurrentCall();
 
     this.rpcMultiRequestCount.increment();
     for (RegionAction regionAction : request.getRegionActionList()) {
@@ -2423,12 +2427,11 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
         }
       } else {
         // doNonAtomicRegionMutation manages the exception internally
-        if (closeCallBack == null) {
+        if (context != null && closeCallBack == null) {
           // An RpcCallBack that creates a list of scanners that needs to perform callBack
           // operation on completion of multiGets.
           // Set this only once
           closeCallBack = new RegionScannersCloseCallBack();
-          context = RpcServer.getCurrentCall();
           context.setCallBack(closeCallBack);
         }
         cellsToReturn = doNonAtomicRegionMutation(region, quota, regionAction, cellScanner,
@@ -2539,7 +2542,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
           context.setCallBack(closeCallBack);
         }
         // doNonAtomicRegionMutation manages the exception internally
-        responseTK.setResponseToolKit(region, responseBuilder, regionActionResultBuilder, cellsToReturn);
+        responseTK.setMultiResponseToolKit(region, responseBuilder, regionActionResultBuilder, cellsToReturn);
         Pair<List<CellScannable>, Boolean> doNonAtomicResult = doNonAtomicRegionMutation(
                 quota, regionAction, cellScanner, nonceGroup, closeCallBack, context, mutateOnly, responseTK);
         cellsToReturn = doNonAtomicResult.getFirst();
@@ -2688,6 +2691,134 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       return builder.build();
     } catch (IOException ie) {
       regionServer.checkFileSystem();
+      throw new ServiceException(ie);
+    } finally {
+      if (quota != null) {
+        quota.close();
+      }
+    }
+  }
+
+  /**
+   * Mutate data in a table.
+   *
+   * @param rpcc the RPC controller
+   * @param request the mutate request
+   * @throws ServiceException
+   */
+  @Override
+  public MutateResponse mutate(final RpcController rpcc,
+      final MutateRequest request, Object objresponseTK) throws ServiceException {
+    // rpc controller is how we bring in data via the back door;  it is unprotobuf'ed data.
+    // It is also the conduit via which we pass back data.
+    PayloadCarryingRpcController controller = (PayloadCarryingRpcController)rpcc;
+    ResponseToolKit responseTK = (ResponseToolKit)objresponseTK;
+    CellScanner cellScanner = controller != null? controller.cellScanner(): null;
+    OperationQuota quota = null;
+    responseTK.controller = controller;
+    // Clear scanner so we are not holding on to reference across call.
+    if (controller != null) controller.setCellScanner(null);
+    try {
+      checkOpen();
+      requestCount.increment();
+      this.rpcMutateRequestCount.increment();
+      Region region = getRegion(request.getRegion());
+      MutateResponse.Builder builder = MutateResponse.newBuilder();
+      responseTK.setMutateResponseToolKit(region, builder);
+      responseTK.setRegionServer(regionServer);
+      MutationProto mutation = request.getMutation();
+      if (!region.getRegionInfo().isMetaTable()) {
+        regionServer.cacheFlusher.reclaimMemStoreMemory();
+      }
+      long nonceGroup = request.hasNonceGroup() ? request.getNonceGroup() : HConstants.NO_NONCE;
+      Result r = null;
+      Boolean processed = null;
+      MutationType type = mutation.getMutateType();
+      long mutationSize = 0;
+      quota = getQuotaManager().checkQuota(region, OperationQuota.OperationType.MUTATE);
+      switch (type) {
+        case APPEND:
+          // TODO: this doesn't actually check anything.
+          r = append(region, quota, mutation, cellScanner, nonceGroup);
+          break;
+        case INCREMENT:
+          // TODO: this doesn't actually check anything.
+          r = increment(region, quota, mutation, cellScanner, nonceGroup);
+          break;
+        case PUT:
+          Put put = ProtobufUtil.toPut(mutation, cellScanner);
+          quota.addMutation(put);
+          if (request.hasCondition()) {
+            Condition condition = request.getCondition();
+            byte[] row = condition.getRow().toByteArray();
+            byte[] family = condition.getFamily().toByteArray();
+            byte[] qualifier = condition.getQualifier().toByteArray();
+            CompareOp compareOp = CompareOp.valueOf(condition.getCompareType().name());
+            ByteArrayComparable comparator =
+                    ProtobufUtil.toComparator(condition.getComparator());
+            if (region.getCoprocessorHost() != null) {
+              processed = region.getCoprocessorHost().preCheckAndPut(
+                      row, family, qualifier, compareOp, comparator, put);
+            }
+            if (processed == null) {
+              boolean result = region.checkAndMutate(row, family,
+                      qualifier, compareOp, comparator, put, true);
+              if (region.getCoprocessorHost() != null) {
+                result = region.getCoprocessorHost().postCheckAndPut(row, family,
+                        qualifier, compareOp, comparator, put, result);
+              }
+              processed = result;
+            }
+          } else {
+            if (region.getRegionInfo().isMetaTable()) {
+              region.put(put);
+            } else {
+              controller.setResponseDelegated(true);
+              responseTK.mutation = put;
+              region.put(responseTK);
+            }
+            processed = Boolean.TRUE;
+          }
+          break;
+        case DELETE:
+          Delete delete = ProtobufUtil.toDelete(mutation, cellScanner);
+          quota.addMutation(delete);
+          if (request.hasCondition()) {
+            Condition condition = request.getCondition();
+            byte[] row = condition.getRow().toByteArray();
+            byte[] family = condition.getFamily().toByteArray();
+            byte[] qualifier = condition.getQualifier().toByteArray();
+            CompareOp compareOp = CompareOp.valueOf(condition.getCompareType().name());
+            ByteArrayComparable comparator =
+                    ProtobufUtil.toComparator(condition.getComparator());
+            if (region.getCoprocessorHost() != null) {
+              processed = region.getCoprocessorHost().preCheckAndDelete(
+                      row, family, qualifier, compareOp, comparator, delete);
+            }
+            if (processed == null) {
+              boolean result = region.checkAndMutate(row, family,
+                      qualifier, compareOp, comparator, delete, true);
+              if (region.getCoprocessorHost() != null) {
+                result = region.getCoprocessorHost().postCheckAndDelete(row, family,
+                        qualifier, compareOp, comparator, delete, result);
+              }
+              processed = result;
+            }
+          } else {
+            region.delete(delete);
+            processed = Boolean.TRUE;
+          }
+          break;
+        default:
+          throw new DoNotRetryIOException(
+                  "Unsupported mutate type: " + type.name());
+      }
+      if (processed != null) builder.setProcessed(processed.booleanValue());
+      addResult(builder, r, controller);
+      return builder.build();
+    } catch (IOException ie) {
+      regionServer.checkFileSystem();
+      LOG.fatal("mutate error!!!!!!!!!!" , ie);
       throw new ServiceException(ie);
     } finally {
       if (quota != null) {

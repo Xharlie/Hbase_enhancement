@@ -1,0 +1,4 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Tue May 03 11:30:45 CST 2016
+org.osgi.core-4.3.1.jar>tbmirror=
+org.osgi.core-4.3.1.pom>tbmirror=

@@ -1,0 +1,6 @@
+#NOTE: This is an Aether internal implementation file, its format can be changed without prior notice.
+#Fri Jul 15 14:15:35 CST 2016
+httpcore-4.2.4.jar>tbmirror=
+httpcore-4.2.4.jar>apache\ release=
+httpcore-4.2.4.pom>apache\ release=
+httpcore-4.2.4.pom>tbmirror=

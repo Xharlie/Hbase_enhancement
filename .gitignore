@@ -1,3 +1,5 @@
+*.DS_Store
+*.patch
 /.arc_jira_lib
 /.externalToolBuilders
 .project
@@ -16,5 +18,8 @@ hbase-*/test
 *.ipr
 *.rpm
 rpm.log
+*.ico
+*.png
+*.jpg
 patchprocess/
 dependency-reduced-pom.xml

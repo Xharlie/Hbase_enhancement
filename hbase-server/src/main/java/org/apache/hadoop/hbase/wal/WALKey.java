@@ -31,8 +31,13 @@ import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
+import org.apache.hadoop.hbase.regionserver.Region;
+import org.apache.hadoop.hbase.regionserver.ResponseToolKit;
+import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -240,8 +245,8 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
   private long nonceGroup = HConstants.NO_NONCE;
   private long nonce = HConstants.NO_NONCE;
   private MultiVersionConsistencyControl mvcc;
-  private MultiVersionConsistencyControl.WriteEntry writeEntry;
-  private MultiVersionConsistencyControl.WriteEntry preAssignedWriteEntry = null;
+  private volatile MultiVersionConsistencyControl.WriteEntry writeEntry;
+  public MultiVersionConsistencyControl.WriteEntry preAssignedWriteEntry = null;
   public static final List<UUID> EMPTY_UUIDS = Collections.unmodifiableList(new ArrayList<UUID>());
 
   // visible for deprecated HLogKey
@@ -701,4 +706,18 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
       this.origLogSeqNum = walKey.getOrigSequenceNumber();
     }
   }
+
+  public volatile int firstIndex;
+  public volatile int lastIndexExclusive;
+  public volatile boolean success = false;
+  public volatile boolean locked = false;
+  public volatile long sequence;
+  public volatile WALEdit walEdit;
+  public volatile long addedSize = 0;
+  public void setMultiIndex(int firstIndex, int lastIndexExclusive) {
+    this.firstIndex = firstIndex;
+    this.lastIndexExclusive = lastIndexExclusive;
+  }
+  public volatile List<Region.RowLock> acquiredRowLocks;
+  public volatile ResponseToolKit responseTK;
 }

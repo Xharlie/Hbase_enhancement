@@ -382,6 +382,15 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
     }
 
     @Override
+    public long disconnectSince() {
+      if (!connection.isConnectionOpen()) {
+        return System.currentTimeMillis() - timestamp;
+      } else {
+        return -1L;
+      }
+    }
+
+    @Override
     public String toString() {
       return toShortString() + " param: "
           + (this.param != null ? ProtobufUtil.getShortTextFormat(this.param) : "")
@@ -850,6 +859,7 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
       }
       return new Pair<Message, PayloadCarryingRpcController>(result, controller);
     } catch (Throwable e) {
+      LOG.fatal(e.getStackTrace());
       // The above callBlockingMethod will always return a SE.  Strip the SE wrapper before
       // putting it on the wire.  Its needed to adhere to the pb Service Interface but we don't
       // need to pass it over the wire.
@@ -872,7 +882,7 @@ public abstract class RpcServer implements RpcServerInterface, ConfigurationObse
       int qTime = (int) (startTime - receiveTime);
       int totalTime = (int) (endTime - receiveTime);
       if (LOG.isTraceEnabled()) {
-        LOG.trace(CurCall.get().toString() +
+        LOG.trace(call.toString() +
             ", response " + TextFormat.shortDebugString(result) +
             " queueTime: " + qTime +
             " processingTime: " + processingTime +

@@ -124,6 +124,7 @@ public class WALUtil {
     try {
       trx = wal.append(htd, hri, key, edit, false);
       if (sync) wal.sync(trx);
+//      LOG.fatal("write marker:" + );
     } finally {
       // If you get hung here, is it a real WAL or a mocked WAL? If the latter, you need to
       // trip the latch that is inside in getWriteEntry up in your mock. See down in the append

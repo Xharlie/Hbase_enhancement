@@ -20,7 +20,6 @@ package org.apache.hadoop.hbase.client;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.concurrent.Future;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
@@ -52,10 +51,10 @@ public interface AsyncableHTableInterface extends HTableInterface {
    * from the returned future
    * @param get The object that specifies what data to fetch and from which row
    * @param callback define how to handle the remote response
-   * @return an {@link Future} to get the result
+   * @return an {@link AsyncFuture} to get the result
    * @throws IOException if an error occurs
    */
-  public Future<Result> asyncGet(final Get get) throws IOException;
+  public AsyncFuture<Result> asyncGet(final Get get) throws IOException;
 
   /**
    * Put one row data into the table.
@@ -74,10 +73,10 @@ public interface AsyncableHTableInterface extends HTableInterface {
    * Puts a row data in the table. It is an async operation and you could get the result from the
    * returned future
    * @param put The data to put.
-   * @return an {@link Future} to get the result
+   * @return an {@link AsyncFuture} to get the result
    * @throws IOException if an error occurs
    */
-  public Future<Result> asyncPut(Put put) throws IOException;
+  public AsyncFuture<Result> asyncPut(Put put) throws IOException;
 
   /**
    * Deletes the specified cells/row.
@@ -97,10 +96,10 @@ public interface AsyncableHTableInterface extends HTableInterface {
    * Deletes the specified cells/row. It is an async operation and you could get the result from the
    * returned future
    * @param delete The data to put.
-   * @return an {@link Future} to get the result
+   * @return an {@link AsyncFuture} to get the result
    * @throws IOException if an error occurs
    */
-  public Future<Result> asyncDelete(Delete delete) throws IOException;
+  public AsyncFuture<Result> asyncDelete(Delete delete) throws IOException;
 
   /**
    * Extracts certain cells from the given rows, in batch.

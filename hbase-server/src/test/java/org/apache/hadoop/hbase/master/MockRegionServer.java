@@ -388,6 +388,13 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
+  public MutateResponse mutate(RpcController controller, MutateRequest request, Object responseTK)
+      throws ServiceException {
+    // TODO Auto-generated method stub
+    return null;
+  }
+
+  @Override
   public ScanResponse scan(RpcController controller, ScanRequest request)
       throws ServiceException {
     ScanResponse.Builder builder = ScanResponse.newBuilder();

@@ -97,8 +97,7 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
           } else {
             toThrow = new RetriesExhaustedException(attempts - 1, exceptions);
           }
-          isDone = true;
-          latch.countDown();
+          markDone();
         }
       }
     };
@@ -110,6 +109,7 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
     executionTime = System.currentTimeMillis() - startTime;
     isDone = true;
     latch.countDown();
+    notifyListener();
   }
 
   @Override

@@ -2141,19 +2141,19 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
   }
 
   @Override
-  public Future<Result> asyncGet(Get get) throws IOException {
+  public AsyncFuture<Result> asyncGet(Get get) throws IOException {
     return new AsyncGetFuture(this, get, maxAttempts, retryPause, startLogErrorsCnt,
         operationTimeout);
   }
 
   @Override
-  public Future<Result> asyncPut(Put put) throws IOException {
+  public AsyncFuture<Result> asyncPut(Put put) throws IOException {
     return new AsyncMutateFuture(this, put, maxAttempts, retryPause, startLogErrorsCnt,
         operationTimeout);
   }
 
   @Override
-  public Future<Result> asyncDelete(Delete delete) throws IOException {
+  public AsyncFuture<Result> asyncDelete(Delete delete) throws IOException {
     return new AsyncMutateFuture(this, delete, maxAttempts, retryPause, startLogErrorsCnt,
         operationTimeout);
   }

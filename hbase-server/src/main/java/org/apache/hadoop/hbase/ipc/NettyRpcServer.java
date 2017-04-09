@@ -681,11 +681,6 @@ public class NettyRpcServer extends RpcServer {
       return false;
     }
 
-    @Override
-    public long disconnectSince() {
-      return -1L;
-    }
-
     Connection getConnection() {
       return (Connection) this.connection;
     }
