@@ -34,12 +34,14 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -66,19 +68,17 @@ import org.apache.hadoop.hbase.io.hfile.CacheableDeserializerIdManager;
 import org.apache.hadoop.hbase.io.hfile.CachedBlock;
 import org.apache.hadoop.hbase.io.hfile.HFileBlock;
 import org.apache.hadoop.hbase.nio.ByteBuff;
-import org.apache.hadoop.hbase.util.ConcurrentIndex;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.HasThread;
 import org.apache.hadoop.hbase.util.IdReadWriteLock;
 import org.apache.hadoop.util.StringUtils;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /**
  * BucketCache uses {@link BucketAllocator} to allocate/free blocks, and uses
- * {@link BucketCache#ramCache} and {@link BucketCache#backingMap} in order to
+ * BucketCache#ramCache and BucketCache#backingMap in order to
  * determine if a given element is in the cache. The bucket cache can use on-heap or
  * off-heap memory {@link ByteBufferIOEngine} or in a file {@link FileIOEngine} to
  * store/read the block data.
@@ -186,10 +186,15 @@ public class BucketCache implements BlockCache, HeapSize {
   @VisibleForTesting
   final IdReadWriteLock offsetLock = new IdReadWriteLock();
 
-  private final ConcurrentIndex<String, BlockCacheKey> blocksByHFile =
-      new ConcurrentIndex<String, BlockCacheKey>(new Comparator<BlockCacheKey>() {
+  private final NavigableSet<BlockCacheKey> blocksByHFile =
+      new ConcurrentSkipListSet<BlockCacheKey>(new Comparator<BlockCacheKey>() {
         @Override
         public int compare(BlockCacheKey a, BlockCacheKey b) {
+          int nameComparison = a.getHfileName().compareTo(b.getHfileName());
+          if (nameComparison != 0) {
+            return nameComparison;
+          }
+
           if (a.getOffset() == b.getOffset()) {
             return 0;
           } else if (a.getOffset() < b.getOffset()) {
@@ -346,6 +351,7 @@ public class BucketCache implements BlockCache, HeapSize {
    */
   public void cacheBlockWithWait(BlockCacheKey cacheKey, Cacheable cachedItem, boolean inMemory,
       boolean wait) {
+    if (LOG.isTraceEnabled()) LOG.trace("Caching key=" + cacheKey + ", item=" + cachedItem);
     if (!cacheEnabled) {
       return;
     }
@@ -380,7 +386,7 @@ public class BucketCache implements BlockCache, HeapSize {
     } else {
       this.blockNumber.incrementAndGet();
       this.heapSize.addAndGet(cachedItem.heapSize());
-      blocksByHFile.put(cacheKey.getHfileName(), cacheKey);
+      blocksByHFile.add(cacheKey);
     }
   }
 
@@ -437,6 +443,9 @@ public class BucketCache implements BlockCache, HeapSize {
           // TODO : change this area - should be removed after server cells and
           // 12295 are available
           int len = bucketEntry.getLength();
+          if (LOG.isTraceEnabled()) {
+            LOG.trace("Read offset=" + bucketEntry.offset() + ", len=" + len);
+          }
           Cacheable cachedBlock = ioEngine.read(bucketEntry.offset(), len,
               bucketEntry.deserializerReference(this.deserialiserMap));
           long timeTaken = System.nanoTime() - start;
@@ -476,7 +485,7 @@ public class BucketCache implements BlockCache, HeapSize {
   void blockEvicted(BlockCacheKey cacheKey, BucketEntry bucketEntry, boolean decrementBlockNumber) {
     bucketAllocator.freeBlock(bucketEntry.offset());
     realCacheSize.addAndGet(-1 * bucketEntry.getLength());
-    blocksByHFile.remove(cacheKey.getHfileName(), cacheKey);
+    blocksByHFile.remove(cacheKey);
     if (decrementBlockNumber) {
       this.blockNumber.decrementAndGet();
     }
@@ -649,7 +658,9 @@ public class BucketCache implements BlockCache, HeapSize {
    */
   private void freeSpace(final String why) {
     // Ensure only one freeSpace progress at a time
-    if (!freeSpaceLock.tryLock()) return;
+    if (!freeSpaceLock.tryLock()) {
+      return;
+    }
     try {
       freeInProgress = true;
       long bytesToFreeWithoutExtra = 0;
@@ -678,7 +689,7 @@ public class BucketCache implements BlockCache, HeapSize {
         return;
       }
       long currentSize = bucketAllocator.getUsedSize();
-      long totalSize=bucketAllocator.getTotalSize();
+      long totalSize = bucketAllocator.getTotalSize();
       if (LOG.isDebugEnabled() && msgBuffer != null) {
         LOG.debug("Free started because \"" + why + "\"; " + msgBuffer.toString() +
           " of current used=" + StringUtils.byteDesc(currentSize) + ", actual cacheSize=" +
@@ -883,7 +894,7 @@ public class BucketCache implements BlockCache, HeapSize {
         }
       }
 
-      // Make sure data pages are written are on media before we update maps.
+      // Make sure data pages are written on media before we update maps.
       try {
         ioEngine.sync();
       } catch (IOException ioex) {
@@ -957,9 +968,9 @@ public class BucketCache implements BlockCache, HeapSize {
     FileOutputStream fos = null;
     ObjectOutputStream oos = null;
     try {
-      if (!ioEngine.isPersistent())
-        throw new IOException(
-            "Attempt to persist non-persistent cache mappings!");
+      if (!ioEngine.isPersistent()) {
+        throw new IOException("Attempt to persist non-persistent cache mappings!");
+      }
       fos = new FileOutputStream(persistencePath, false);
       oos = new ObjectOutputStream(fos);
       oos.writeLong(cacheCapacity);
@@ -1039,19 +1050,17 @@ public class BucketCache implements BlockCache, HeapSize {
   }
 
   /**
-   * Used to shut down the cache -or- turn it off in the case of something
-   * broken.
+   * Used to shut down the cache -or- turn it off in the case of something broken.
    */
   private void disableCache() {
-    if (!cacheEnabled)
-      return;
+    if (!cacheEnabled) return;
     cacheEnabled = false;
     ioEngine.shutdown();
     this.scheduleThreadPool.shutdown();
-    for (int i = 0; i < writerThreads.length; ++i)
-      writerThreads[i].interrupt();
+    for (int i = 0; i < writerThreads.length; ++i) writerThreads[i].interrupt();
     this.ramCache.clear();
     if (!ioEngine.isPersistent() || persistencePath == null) {
+      // If persistent ioengine and a path, we will serialize out the backingMap.
       this.backingMap.clear();
     }
   }
@@ -1121,15 +1130,12 @@ public class BucketCache implements BlockCache, HeapSize {
    */
   @Override
   public int evictBlocksByHfileName(String hfileName) {
-    // Copy the list to avoid ConcurrentModificationException
-    // as evictBlockKey removes the key from the index
-    Set<BlockCacheKey> keySet = blocksByHFile.values(hfileName);
-    if (keySet == null) {
-      return 0;
-    }
+    Set<BlockCacheKey> keySet = blocksByHFile.subSet(
+        new BlockCacheKey(hfileName, Long.MIN_VALUE), true,
+        new BlockCacheKey(hfileName, Long.MAX_VALUE), true);
+
     int numEvicted = 0;
-    List<BlockCacheKey> keysForHFile = ImmutableList.copyOf(keySet);
-    for (BlockCacheKey key : keysForHFile) {
+    for (BlockCacheKey key : keySet) {
       if (evictBlock(key)) {
           ++numEvicted;
       }
@@ -1332,22 +1338,22 @@ public class BucketCache implements BlockCache, HeapSize {
         final AtomicLong realCacheSize) throws CacheFullException, IOException,
         BucketAllocatorException {
       int len = data.getSerializedLength();
-      // This cacheable thing can't be serialized...
+      // This cacheable thing can't be serialized
       if (len == 0) return null;
       long offset = bucketAllocator.allocateBlock(len);
       BucketEntry bucketEntry = new BucketEntry(offset, len, accessCounter, inMemory);
       bucketEntry.setDeserialiserReference(data.getDeserializer(), deserialiserMap);
       try {
         if (data instanceof HFileBlock) {
-          HFileBlock block = (HFileBlock) data;
-          ByteBuff sliceBuf = block.getBufferReadOnlyWithHeader();
-          sliceBuf.rewind();
-          assert len == sliceBuf.limit() + HFileBlock.EXTRA_SERIALIZATION_SPACE ||
-            len == sliceBuf.limit() + block.headerSize() + HFileBlock.EXTRA_SERIALIZATION_SPACE;
-          ByteBuffer extraInfoBuffer = ByteBuffer.allocate(HFileBlock.EXTRA_SERIALIZATION_SPACE);
-          block.serializeExtraInfo(extraInfoBuffer);
+          // If an instance of HFileBlock, save on some allocations.
+          HFileBlock block = (HFileBlock)data;
+          ByteBuff sliceBuf = block.getBufferReadOnly();
+          ByteBuffer metadata = block.getMetaData();
+          if (LOG.isTraceEnabled()) {
+            LOG.trace("Write offset=" + offset + ", len=" + len);
+          }
           ioEngine.write(sliceBuf, offset);
-          ioEngine.write(extraInfoBuffer, offset + len - HFileBlock.EXTRA_SERIALIZATION_SPACE);
+          ioEngine.write(metadata, offset + len - metadata.limit());
         } else {
           ByteBuffer bb = ByteBuffer.allocate(len);
           data.serialize(bb);

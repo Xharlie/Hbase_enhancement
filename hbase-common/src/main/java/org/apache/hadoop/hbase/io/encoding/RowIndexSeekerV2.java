@@ -18,7 +18,7 @@ package org.apache.hadoop.hbase.io.encoding;
 
 import java.nio.ByteBuffer;
 
-import org.apache.hadoop.hbase.ByteBufferedCell;
+import org.apache.hadoop.hbase.ByteBufferCell;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
@@ -110,39 +110,6 @@ public class RowIndexSeekerV2 implements EncodedSeeker {
   }
 
   @Override
-  public ByteBuffer getKeyValueBuffer() {
-    return getKeyValueBuffer(false);
-  }
-
-  ByteBuffer getKeyValueBuffer(boolean addMvcc) {
-    ByteBuffer key = KeyValueUtil.copyKeyToNewByteBuffer(currentCell);
-    int kvBufSize =
-        (int) KeyValue.getKeyValueDataStructureSize(key.remaining(), current.valueLength,
-          current.tagsLength);
-    if (addMvcc && includesMvcc()) {
-      kvBufSize += WritableUtils.getVIntSize(current.memstoreTS);
-    }
-    ByteBuffer kvBuffer = ByteBuffer.allocate(kvBufSize);
-    kvBuffer.putInt(key.remaining());
-    kvBuffer.putInt(current.valueLength);
-    ByteBufferUtils.copyFromBufferToBuffer(key, kvBuffer, 0, key.remaining());
-    kvBuffer.put(CellUtil.cloneValue(currentCell));
-    if (current.tagsLength > 0) {
-      // Put short as unsigned
-      kvBuffer.put((byte) (current.tagsLength >> 8 & 0xff));
-      kvBuffer.put((byte) (current.tagsLength & 0xff));
-      if (current.tagsOffset != -1) {
-        kvBuffer.put(CellUtil.cloneTags(currentCell));
-      }
-    }
-    if (addMvcc && includesMvcc()) {
-      ByteBufferUtils.writeVLong(kvBuffer, currentCell.getSequenceId());
-    }
-    kvBuffer.rewind();
-    return kvBuffer;
-  }
-
-  @Override
   public Cell getCell() {
     return current.toCell();
   }
@@ -195,10 +162,10 @@ public class RowIndexSeekerV2 implements EncodedSeeker {
   }
 
   private int compareRows(ByteBuffer row, Cell seekCell) {
-    if (seekCell instanceof ByteBufferedCell) {
+    if (seekCell instanceof ByteBufferCell) {
       return ByteBufferUtils.compareTo(row, row.position(), row.remaining(),
-          ((ByteBufferedCell) seekCell).getRowByteBuffer(),
-          ((ByteBufferedCell) seekCell).getRowPosition(),
+          ((ByteBufferCell) seekCell).getRowByteBuffer(),
+          ((ByteBufferCell) seekCell).getRowPosition(),
           seekCell.getRowLength());
     } else {
       return ByteBufferUtils.compareTo(row, row.position(), row.remaining(),
@@ -480,7 +447,7 @@ public class RowIndexSeekerV2 implements EncodedSeeker {
     }
   }
 
-  class CustomCell extends ByteBufferedCell {
+  class CustomCell extends ByteBufferCell {
 
     CustomCell() {
     }
@@ -666,7 +633,7 @@ public class RowIndexSeekerV2 implements EncodedSeeker {
 
   }
 
-  protected static class ClonedSeekerState extends ByteBufferedCell implements
+  protected static class ClonedSeekerState extends ByteBufferCell implements
       HeapSize, SettableSequenceId {
     private static final long FIXED_OVERHEAD = ClassSize.align(ClassSize.OBJECT
         + (5 * ClassSize.REFERENCE) + (2 * Bytes.SIZEOF_LONG)

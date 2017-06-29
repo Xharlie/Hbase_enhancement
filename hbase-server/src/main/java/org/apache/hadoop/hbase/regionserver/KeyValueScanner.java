@@ -18,6 +18,7 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.SortedSet;
 
@@ -29,7 +30,10 @@ import org.apache.hadoop.hbase.client.Scan;
  * Scanner that returns the next KeyValue.
  */
 @InterfaceAudience.Private
-public interface KeyValueScanner extends Shipper {
+// TODO: Change name from KeyValueScanner to CellScanner only we already have a simple CellScanner
+// so this should be something else altogether, a decoration on our base CellScanner. TODO.
+// This class shows in CPs so do it all in one swell swoop. HBase-2.0.0.
+public interface KeyValueScanner extends Shipper, Closeable {
   /**
    * Look at the next Cell in this scanner, but do not iterate scanner.
    * @return the next Cell
@@ -65,6 +69,7 @@ public interface KeyValueScanner extends Shipper {
    * The default implementation for this would be to return 0. A file having
    * lower sequence id will be considered to be the older one.
    */
+  // TODO: Implement SequenceId Interface instead.
   long getSequenceID();
 
   /**
@@ -131,7 +136,7 @@ public interface KeyValueScanner extends Shipper {
    * peek KeyValue of scanner has the same row with specified Cell,
    * otherwise seek the scanner at the first Cell of the row which is the
    * previous row of specified KeyValue
-   * 
+   *
    * @param key seek KeyValue
    * @return true if the scanner is at the valid KeyValue, false if such
    *         KeyValue does not exist
@@ -150,7 +155,7 @@ public interface KeyValueScanner extends Shipper {
 
   /**
    * Seek the scanner at the first KeyValue of last row
-   * 
+   *
    * @return true if scanner has values left, false if the underlying data is
    *         empty
    * @throws IOException
@@ -158,8 +163,9 @@ public interface KeyValueScanner extends Shipper {
   public boolean seekToLastRow() throws IOException;
 
   /**
-   * @return the next key in the index (the key to seek to the next block)
-   * if known, or null otherwise
+   * @return the next key in the index, usually the first key of next block OR a key that falls
+   * between last key of current block and first key of next block..
+   * see HFileWriterImpl#getMidpoint, or null if not known.
    */
   public Cell getNextIndexedKey();
 }

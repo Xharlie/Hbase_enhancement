@@ -69,6 +69,7 @@ import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.io.ByteBufferOutputStream;
+import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.generated.RPCProtos.RequestHeader;
 import org.apache.hadoop.hbase.security.AccessDeniedException;
@@ -80,6 +81,7 @@ import org.apache.hadoop.hbase.security.SaslStatus;
 import org.apache.hadoop.hbase.security.SaslUtil;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Counter;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.IntWritable;
@@ -194,11 +196,7 @@ public class SimpleRpcServer extends RpcServer {
      * cleanup.
      */
     void done() {
-      if (this.cellBlock != null) {
-        // Return buffer to reservoir now we are done with it.
-        reservoir.putBuffer(this.cellBlock);
-        this.cellBlock = null;
-      }
+      super.done();
       this.getConnection().decRpcCount();  // Say that we're done with this call.
     }
 
@@ -209,7 +207,7 @@ public class SimpleRpcServer extends RpcServer {
       this.delayResponse = false;
       delayedCalls.decrementAndGet();
       if (this.delayReturnValue) {
-        this.setResponse(result, null, null, null);
+        this.setResponse((Message)result, null, null, null);
       }
       this.responder.doRespond(this);
     }
@@ -266,15 +264,7 @@ public class SimpleRpcServer extends RpcServer {
         this.responder.doRespond(this);
       }
     }
-    
-    @Override
-    public InetAddress getInetAddress() {
-      if (getConnection().socket != null) {
-        return getConnection().socket.getInetAddress();
-      } else {
-        return null;
-      }
-    }
+
   }
 
   /** Listens on the socket. Creates jobs for the handler threads*/
@@ -1734,5 +1724,14 @@ public class SimpleRpcServer extends RpcServer {
   @Override
   public int getResponseQueueLength() {
     return responseQueueLength.get();
+  }
+
+  @Override
+  public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
+      Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
+      throws IOException {
+    Call fakeCall = new Call(-1, service, md, null, param, cellScanner, null, null, -1, null, null);
+    fakeCall.setReceiveTime(receiveTime);
+    return call(fakeCall, status);
   }
 }

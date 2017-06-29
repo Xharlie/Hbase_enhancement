@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hbase.ipc;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.List;
 
@@ -40,8 +41,15 @@ public class RpcServerFactory {
   }
 
   public static RpcServer createServer(final Server server, final String name,
+      final List<BlockingServiceAndInterface> services,
+      final InetSocketAddress bindAddress, Configuration conf,
+      RpcScheduler scheduler) throws IOException {
+    return createServer(server, name, services, bindAddress, conf, scheduler, false);
+  }
+
+  public static RpcServer createServer(final Server server, final String name,
       final List<BlockingServiceAndInterface> services, final InetSocketAddress bindAddress,
-      Configuration conf, RpcScheduler scheduler) {
+      Configuration conf, RpcScheduler scheduler, boolean isEmbedded) throws IOException {
     String rpcServerClass =
         conf.get(CUSTOM_RPC_SERVER_IMPL_CONF_KEY, SimpleRpcServer.class.getName());
     LOG.info("Use " + rpcServerClass + " rpc server");

@@ -20,6 +20,7 @@ package org.apache.hadoop.hbase.regionserver.wal;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.NavigableMap;
 import java.util.UUID;
 
 import org.apache.hadoop.hbase.TableName;
@@ -33,14 +34,15 @@ import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 public class ReplayHLogKey extends HLogKey {
 
   public ReplayHLogKey(final byte[] encodedRegionName, final TableName tablename, final long now,
-      List<UUID> clusterIds, long nonceGroup, long nonce, MultiVersionConsistencyControl mvcc) {
-    super(encodedRegionName, tablename, now, clusterIds, nonceGroup, nonce, mvcc);
+      List<UUID> clusterIds, long nonceGroup, long nonce, MultiVersionConsistencyControl mvcc,
+      final NavigableMap<byte[], Integer> replicationScope) {
+    super(encodedRegionName, tablename, now, clusterIds, nonceGroup, nonce, mvcc, replicationScope);
   }
 
   public ReplayHLogKey(final byte[] encodedRegionName, final TableName tablename, long logSeqNum,
       final long now, List<UUID> clusterIds, long nonceGroup, long nonce,
-      MultiVersionConsistencyControl mvcc) {
-    super(encodedRegionName, tablename, logSeqNum, now, clusterIds, nonceGroup, nonce, mvcc);
+      MultiVersionConsistencyControl mvcc, final NavigableMap<byte[], Integer> replicationScope) {
+    super(encodedRegionName, tablename, logSeqNum, now, clusterIds, nonceGroup, nonce, mvcc, replicationScope);
   }
 
   /**

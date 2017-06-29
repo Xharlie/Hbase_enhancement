@@ -54,7 +54,6 @@ import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
-import org.apache.hadoop.hbase.TagRewriteCell;
 import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Append;
@@ -246,9 +245,7 @@ public class AccessController extends BaseMasterAndRegionObserver
     for (Map.Entry<byte[], List<Cell>> f : familyMap.entrySet()) {
       List<Cell> cells = f.getValue();
       for (Cell cell: cells) {
-        if (Bytes.equals(cell.getFamilyArray(), cell.getFamilyOffset(),
-            cell.getFamilyLength(), AccessControlLists.ACL_LIST_FAMILY, 0,
-            AccessControlLists.ACL_LIST_FAMILY.length)) {
+        if (CellUtil.matchingFamily(cell, AccessControlLists.ACL_LIST_FAMILY)) {
           entries.add(CellUtil.cloneRow(cell));
         }
       }
@@ -878,7 +875,7 @@ public class AccessController extends BaseMasterAndRegionObserver
         while (tagIterator.hasNext()) {
           tags.add(tagIterator.next());
         }
-        newCells.add(new TagRewriteCell(cell, TagUtil.fromList(tags)));
+        newCells.add(CellUtil.createCell(cell, tags));
       }
       // This is supposed to be safe, won't CME
       e.setValue(newCells);
@@ -1989,7 +1986,7 @@ public class AccessController extends BaseMasterAndRegionObserver
       return newCell;
     }
 
-    Cell rewriteCell = new TagRewriteCell(newCell, TagUtil.fromList(tags));
+    Cell rewriteCell = CellUtil.createCell(newCell, tags);
     return rewriteCell;
   }
 

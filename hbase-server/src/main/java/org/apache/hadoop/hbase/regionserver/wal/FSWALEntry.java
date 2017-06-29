@@ -26,7 +26,6 @@ import java.util.Set;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -49,17 +48,15 @@ import org.apache.hadoop.hbase.wal.WALKey;
 class FSWALEntry extends Entry {
   // The below data members are denoted 'transient' just to highlight these are not persisted;
   // they are only in memory and held here while passing over the ring buffer.
-  private final transient long sequence;
+  private final transient long sequence; // the ring buffer sequence of this entry, or say txid
   private final transient boolean inMemstore;
-  private final transient HTableDescriptor htd;
   private final transient HRegionInfo hri;
   private final Set<byte[]> familyNames;
 
   FSWALEntry(final long sequence, final WALKey key, final WALEdit edit,
-      final HTableDescriptor htd, final HRegionInfo hri, final boolean inMemstore) {
+      final HRegionInfo hri, final boolean inMemstore) {
     super(key, edit);
     this.inMemstore = inMemstore;
-    this.htd = htd;
     this.hri = hri;
     this.sequence = sequence;
     if (inMemstore) {
@@ -71,6 +68,7 @@ class FSWALEntry extends Entry {
         Set<byte[]> familySet = Sets.newTreeSet(Bytes.BYTES_COMPARATOR);
         for (Cell cell : cells) {
           if (!CellUtil.matchingFamily(cell, WALEdit.METAFAMILY)) {
+            // TODO: Avoid this clone?
             familySet.add(CellUtil.cloneFamily(cell));
           }
         }
@@ -89,10 +87,6 @@ class FSWALEntry extends Entry {
     return this.inMemstore;
   }
 
-  HTableDescriptor getHTableDescriptor() {
-    return this.htd;
-  }
-
   HRegionInfo getHRegionInfo() {
     return this.hri;
   }
@@ -105,40 +99,18 @@ class FSWALEntry extends Entry {
   }
 
   /**
-   * Stamp this edit with a region edit/sequence id.
-   * Call when safe to do so: i.e. the context is such that the increment on the passed in
-   * {@link #regionSequenceIdReference} is guaranteed aligned w/ how appends are going into the
-   * WAL.  This method works with {@link #getRegionSequenceId()}.  It will block waiting on this
-   * method to be called.
-   * @return The region edit/sequence id we set for this edit.
-   * @throws IOException
-   * @see #getRegionSequenceId()
+   * Here is where a WAL edit gets its sequenceid. SIDE-EFFECT is our stamping the sequenceid into
+   * every Cell AND setting the sequenceid into the MVCC WriteEntry!!!!
+   * @return The sequenceid we stamped on this edit.
    */
-  long stampRegionSequenceId() throws IOException {
-    long regionSequenceId = WALKey.NO_SEQUENCE_ID;
-    WALKey key = getKey();
-    MultiVersionConsistencyControl.WriteEntry we = key.getPreAssignedWriteEntry();
-    boolean preAssigned = (we != null);
-    if (!preAssigned) {
-      MultiVersionConsistencyControl mvcc = key.getMvcc();
-      if (mvcc != null) {
-        we = mvcc.beginMemstoreInsert();
-      }
-    }
-    if (we != null) {
-      regionSequenceId = we.getWriteNumber();
-    }
-
+  long stampRegionSequenceId(MultiVersionConsistencyControl.WriteEntry we) throws IOException {
+    long regionSequenceId = we.getWriteNumber();
     if (!this.getEdit().isReplay() && inMemstore) {
       for (Cell c : getEdit().getCells()) {
         CellUtil.setSequenceId(c, regionSequenceId);
       }
     }
-
-    // This has to stay in this order
-    if (!preAssigned) {
-      key.setWriteEntry(we);
-    }
+    getKey().setWriteEntry(we);
     return regionSequenceId;
   }
 

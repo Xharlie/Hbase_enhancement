@@ -43,6 +43,7 @@ import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.wal.DefaultWALProvider;
@@ -51,6 +52,8 @@ import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.hbase.wal.WALSplitter;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -198,13 +201,19 @@ public class TestLogRollAbort {
       final AtomicLong sequenceId = new AtomicLong(1);
 
       final int total = 20;
+      MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
       for (int i = 0; i < total; i++) {
         WALEdit kvs = new WALEdit();
         kvs.add(new KeyValue(Bytes.toBytes(i), tableName.getName(), tableName.getName()));
         HTableDescriptor htd = new HTableDescriptor(tableName);
         htd.addFamily(new HColumnDescriptor("column"));
-        log.append(htd, regioninfo, new WALKey(regioninfo.getEncodedNameAsBytes(), tableName,
-            System.currentTimeMillis()), kvs, true);
+        NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+            Bytes.BYTES_COMPARATOR);
+        for(byte[] fam : htd.getFamiliesKeys()) {
+          scopes.put(fam, 0);
+        }
+        log.append(regioninfo, new WALKey(regioninfo.getEncodedNameAsBytes(), tableName,
+            System.currentTimeMillis(), mvcc, scopes), kvs, true);
       }
       // Send the data to HDFS datanodes and close the HDFS writer
       log.sync();

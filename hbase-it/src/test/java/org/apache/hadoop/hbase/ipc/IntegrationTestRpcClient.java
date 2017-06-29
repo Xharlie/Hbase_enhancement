@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.hbase.ipc;
 
+import static org.apache.hadoop.hbase.ipc.RpcClient.SPECIFIC_WRITE_THREAD;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -93,10 +94,10 @@ public class IntegrationTestRpcClient {
     }
 
     @Override
-    public Pair<Message, PayloadCarryingRpcController> call(BlockingService service, MethodDescriptor md,
-        Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status, RpcServer.Call call)
-            throws IOException, ServiceException {
-      return super.call(service, md, param, cellScanner, receiveTime, status, call);
+    public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
+        Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
+        throws IOException {
+      return super.call(service, md, param, cellScanner, receiveTime, status);
     }
   }
 
@@ -280,6 +281,7 @@ public class IntegrationTestRpcClient {
   static class SimpleClient extends Thread {
     AbstractRpcClient rpcClient;
     AtomicBoolean running = new  AtomicBoolean(true);
+    AtomicBoolean sending = new AtomicBoolean(false);
     AtomicReference<Throwable> exception = new AtomicReference<>(null);
     Cluster cluster;
     String id;
@@ -305,8 +307,13 @@ public class IntegrationTestRpcClient {
         TestRpcServer server = cluster.getRandomServer();
         try {
           User user = User.getCurrent();
+          InetSocketAddress address = server.getListenerAddress();
+          if (address == null) {
+            throw new IOException("Listener channel is closed");
+          }
+          sending.set(true);
           ret = (EchoResponseProto)
-              rpcClient.callBlockingMethod(md, null, param, ret, user, server.getListenerAddress());
+              rpcClient.callBlockingMethod(md, null, param, ret, user, address);
         } catch (Exception e) {
           LOG.warn(e);
           continue; // expected in case connection is closing or closed
@@ -325,6 +332,10 @@ public class IntegrationTestRpcClient {
 
     void stopRunning() {
       running.set(false);
+    }
+
+    boolean isSending() {
+      return sending.get();
     }
 
     void rethrowException() throws Throwable {
@@ -401,6 +412,28 @@ public class IntegrationTestRpcClient {
       thread.start();
       callable.call();
       thread.interrupt();
+    }
+  }
+
+  /*
+  Test that not started connections are successfully removed from connection pool when
+  rpc client is closing.
+   */
+  @Test (timeout = 30000)
+  public void testRpcWithWriteThread() throws IOException, InterruptedException {
+    LOG.info("Starting test");
+    Cluster cluster = new Cluster(1, 1);
+    cluster.startServer();
+    conf.setBoolean(SPECIFIC_WRITE_THREAD, true);
+    for(int i = 0; i <1000; i++) {
+      AbstractRpcClient rpcClient = createRpcClient(conf, true);
+      SimpleClient client = new SimpleClient(cluster, rpcClient, "Client1");
+      client.start();
+      while(!client.isSending()) {
+        Thread.sleep(1);
+      }
+      client.stopRunning();
+      rpcClient.close();
     }
   }
 

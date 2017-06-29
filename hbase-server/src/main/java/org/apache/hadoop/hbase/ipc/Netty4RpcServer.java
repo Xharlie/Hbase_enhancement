@@ -21,7 +21,6 @@ package org.apache.hadoop.hbase.ipc;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import io.netty.buffer.UnpooledByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -70,12 +69,9 @@ import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
-import org.apache.hadoop.hbase.exceptions.RegionMovedException;
+import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.protobuf.generated.RPCProtos.CellBlockMeta;
-import org.apache.hadoop.hbase.protobuf.generated.RPCProtos.ExceptionResponse;
 import org.apache.hadoop.hbase.protobuf.generated.RPCProtos.RequestHeader;
-import org.apache.hadoop.hbase.protobuf.generated.RPCProtos.ResponseHeader;
 import org.apache.hadoop.hbase.security.AccessDeniedException;
 import org.apache.hadoop.hbase.security.AuthMethod;
 import org.apache.hadoop.hbase.security.HBasePolicyProvider;
@@ -85,6 +81,7 @@ import org.apache.hadoop.hbase.security.HBaseSaslRpcServer.SaslDigestCallbackHan
 import org.apache.hadoop.hbase.security.HBaseSaslRpcServer.SaslGssCallbackHandler;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVM;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.AuthorizationException;
 import org.apache.hadoop.security.authorize.ProxyUsers;
@@ -649,83 +646,6 @@ public class Netty4RpcServer extends RpcServer {
       super(id, service, md, header, param, cellScanner, connection, size, tinfo, remoteAddress);
     }
 
-    /**
-     * Call is done. Execution happened and we returned results to client. It is now safe to
-     * cleanup.
-     */
-    void done() {
-    }
-
-    public synchronized void setResponse(Object m, final CellScanner cells, Throwable t,
-        String errorMsg) {
-      if (this.isError) return;
-      if (t != null) this.isError = true;
-      BufferChain bc = null;
-      try {
-        ResponseHeader.Builder headerBuilder = ResponseHeader.newBuilder();
-        // Presume it a pb Message. Could be null.
-        Message result = (Message) m;
-        // Call id.
-        headerBuilder.setCallId(this.id);
-        if (t != null) {
-          ExceptionResponse.Builder exceptionBuilder = ExceptionResponse.newBuilder();
-          exceptionBuilder.setExceptionClassName(t.getClass().getName());
-          exceptionBuilder.setStackTrace(errorMsg);
-          exceptionBuilder.setDoNotRetry(t instanceof DoNotRetryIOException);
-          if (t instanceof RegionMovedException) {
-            // Special casing for this exception. This is only one
-            // carrying a payload.
-            // Do this instead of build a generic system for
-            // allowing exceptions carry
-            // any kind of payload.
-            RegionMovedException rme = (RegionMovedException) t;
-            exceptionBuilder.setHostname(rme.getHostname());
-            exceptionBuilder.setPort(rme.getPort());
-          }
-          // Set the exception as the result of the method invocation.
-          headerBuilder.setException(exceptionBuilder.build());
-        }
-        // Pass reservoir to buildCellBlock. Keep reference to returne
-        // so can add it back to the
-        // reservoir when finished. This is hacky and the hack is not
-        // contained but benefits are
-        // high when we can avoid a big buffer allocation on each rpc.
-        this.cellBlock =
-            ipcUtil.buildCellBlock(this.connection.codec, this.connection.compressionCodec, cells,
-              reservoir);
-        if (this.cellBlock != null) {
-          CellBlockMeta.Builder cellBlockBuilder = CellBlockMeta.newBuilder();
-          // Presumes the cellBlock bytebuffer has been flipped so
-          // limit has total size in it.
-          cellBlockBuilder.setLength(this.cellBlock.limit());
-          headerBuilder.setCellBlockMeta(cellBlockBuilder.build());
-        }
-        Message header = headerBuilder.build();
-
-        // Organize the response as a set of bytebuffers rather than
-        // collect it all together inside
-        // one big byte array; save on allocations.
-        ByteBuffer bbHeader = IPCUtil.getDelimitedMessageAsByteBuffer(header);
-        ByteBuffer bbResult = IPCUtil.getDelimitedMessageAsByteBuffer(result);
-        int totalSize =
-            bbHeader.capacity() + (bbResult == null ? 0 : bbResult.limit())
-                + (this.cellBlock == null ? 0 : this.cellBlock.limit());
-        ByteBuffer bbTotalSize = ByteBuffer.wrap(Bytes.toBytes(totalSize));
-        bc = new BufferChain(bbTotalSize, bbHeader, bbResult, this.cellBlock);
-        if (connection.useWrap) {
-          bc = wrapWithSasl(bc);
-        }
-      } catch (IOException e) {
-        LOG.warn("Exception while creating response " + e);
-      }
-      this.response = bc;
-      responseBB = UnpooledByteBufAllocator.DEFAULT.buffer(this.response.size());
-      ByteBuffer[] buffers = this.response.getBuffers();
-      for (ByteBuffer bb : buffers) {
-        responseBB.writeBytes(bb);
-      }
-    }
-
     @Override
     public synchronized void endDelay(Object result) throws IOException {
       throw new IOException("Not support delay response");
@@ -756,11 +676,6 @@ public class Netty4RpcServer extends RpcServer {
       return false;
     }
 
-    @Override
-    public long disconnectSince() {
-      return -1L;
-    }
-
     Connection getConnection() {
       return (Connection) this.connection;
     }
@@ -777,10 +692,6 @@ public class Netty4RpcServer extends RpcServer {
       getConnection().channel.writeAndFlush(this).addListener(listener);
     }
 
-    @Override
-    public InetAddress getInetAddress() {
-      return ((InetSocketAddress) getConnection().channel.remoteAddress()).getAddress();
-    }
   }
   
   private class Initializer extends ChannelInitializer<SocketChannel> {
@@ -1171,16 +1082,16 @@ public class Netty4RpcServer extends RpcServer {
         throws IOException, InterruptedException {
       CallRunner task = (CallRunner) message;
       if (!scheduler.dispatch(task)) {
-        callQueueSize.add(-1 * task.getCall().getSize());
+        callQueueSize.add(-1 * task.getRpcCall().getSize());
         metrics.exception(CALL_QUEUE_TOO_BIG_EXCEPTION);
         InetSocketAddress address = getListenerAddress();
-        task.getCall().setResponse(
+        task.getRpcCall().setResponse(
           null,
           null,
           CALL_QUEUE_TOO_BIG_EXCEPTION,
           "Call queue is full on " + (address != null ? address : "(channel closed)")
               + ", too many items queued ?");
-        task.getCall().sendResponseIfReady();
+        task.getRpcCall().sendResponseIfReady();
       }
     }
 
@@ -1198,7 +1109,8 @@ public class Netty4RpcServer extends RpcServer {
 //        encoded.writeBytes(bb);
 //      }
 //      ctx.write(encoded, promise).addListener(new CallWriteListener(call));
-      ctx.write(call.responseBB, promise).addListener(new CallWriteListener(call));
+      ByteBuf response = Unpooled.wrappedBuffer(call.response.getBuffers());
+      ctx.write(response, promise).addListener(new CallWriteListener(call));
     }
 
   }
@@ -1212,11 +1124,9 @@ public class Netty4RpcServer extends RpcServer {
 
     @Override
     public void operationComplete(ChannelFuture future) throws Exception {
+      call.done();
       if (future.isSuccess()) {
         metrics.sentBytes(call.response.size());
-        // LOG.info("send response for: " + call.toShortString() + " success.");
-      } else {
-        // LOG.info("send response for: " + call.toShortString() + " fail.");
       }
     }
 
@@ -1242,5 +1152,14 @@ public class Netty4RpcServer extends RpcServer {
   public int getResponseQueueLength() {
     // TODO Auto-generated method stub
     return 0;
+  }
+
+  @Override
+  public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
+      Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
+      throws IOException {
+    Call fakeCall = new Call(-1, service, md, null, param, cellScanner, null, -1, null, null);
+    fakeCall.setReceiveTime(receiveTime);
+    return call(fakeCall, status);
   }
 }

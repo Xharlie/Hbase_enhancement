@@ -41,7 +41,6 @@ import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.hfile.bucket.BucketCache;
 import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.nio.MultiByteBuff;
-import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.util.ChecksumType;
 
 public class CacheTestUtils {
@@ -67,6 +66,7 @@ public class CacheTestUtils {
     /*Post eviction, heapsize should be the same */
     assertEquals(heapSize, ((HeapSize) toBeTested).heapSize());
   }
+
   public static void testCacheMultiThreaded(final BlockCache toBeTested,
       final int blockSize, final int numThreads, final int numQueries,
       final double passingScore) throws Exception {
@@ -340,25 +340,16 @@ public class CacheTestUtils {
   }
 
 
-  private static HFileBlockPair[] generateHFileBlocks(int blockSize,
-      int numBlocks) {
+  private static HFileBlockPair[] generateHFileBlocks(int blockSize, int numBlocks) {
     HFileBlockPair[] returnedBlocks = new HFileBlockPair[numBlocks];
     Random rand = new Random();
     HashSet<String> usedStrings = new HashSet<String>();
     for (int i = 0; i < numBlocks; i++) {
-
-      // The buffer serialized size needs to match the size of BlockSize. So we
-      // declare our data size to be smaller than it by the serialization space
-      // required.
-
-      SingleByteBuff cachedBuffer = new SingleByteBuff(ByteBuffer.allocate(blockSize
-          - HFileBlock.EXTRA_SERIALIZATION_SPACE));
+      ByteBuffer cachedBuffer = ByteBuffer.allocate(blockSize);
       rand.nextBytes(cachedBuffer.array());
       cachedBuffer.rewind();
-      int onDiskSizeWithoutHeader = blockSize
-          - HFileBlock.EXTRA_SERIALIZATION_SPACE;
-      int uncompressedSizeWithoutHeader = blockSize
-          - HFileBlock.EXTRA_SERIALIZATION_SPACE;
+      int onDiskSizeWithoutHeader = blockSize;
+      int uncompressedSizeWithoutHeader = blockSize;
       long prevBlockOffset = rand.nextLong();
       BlockType.DATA.write(cachedBuffer);
       cachedBuffer.putInt(onDiskSizeWithoutHeader);
@@ -377,7 +368,7 @@ public class CacheTestUtils {
           onDiskSizeWithoutHeader, uncompressedSizeWithoutHeader,
           prevBlockOffset, cachedBuffer, HFileBlock.DONT_FILL_HEADER,
           blockSize,
-          onDiskSizeWithoutHeader + HConstants.HFILEBLOCK_HEADER_SIZE, meta);
+          onDiskSizeWithoutHeader + HConstants.HFILEBLOCK_HEADER_SIZE, -1, meta);
 
       String strKey;
       /* No conflicting keys */

@@ -18,6 +18,13 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableCollection;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.net.InetSocketAddress;
@@ -26,9 +33,9 @@ import java.security.KeyException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.NavigableSet;
 import java.util.Set;
@@ -94,13 +101,6 @@ import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.StringUtils.TraditionalBinaryPrefix;
-
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableCollection;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
 
 /**
  * A Store holds a column family in a Region.  Its a memstore and a set of zero
@@ -407,12 +407,26 @@ public class HStore implements Store {
   }
 
   @Override
+  @Deprecated
   public long getFlushableSize() {
+    MemstoreSize size = getSizeToFlush();
+    return size.getHeapSize();
+  }
+
+  @Override
+  public MemstoreSize getSizeToFlush() {
     return this.memstore.getFlushableSize();
   }
 
   @Override
+  @Deprecated
   public long getSnapshotSize() {
+    MemstoreSize size = getSizeOfSnapshot();
+    return size.getHeapSize();
+  }
+
+  @Override
+  public MemstoreSize getSizeOfSnapshot() {
     return this.memstore.getSnapshotSize();
   }
 
@@ -674,11 +688,29 @@ public class HStore implements Store {
     return storeFile;
   }
 
-  @Override
-  public Pair<Long, Cell> add(final Cell cell) {
+  /**
+   * Adds a value to the memstore
+   * @param cell
+   * @param memstoreSize
+   */
+  public void add(final Cell cell, MemstoreSize memstoreSize) {
     lock.readLock().lock();
     try {
-       return this.memstore.add(cell);
+       this.memstore.add(cell, memstoreSize);
+    } finally {
+      lock.readLock().unlock();
+    }
+  }
+
+  /**
+   * Adds the specified value to the memstore
+   * @param cells
+   * @param memstoreSize
+   */
+  public void add(final Iterable<Cell> cells, MemstoreSize memstoreSize) {
+    lock.readLock().lock();
+    try {
+      memstore.add(cells, memstoreSize);
     } finally {
       lock.readLock().unlock();
     }
@@ -687,21 +719,6 @@ public class HStore implements Store {
   @Override
   public long timeOfOldestEdit() {
     return memstore.timeOfOldestEdit();
-  }
-
-  /**
-   * Adds a value to the memstore
-   *
-   * @param kv
-   * @return memstore size delta
-   */
-  protected long delete(final KeyValue kv) {
-    lock.readLock().lock();
-    try {
-      return this.memstore.delete(kv);
-    } finally {
-      lock.readLock().unlock();
-    }
   }
 
   @Override
@@ -722,7 +739,10 @@ public class HStore implements Store {
     return this.storeEngine.getStoreFileManager().getStorefiles();
   }
 
-  @Override
+  /**
+   * This throws a WrongRegionException if the HFile does not fit in this region, or an
+   * InvalidHFileException if the HFile is not valid.
+   */
   public void assertBulkLoadHFileOk(Path srcPath) throws IOException {
     HFile.Reader reader  = null;
     try {
@@ -793,10 +813,18 @@ public class HStore implements Store {
     }
   }
 
-  @Override
+  /**
+   * This method should only be called from Region. It is assumed that the ranges of values in the
+   * HFile fit within the stores assigned region. (assertBulkLoadHFileOk checks this)
+   *
+   * @param srcPathStr
+   * @param seqNum sequence Id associated with the HFile
+   */
   public Path bulkLoadHFile(String srcPathStr, long seqNum) throws IOException {
     Path srcPath = new Path(srcPathStr);
     Path dstPath = fs.bulkLoadStoreFile(getColumnFamilyName(), srcPath, seqNum);
+    String flagFileName = srcPath + HConstants.HFILE_BULKLOAD_SUCCEED_SUFFIX;
+    fs.createNewFile(new Path(flagFileName));
 
     LOG.info("Loaded HFile " + srcPath + " into store '" + getColumnFamilyName() + "' as "
         + dstPath + " - updating store file list.");
@@ -810,7 +838,6 @@ public class HStore implements Store {
     return dstPath;
   }
 
-  @Override
   public void bulkLoadHFile(StoreFileInfo fileInfo) throws IOException {
     StoreFile sf = createStoreFileAndReader(fileInfo);
     bulkLoadHFile(sf);
@@ -1014,6 +1041,23 @@ public class HStore implements Store {
       boolean isCompaction, boolean includeMVCCReadpoint, boolean includesTag,
       boolean shouldDropBehind)
   throws IOException {
+    return createWriterInTmp(maxKeyCount, compression, isCompaction, includeMVCCReadpoint,
+      includesTag, shouldDropBehind, null);
+  }
+
+    /*
+     * @param maxKeyCount
+     * @param compression Compression algorithm to use
+     * @param isCompaction whether we are creating a new file in a compaction
+     * @param includesMVCCReadPoint - whether to include MVCC or not
+     * @param includesTag - includesTag or not
+     * @return Writer for a new StoreFile in the tmp dir.
+     */
+    @Override
+    public StoreFile.Writer createWriterInTmp(long maxKeyCount, Compression.Algorithm compression,
+        boolean isCompaction, boolean includeMVCCReadpoint, boolean includesTag,
+        boolean shouldDropBehind, final TimeRangeTracker trt)
+          throws IOException {
     final CacheConfig writerCacheConf;
     if (isCompaction) {
       // Don't cache data on write on compactions.
@@ -1030,7 +1074,7 @@ public class HStore implements Store {
     HFileContext hFileContext = createFileContext(compression, includeMVCCReadpoint, includesTag,
       cryptoContext);
     Path familyTempDir = new Path(fs.getTempDir(), family.getNameAsString());
-    StoreFile.Writer w = new StoreFile.WriterBuilder(conf, writerCacheConf,
+    StoreFile.WriterBuilder builder = new StoreFile.WriterBuilder(conf, writerCacheConf,
         this.getFileSystem())
             .withOutputDir(familyTempDir)
             .withComparator(comparator)
@@ -1038,9 +1082,11 @@ public class HStore implements Store {
             .withMaxKeyCount(maxKeyCount)
             .withFavoredNodes(favoredNodes)
             .withFileContext(hFileContext)
-            .withShouldDropCacheBehind(shouldDropBehind)
-            .build();
-    return w;
+            .withShouldDropCacheBehind(shouldDropBehind);
+    if (trt != null) {
+      builder.withTimeRangeTracker(trt);
+    }
+    return builder.build();
   }
 
   private HFileContext createFileContext(Compression.Algorithm compression,
@@ -1312,7 +1358,7 @@ public class HStore implements Store {
     HRegionInfo info = this.region.getRegionInfo();
     CompactionDescriptor compactionDescriptor = ProtobufUtil.toCompactionDescriptor(info,
         family.getName(), inputPaths, outputPaths, fs.getStoreDir(getFamily().getNameAsString()));
-    WALUtil.writeCompactionMarker(this.region.getWAL(), this.region.getTableDesc(),
+    WALUtil.writeCompactionMarker(this.region.getWAL(), this.region.getReplicationScope(),
       this.region.getRegionInfo(), compactionDescriptor, this.region.getMVCC());
   }
 
@@ -1322,7 +1368,9 @@ public class HStore implements Store {
     this.lock.writeLock().lock();
     try {
       this.storeEngine.getStoreFileManager().addCompactionResults(compactedFiles, result);
-      filesCompacting.removeAll(compactedFiles); // safe bc: lock.writeLock();
+      synchronized (filesCompacting) {
+        filesCompacting.removeAll(compactedFiles); // safe bc: lock.writeLock();
+      }
     } finally {
       this.lock.writeLock().unlock();
     }
@@ -1377,7 +1425,6 @@ public class HStore implements Store {
    * See HBASE-2231.
    * @param compaction
    */
-  @Override
   public void replayCompactionMarker(CompactionDescriptor compaction,
       boolean pickCompactionFiles, boolean removeFiles)
       throws IOException {
@@ -1601,7 +1648,7 @@ public class HStore implements Store {
       this.lock.readLock().unlock();
     }
 
-    LOG.debug(getRegionInfo().getEncodedName() + " - "  + getColumnFamilyName()
+    LOG.debug(getRegionInfo().getEncodedName() + " - " + getColumnFamilyName()
         + ": Initiating " + (request.isMajor() ? "major" : "minor") + " compaction"
         + (request.isAllFiles() ? " (all files)" : ""));
     this.region.reportCompactionRequestStart(request.isMajor());
@@ -2099,7 +2146,14 @@ public class HStore implements Store {
   }
 
   @Override
+  @Deprecated
   public long getMemStoreSize() {
+    MemstoreSize size = getSizeOfMemStore();
+    return size.getHeapSize();
+  }
+
+  @Override
+  public MemstoreSize getSizeOfMemStore() {
     return this.memstore.size();
   }
 
@@ -2142,42 +2196,23 @@ public class HStore implements Store {
   }
 
   /**
-   * Used in tests. TODO: Remove
-   *
-   * Updates the value for the given row/family/qualifier. This function will always be seen as
-   * atomic by other readers because it only puts a single KV to memstore. Thus no read/write
-   * control necessary.
-   * @param row row to update
-   * @param f family to update
-   * @param qualifier qualifier to update
-   * @param newValue the new value to set into memstore
+   * Adds or replaces the specified KeyValues.
+   * <p>
+   * For each KeyValue specified, if a cell with the same row, family, and qualifier exists in
+   * MemStore, it will be replaced. Otherwise, it will just be inserted to MemStore.
+   * <p>
+   * This operation is atomic on each KeyValue (row/family/qualifier) but not necessarily atomic
+   * across all of them.
+   * @param cells
+   * @param readpoint readpoint below which we can safely remove duplicate KVs
    * @return memstore size delta
    * @throws IOException
    */
-  public long updateColumnValue(byte [] row, byte [] f,
-                                byte [] qualifier, long newValue)
+  public void upsert(Iterable<Cell> cells, long readpoint, MemstoreSize memstoreSize)
       throws IOException {
-
     this.lock.readLock().lock();
     try {
-      long now = EnvironmentEdgeManager.currentTime();
-
-      return this.memstore.updateColumnValue(row,
-          f,
-          qualifier,
-          newValue,
-          now);
-
-    } finally {
-      this.lock.readLock().unlock();
-    }
-  }
-
-  @Override
-  public long upsert(Iterable<Cell> cells, long readpoint) throws IOException {
-    this.lock.readLock().lock();
-    try {
-      return this.memstore.upsert(cells, readpoint);
+      this.memstore.upsert(cells, readpoint, memstoreSize);
     } finally {
       this.lock.readLock().unlock();
     }
@@ -2207,9 +2242,10 @@ public class HStore implements Store {
      */
     @Override
     public void prepare() {
+      // passing the current sequence number of the wal - to allow bookkeeping in the memstore
       this.snapshot = memstore.snapshot();
       this.cacheFlushCount = snapshot.getCellsCount();
-      this.cacheFlushSize = snapshot.getSize();
+      this.cacheFlushSize = snapshot.getDataSize();
       committedFiles = new ArrayList<Path>(1);
     }
 
@@ -2334,7 +2370,8 @@ public class HStore implements Store {
 
   @Override
   public long heapSize() {
-    return DEEP_OVERHEAD + this.memstore.heapSize();
+    MemstoreSize memstoreSize = this.memstore.size();
+    return DEEP_OVERHEAD + memstoreSize.getHeapSize();
   }
 
   @Override

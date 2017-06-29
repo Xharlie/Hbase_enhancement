@@ -88,13 +88,13 @@ public class MetricsRegionSourceImpl implements MetricsRegionSource {
     regionAppend = registry.getLongCounter(regionAppendKey, 0l);
 
     regionGetKey = regionNamePrefix + MetricsRegionServerSource.GET_KEY;
-    regionGet = registry.newHistogram(regionGetKey);
+    regionGet = registry.newTimeHistogram(regionGetKey);
 
     regionScanSizeKey = regionNamePrefix + MetricsRegionServerSource.SCAN_SIZE_KEY;
-    regionScanSize = registry.newHistogram(regionScanSizeKey);
+    regionScanSize = registry.newSizeHistogram(regionScanSizeKey);
 
     regionScanTimeKey = regionNamePrefix + MetricsRegionServerSource.SCAN_TIME_KEY;
-    regionScanTime = registry.newHistogram(regionScanTimeKey);
+    regionScanTime = registry.newTimeHistogram(regionScanTimeKey);
   }
 
   @Override

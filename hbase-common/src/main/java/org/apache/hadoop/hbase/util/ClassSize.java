@@ -29,6 +29,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 
+
 /**
  * Class for determining the "size" of a class, an attempt to calculate the
  * actual bytes that an object of this class will occupy in memory
@@ -46,6 +47,12 @@ public class ClassSize {
 
   /** Overhead for ArrayList(0) */
   public static final int ARRAYLIST;
+
+  /** Overhead for LinkedList(0) */
+  public static final int LINKEDLIST;
+
+  /** Overhead for a single entry in LinkedList */
+  public static final int LINKEDLIST_ENTRY;
 
   /** Overhead for ByteBuffer */
   public static final int BYTE_BUFFER;
@@ -95,6 +102,9 @@ public class ClassSize {
   /** Overhead for AtomicBoolean */
   public static final int ATOMIC_BOOLEAN;
 
+  /** Overhead for AtomicReference */
+  public static final int ATOMIC_REFERENCE;
+
   /** Overhead for CopyOnWriteArraySet */
   public static final int COPYONWRITE_ARRAYSET;
 
@@ -108,7 +118,7 @@ public class ClassSize {
   public static final int TIMERANGE_TRACKER;
 
   /** Overhead for CellSkipListSet */
-  public static final int CELL_SKIPLIST_SET;
+  public static final int CELL_SET;
 
   /* Are we running on jdk7? */
   private static final boolean JDK7;
@@ -142,6 +152,9 @@ public class ClassSize {
 
     ARRAYLIST = align(OBJECT + align(REFERENCE) + align(ARRAY) +
         (2 * Bytes.SIZEOF_INT));
+
+    LINKEDLIST = align(OBJECT + (2 * Bytes.SIZEOF_INT) + (2 * REFERENCE));
+    LINKEDLIST_ENTRY = align(OBJECT + (2 * REFERENCE));
 
     //noinspection PointlessArithmeticExpression
     BYTE_BUFFER = align(OBJECT + align(REFERENCE) + align(ARRAY) +
@@ -184,15 +197,17 @@ public class ClassSize {
 
     ATOMIC_BOOLEAN = align(OBJECT + Bytes.SIZEOF_BOOLEAN);
 
+    ATOMIC_REFERENCE = align(OBJECT + REFERENCE);
+
     COPYONWRITE_ARRAYSET = align(OBJECT + REFERENCE);
 
     COPYONWRITE_ARRAYLIST = align(OBJECT + (2 * REFERENCE) + ARRAY);
 
     TIMERANGE = align(ClassSize.OBJECT + Bytes.SIZEOF_LONG * 2 + Bytes.SIZEOF_BOOLEAN);
 
-    TIMERANGE_TRACKER = align(ClassSize.OBJECT + Bytes.SIZEOF_LONG * 2);
+    TIMERANGE_TRACKER = align(ClassSize.OBJECT + 2 * REFERENCE);
 
-    CELL_SKIPLIST_SET = align(OBJECT + REFERENCE);
+    CELL_SET = align(OBJECT + REFERENCE);
   }
 
   /**

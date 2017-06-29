@@ -79,7 +79,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
-import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
@@ -1150,9 +1149,8 @@ public class RpcClientImpl extends AbstractRpcClient {
     }
     if (connsToClose != null) {
       for (Connection conn : connsToClose) {
-        if (conn.markClosed(new InterruptedIOException("RpcClient is closing"))) {
-          conn.close();
-        }
+        conn.markClosed(new InterruptedIOException("RpcClient is closing"));
+        conn.close();
       }
     }
     // wait until all connections are closed
@@ -1244,37 +1242,6 @@ public class RpcClientImpl extends AbstractRpcClient {
     }
 
     return new Pair<Message, CellScanner>(call.response, call.cells);
-  }
-
-
-  /**
-   * Take an IOException and the address we were trying to connect to
-   * and return an IOException with the input exception as the cause.
-   * The new exception provides the stack trace of the place where
-   * the exception is thrown and some extra diagnostics information.
-   * If the exception is ConnectException or SocketTimeoutException,
-   * return a new one of the same type; Otherwise return an IOException.
-   *
-   * @param addr target address
-   * @param exception the relevant exception
-   * @return an exception to throw
-   */
-  protected IOException wrapException(InetSocketAddress addr,
-                                         IOException exception) {
-    if (exception instanceof ConnectException) {
-      //connection refused; include the host:port in the error
-      return (ConnectException)new ConnectException(
-         "Call to " + addr + " failed on connection exception: " + exception).initCause(exception);
-    } else if (exception instanceof SocketTimeoutException) {
-      return (SocketTimeoutException)new SocketTimeoutException("Call to " + addr +
-        " failed because " + exception).initCause(exception);
-    } else if (exception instanceof ConnectionClosingException){
-      return (ConnectionClosingException) new ConnectionClosingException(
-          "Call to " + addr + " failed on local exception: " + exception).initCause(exception);
-    } else {
-      return (IOException)new IOException("Call to " + addr + " failed on local exception: " +
-        exception).initCause(exception);
-    }
   }
 
   /**

@@ -357,13 +357,4 @@ public interface MetricsRegionServerSource extends BaseSource, JvmPauseMonitorSo
   String DIRECT_HEALTH_CHECK_NUM_UNHEALTHY = "directHealthCheckNumUnhealthy";
   String DIRECT_HEALTH_CHECK_NUM_UNHEALTHY_DESC = "the accumulative number of Times Unhealthy within the window, " +
           "which is the indicator of whether the RS should be stopped";
-
-  String PREAPPEND_QUEUE_SIZE = "preAppendQueueSize";
-  String PREAPPEND_QUEUE_SIZE_DESC = "the amount of requests in all preAppendQueues";
-
-  String SYNCFINISH_QUEUE_SIZE = "syncFinishQueueSize";
-  String SYNCFINISH_QUEUE_SIZE_DESC = "the amount of requests in all syncFinishQueues";
-
-  String ASYNCFINISH_QUEUE_SIZE = "asyncFinishQueueSize";
-  String ASYNCFINISH_QUEUE_SIZE_DESC = "the amount of requests in all asyncFinishQueues";
 }

@@ -41,7 +41,7 @@ import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.OffheapKeyValue;
+import org.apache.hadoop.hbase.ByteBufferKeyValue;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.Tag;
@@ -211,7 +211,7 @@ public class TestSeekTo {
 
     // seekBefore d, so the scanner points to c
     assertEquals(true, scanner.seekBefore(toKV("d", tagUsage)));
-    assertFalse(scanner.getCell() instanceof OffheapKeyValue);
+    assertFalse(scanner.getCell() instanceof ByteBufferKeyValue);
     assertEquals("c", toRowStr(scanner.getCell()));
     // reseekTo e and g
     assertEquals(0, scanner.reseekTo(toKV("c", tagUsage)));

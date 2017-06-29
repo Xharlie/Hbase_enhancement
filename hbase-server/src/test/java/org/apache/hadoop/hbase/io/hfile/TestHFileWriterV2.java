@@ -187,7 +187,7 @@ public class TestHFileWriterV2 {
     fsdis.seek(0);
     long curBlockPos = 0;
     while (curBlockPos <= trailer.getLastDataBlockOffset()) {
-      HFileBlock block = blockReader.readBlockData(curBlockPos, -1, -1, false);
+      HFileBlock block = blockReader.readBlockData(curBlockPos, -1, false);
       assertEquals(BlockType.DATA, block.getBlockType());
       if (meta.isCompressedOrEncrypted()) {
         assertFalse(block.isUnpacked());
@@ -236,7 +236,7 @@ public class TestHFileWriterV2 {
     while (fsdis.getPos() < trailer.getLoadOnOpenDataOffset()) {
       LOG.info("Current offset: " + fsdis.getPos() + ", scanning until " +
           trailer.getLoadOnOpenDataOffset());
-      HFileBlock block = blockReader.readBlockData(curBlockPos, -1, -1, false)
+      HFileBlock block = blockReader.readBlockData(curBlockPos, -1, false)
         .unpack(meta, blockReader);
       assertEquals(BlockType.META, block.getBlockType());
       Text t = new Text();

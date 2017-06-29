@@ -194,10 +194,10 @@ public class HFile {
   public static final ChecksumType DEFAULT_CHECKSUM_TYPE = ChecksumType.CRC32;
 
   // For measuring number of checksum failures
-  static final AtomicLong checksumFailures = new AtomicLong();
+  static final AtomicLong CHECKSUM_FAILURES = new AtomicLong();
 
-  // for test purpose
-  public static final AtomicLong dataBlockReadCnt = new AtomicLong(0);
+  //For tests. Gets incremented when we read a block whether from HDFS or from Cache.
+  public static final AtomicLong DATABLOCK_READ_COUNT = new AtomicLong(0);
 
   // number of sequential reads
   public static final int getReadOps() {
@@ -230,7 +230,7 @@ public class HFile {
    * clears the counter.
    */
   public static final long getChecksumFailuresCount() {
-    return checksumFailures.getAndSet(0);
+    return CHECKSUM_FAILURES.getAndSet(0);
   }
 
   /** API required to write an {@link HFile} */
@@ -344,7 +344,8 @@ public class HFile {
         try {
           ostream.setDropBehind(shouldDropBehind && cacheConf.shouldDropBehindCompaction());
         } catch (UnsupportedOperationException uoe) {
-          LOG.debug("Unable to set drop behind on " + path, uoe);
+          if (LOG.isTraceEnabled()) LOG.trace("Unable to set drop behind on " + path, uoe);
+          else if (LOG.isDebugEnabled()) LOG.debug("Unable to set drop behind on " + path);
         }
       }
       return createWriter(fs, path, ostream,

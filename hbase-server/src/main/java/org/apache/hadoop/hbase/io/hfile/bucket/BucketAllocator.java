@@ -20,12 +20,11 @@
 
 package org.apache.hadoop.hbase.io.hfile.bucket;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.commons.collections.map.LinkedMap;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
@@ -173,22 +172,22 @@ public final class BucketAllocator {
   final class BucketSizeInfo {
     // Free bucket means it has space to allocate a block;
     // Completely free bucket means it has no block.
-    private List<Bucket> bucketList, freeBuckets, completelyFreeBuckets;
+    private LinkedMap bucketList, freeBuckets, completelyFreeBuckets;
     private int sizeIndex;
 
     BucketSizeInfo(int sizeIndex) {
-      bucketList = new ArrayList<Bucket>();
-      freeBuckets = new ArrayList<Bucket>();
-      completelyFreeBuckets = new ArrayList<Bucket>();
+      bucketList = new LinkedMap();
+      freeBuckets = new LinkedMap();
+      completelyFreeBuckets = new LinkedMap();
       this.sizeIndex = sizeIndex;
     }
 
     public void instantiateBucket(Bucket b) {
       assert b.isUninstantiated() || b.isCompletelyFree();
       b.reconfigure(sizeIndex, bucketSizes, bucketCapacity);
-      bucketList.add(b);
-      freeBuckets.add(b);
-      completelyFreeBuckets.add(b);
+      bucketList.put(b, b);
+      freeBuckets.put(b, b);
+      completelyFreeBuckets.put(b, b);
     }
 
     public int sizeIndex() {
@@ -201,8 +200,10 @@ public final class BucketAllocator {
      */
     public long allocateBlock() {
       Bucket b = null;
-      if (freeBuckets.size() > 0) // Use up an existing one first...
-        b = freeBuckets.get(freeBuckets.size() - 1);
+      if (freeBuckets.size() > 0) {
+        // Use up an existing one first...
+        b = (Bucket) freeBuckets.lastKey();
+      }
       if (b == null) {
         b = grabGlobalCompletelyFreeBucket();
         if (b != null) instantiateBucket(b);
@@ -227,7 +228,7 @@ public final class BucketAllocator {
       }
 
       if (completelyFreeBuckets.size() > 0) {
-        b = completelyFreeBuckets.get(0);
+        b = (Bucket) completelyFreeBuckets.firstKey();
         removeBucket(b);
       }
       return b;
@@ -241,17 +242,18 @@ public final class BucketAllocator {
     }
 
     public void freeBlock(Bucket b, long offset) {
-      assert bucketList.contains(b);
+      assert bucketList.containsKey(b);
       // else we shouldn't have anything to free...
-      assert (!completelyFreeBuckets.contains(b));
+      assert (!completelyFreeBuckets.containsKey(b));
       b.free(offset);
-      if (!freeBuckets.contains(b)) freeBuckets.add(b);
-      if (b.isCompletelyFree()) completelyFreeBuckets.add(b);
+      if (!freeBuckets.containsKey(b)) freeBuckets.put(b, b);
+      if (b.isCompletelyFree()) completelyFreeBuckets.put(b, b);
     }
 
     public IndexStatistics statistics() {
       long free = 0, used = 0;
-      for (Bucket b : bucketList) {
+      for (Object obj : bucketList.keySet()) {
+        Bucket b = (Bucket) obj;
         free += b.freeCount();
         used += b.usedCount();
       }
@@ -267,9 +269,10 @@ public final class BucketAllocator {
     }
   }
 
-  // Default block size is 64K, so we choose more sizes near 64K, you'd better
+  // Default block size in hbase is 64K, so we choose more sizes near 64K, you'd better
   // reset it according to your cluster's block size distribution
   // TODO Support the view of block size distribution statistics
+  // TODO: Why we add the extra 1024 bytes? Slop?
   private static final int DEFAULT_BUCKET_SIZES[] = { 4 * 1024 + 1024, 8 * 1024 + 1024,
       16 * 1024 + 1024, 32 * 1024 + 1024, 40 * 1024 + 1024, 48 * 1024 + 1024,
       56 * 1024 + 1024, 64 * 1024 + 1024, 96 * 1024 + 1024, 128 * 1024 + 1024,
@@ -287,6 +290,9 @@ public final class BucketAllocator {
     return null;
   }
 
+  /**
+   * So, what is the minimum amount of items we'll tolerate in a single bucket?
+   */
   static public final int FEWEST_ITEMS_IN_BUCKET = 4;
 
   private final int[] bucketSizes;
@@ -306,9 +312,8 @@ public final class BucketAllocator {
     this.bucketCapacity = FEWEST_ITEMS_IN_BUCKET * bigItemSize;
     buckets = new Bucket[(int) (availableSpace / bucketCapacity)];
     if (buckets.length < this.bucketSizes.length)
-      throw new BucketAllocatorException(
-          "Bucket allocator size too small - must have room for at least "
-              + this.bucketSizes.length + " buckets");
+      throw new BucketAllocatorException("Bucket allocator size too small (" + buckets.length +
+        "); must have room for at least " + this.bucketSizes.length + " buckets");
     bucketSizeInfos = new BucketSizeInfo[this.bucketSizes.length];
     for (int i = 0; i < this.bucketSizes.length; ++i) {
       bucketSizeInfos[i] = new BucketSizeInfo(i);
@@ -319,6 +324,12 @@ public final class BucketAllocator {
           .instantiateBucket(buckets[i]);
     }
     this.totalSize = ((long) buckets.length) * bucketCapacity;
+    if (LOG.isInfoEnabled()) {
+      LOG.info("Cache totalSize=" + this.totalSize + ", buckets=" + this.buckets.length +
+        ", bucket capacity=" + this.bucketCapacity +
+        "=(" + FEWEST_ITEMS_IN_BUCKET + "*" + this.bigItemSize + ")=" +
+        "(FEWEST_ITEMS_IN_BUCKET*(largest configured bucketcache size))");
+    }
   }
 
   /**

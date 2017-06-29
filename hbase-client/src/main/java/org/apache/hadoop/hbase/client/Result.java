@@ -912,6 +912,9 @@ public class Result implements CellScannable, CellScanner {
     boolean stale = false;
     byte[] prevRow = null;
     byte[] currentRow = null;
+    if (partialResults != null && partialResults.size() == 1) {
+      return partialResults.get(0);
+    }
 
     if (partialResults != null && !partialResults.isEmpty()) {
       for (int i = 0; i < partialResults.size(); i++) {

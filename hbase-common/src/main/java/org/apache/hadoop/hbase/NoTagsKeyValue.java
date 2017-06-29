@@ -23,7 +23,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 
 /**
@@ -42,10 +41,20 @@ public class NoTagsKeyValue extends KeyValue {
 
   @Override
   public int write(OutputStream out, boolean withTags) throws IOException {
-    // In KeyValueUtil#oswrite we do a Cell serialization as KeyValue. Any changes doing here, pls
-    // check KeyValueUtil#oswrite also and do necessary changes.
-    ByteBufferUtils.putInt(out, this.length);
     out.write(this.bytes, this.offset, this.length);
-    return this.length + Bytes.SIZEOF_INT;
+    return this.length;
+  }
+
+  @Override
+  public int getSerializedSize(boolean withTags) {
+    return this.length;
+  }
+
+  @Override
+  public Cell deepClone() {
+    byte[] copy = Bytes.copy(this.bytes, this.offset, this.length);
+    KeyValue kv = new NoTagsKeyValue(copy, 0, copy.length);
+    kv.setSequenceId(this.getSequenceId());
+    return kv;
   }
 }

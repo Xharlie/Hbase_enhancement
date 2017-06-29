@@ -359,21 +359,6 @@ public class MetricsRegionServerWrapperStub implements MetricsRegionServerWrappe
   }
 
   @Override
-  public int getPreAppendQueueSize() {
-    return 0;
-  }
-
-  @Override
-  public int getSyncFinishQueueSize() {
-    return 0;
-  }
-
-  @Override
-  public int getAsyncFinishQueueSize() {
-    return 0;
-  }
-
-  @Override
   public double getBlockCacheUsedPercent() {
     return 0;
   }

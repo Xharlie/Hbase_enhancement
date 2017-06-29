@@ -80,7 +80,9 @@ public class TestFromClientSideNoCodec {
     }
     // Check getRowOrBefore
     byte [] f = fs[0];
-    r = ht.getRowOrBefore(row, f);
+    Get get = new Get(row);
+    get.addFamily(f);
+    r = ht.get(get);
     assertTrue(r.toString(), r.containsColumn(f, f));
     // Check scan.
     ResultScanner scanner = ht.getScanner(new Scan());

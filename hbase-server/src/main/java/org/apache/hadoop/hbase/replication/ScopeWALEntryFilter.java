@@ -35,7 +35,7 @@ public class ScopeWALEntryFilter implements WALEntryFilter {
 
   @Override
   public Entry filter(Entry entry) {
-    NavigableMap<byte[], Integer> scopes = entry.getKey().getScopes();
+    NavigableMap<byte[], Integer> scopes = entry.getKey().getReplicationScopes();
     if (scopes == null || scopes.isEmpty()) {
       return null;
     }

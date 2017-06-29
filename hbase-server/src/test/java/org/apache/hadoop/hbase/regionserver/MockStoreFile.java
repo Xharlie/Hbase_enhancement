@@ -98,7 +98,7 @@ public class MockStoreFile extends StoreFile {
   @Override
   public StoreFile.Reader getReader() {
     final long len = this.length;
-    final TimeRangeTracker timeRange = this.timeRangeTracker;
+    final TimeRangeTracker timeRangeTracker = this.timeRangeTracker;
     final long entries = this.entryCount;
     return new StoreFile.Reader() {
       @Override
@@ -108,7 +108,7 @@ public class MockStoreFile extends StoreFile {
 
       @Override
       public long getMaxTimestamp() {
-        return timeRange == null ? Long.MAX_VALUE : timeRange.maximumTimestamp;
+        return timeRange == null ? Long.MAX_VALUE : timeRangeTracker.getMax();
       }
 
       @Override

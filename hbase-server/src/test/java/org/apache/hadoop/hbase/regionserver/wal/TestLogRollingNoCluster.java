@@ -20,6 +20,8 @@ package org.apache.hadoop.hbase.regionserver.wal;
 import static org.junit.Assert.assertFalse;
 
 import java.io.IOException;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.commons.logging.Log;
@@ -34,6 +36,7 @@ import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSTableDescriptors;
 import org.apache.hadoop.hbase.util.FSUtils;
@@ -124,6 +127,7 @@ public class TestLogRollingNoCluster {
     public void run() {
       this.log.info(getName() +" started");
       final AtomicLong sequenceId = new AtomicLong(1);
+      MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
       try {
         for (int i = 0; i < this.count; i++) {
           long now = System.currentTimeMillis();
@@ -137,8 +141,13 @@ public class TestLogRollingNoCluster {
           final HRegionInfo hri = HRegionInfo.FIRST_META_REGIONINFO;
           final FSTableDescriptors fts = new FSTableDescriptors(TEST_UTIL.getConfiguration());
           final HTableDescriptor htd = fts.get(TableName.META_TABLE_NAME);
-          final long txid = wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(),
-              TableName.META_TABLE_NAME, now), edit, true);
+          NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+              Bytes.BYTES_COMPARATOR);
+          for(byte[] fam : htd.getFamiliesKeys()) {
+             scopes.put(fam, 0);
+          }
+          final long txid = wal.append(hri, new WALKey(hri.getEncodedNameAsBytes(),
+              TableName.META_TABLE_NAME, now, mvcc, scopes), edit, true);
           wal.sync(txid);
         }
         String msg = getName() + " finished";

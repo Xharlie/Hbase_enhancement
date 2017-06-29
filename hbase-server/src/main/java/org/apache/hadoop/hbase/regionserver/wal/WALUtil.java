@@ -20,11 +20,11 @@
 package org.apache.hadoop.hbase.regionserver.wal;
 
 import java.io.IOException;
+import java.util.NavigableMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.protobuf.generated.WALProtos;
 import org.apache.hadoop.hbase.protobuf.generated.WALProtos.CompactionDescriptor;
@@ -56,10 +56,11 @@ public class WALUtil {
    * the compaction from finishing if this regionserver has already lost its lease on the log.
    * @param mvcc Used by WAL to get sequence Id for the waledit.
    */
-  public static long writeCompactionMarker(WAL wal, HTableDescriptor htd, HRegionInfo hri,
-      final CompactionDescriptor c, MultiVersionConsistencyControl mvcc)
+  public static long writeCompactionMarker(WAL wal,
+          NavigableMap<byte[], Integer> replicationScope, HRegionInfo hri, final CompactionDescriptor c,
+          MultiVersionConsistencyControl mvcc)
   throws IOException {
-    long trx = writeMarker(wal, htd, hri, WALEdit.createCompaction(hri, c), mvcc, true);
+    long trx = writeMarker(wal, replicationScope, hri, WALEdit.createCompaction(hri, c), mvcc, true);
     if (LOG.isTraceEnabled()) {
       LOG.trace("Appended compaction marker " + TextFormat.shortDebugString(c));
     }
@@ -69,10 +70,10 @@ public class WALUtil {
   /**
    * Write a flush marker indicating a start / abort or a complete of a region flush
    */
-  public static long writeFlushMarker(WAL wal, HTableDescriptor htd, HRegionInfo hri,
+  public static long writeFlushMarker(WAL wal, NavigableMap<byte[], Integer> replicationScope, HRegionInfo hri,
       final FlushDescriptor f, boolean sync, MultiVersionConsistencyControl mvcc)
   throws IOException {
-    long trx = writeMarker(wal, htd, hri, WALEdit.createFlushWALEdit(hri, f), mvcc, sync);
+    long trx = writeMarker(wal, replicationScope, hri, WALEdit.createFlushWALEdit(hri, f), mvcc, sync);
     if (LOG.isTraceEnabled()) {
       LOG.trace("Appended flush marker " + TextFormat.shortDebugString(f));
     }
@@ -82,10 +83,10 @@ public class WALUtil {
   /**
    * Write a region open marker indicating that the region is opened
    */
-  public static long writeRegionEventMarker(WAL wal, HTableDescriptor htd, HRegionInfo hri,
+  public static long writeRegionEventMarker(WAL wal, NavigableMap<byte[], Integer> replicationScope, HRegionInfo hri,
       final RegionEventDescriptor r, final MultiVersionConsistencyControl mvcc)
   throws IOException {
-    long trx = writeMarker(wal, htd, hri, WALEdit.createRegionEventWALEdit(hri, r), mvcc, true);
+    long trx = writeMarker(wal, replicationScope, hri, WALEdit.createRegionEventWALEdit(hri, r), mvcc, true);
     if (LOG.isTraceEnabled()) {
       LOG.trace("Appended region event marker " + TextFormat.shortDebugString(r));
     }
@@ -96,35 +97,34 @@ public class WALUtil {
    * Write a log marker that a bulk load has succeeded and is about to be committed.
    *
    * @param wal        The log to write into.
-   * @param htd        A description of the table that we are bulk loading into.
+   * @param replicationScope The replication scope of the families in the HRegion
    * @param hri       A description of the region in the table that we are bulk loading into.
    * @param desc A protocol buffers based description of the client's bulk loading request
    * @return txid of this transaction or if nothing to do, the last txid
    * @throws IOException We will throw an IOException if we can not append to the HLog.
    */
-  public static long writeBulkLoadMarkerAndSync(final WAL wal, final HTableDescriptor htd,
+  public static long writeBulkLoadMarkerAndSync(final WAL wal, final NavigableMap<byte[], Integer> replicationScope,
       final HRegionInfo hri, final WALProtos.BulkLoadDescriptor desc,
       final MultiVersionConsistencyControl mvcc)
   throws IOException {
-    long trx = writeMarker(wal, htd, hri, WALEdit.createBulkLoadEvent(hri, desc), mvcc, true);
+    long trx = writeMarker(wal, replicationScope, hri, WALEdit.createBulkLoadEvent(hri, desc), mvcc, true);
     if (LOG.isTraceEnabled()) {
       LOG.trace("Appended Bulk Load marker " + TextFormat.shortDebugString(desc));
     }
     return trx;
   }
 
-  private static long writeMarker(final WAL wal, final HTableDescriptor htd, final HRegionInfo hri,
+  private static long writeMarker(final WAL wal, final NavigableMap<byte[], Integer> replicationScope, final HRegionInfo hri,
       final WALEdit edit, final MultiVersionConsistencyControl mvcc, final boolean sync)
   throws IOException {
     // TODO: Pass in current time to use?
     WALKey key =
-      new HLogKey(hri.getEncodedNameAsBytes(), hri.getTable(), System.currentTimeMillis(), mvcc);
+      new HLogKey(hri.getEncodedNameAsBytes(), hri.getTable(), System.currentTimeMillis(), mvcc, replicationScope);
     // Add it to the log but the false specifies that we don't need to add it to the memstore
     long trx = MultiVersionConsistencyControl.NONE;
     try {
-      trx = wal.append(htd, hri, key, edit, false);
+      trx = wal.append(hri, key, edit, false);
       if (sync) wal.sync(trx);
-//      LOG.fatal("write marker:" + );
     } finally {
       // If you get hung here, is it a real WAL or a mocked WAL? If the latter, you need to
       // trip the latch that is inside in getWriteEntry up in your mock. See down in the append

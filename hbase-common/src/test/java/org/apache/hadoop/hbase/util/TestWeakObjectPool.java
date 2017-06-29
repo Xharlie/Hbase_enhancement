@@ -30,12 +30,12 @@ import org.junit.experimental.categories.Category;
 
 @Category({SmallTests.class})
 public class TestWeakObjectPool {
-  WeakObjectPool<String, Object> pool;
+  ObjectPool<String, Object> pool;
 
   @Before
   public void setUp() {
     pool = new WeakObjectPool<String, Object>(
-        new WeakObjectPool.ObjectFactory<String, Object>() {
+        new ObjectPool.ObjectFactory<String, Object>() {
           @Override
           public Object createObject(String key) {
             return new Object();

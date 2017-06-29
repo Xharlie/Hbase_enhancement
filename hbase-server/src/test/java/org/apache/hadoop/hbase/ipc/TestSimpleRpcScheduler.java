@@ -150,7 +150,7 @@ public class TestSimpleRpcScheduler {
   private CallRunner createMockTask() {
     Call call = mock(Call.class);
     CallRunner task = mock(CallRunner.class);
-    when(task.getCall()).thenReturn(call);
+    when(task.getRpcCall()).thenReturn(call);
     return task;
   }
 
@@ -176,19 +176,19 @@ public class TestSimpleRpcScheduler {
       CallRunner smallCallTask = mock(CallRunner.class);
       RpcServer.Call smallCall = mock(RpcServer.Call.class);
       RequestHeader smallHead = RequestHeader.newBuilder().setCallId(1).build();
-      when(smallCallTask.getCall()).thenReturn(smallCall);
+      when(smallCallTask.getRpcCall()).thenReturn(smallCall);
       when(smallCall.getHeader()).thenReturn(smallHead);
 
       CallRunner largeCallTask = mock(CallRunner.class);
       RpcServer.Call largeCall = mock(RpcServer.Call.class);
       RequestHeader largeHead = RequestHeader.newBuilder().setCallId(50).build();
-      when(largeCallTask.getCall()).thenReturn(largeCall);
+      when(largeCallTask.getRpcCall()).thenReturn(largeCall);
       when(largeCall.getHeader()).thenReturn(largeHead);
 
       CallRunner hugeCallTask = mock(CallRunner.class);
       RpcServer.Call hugeCall = mock(RpcServer.Call.class);
       RequestHeader hugeHead = RequestHeader.newBuilder().setCallId(100).build();
-      when(hugeCallTask.getCall()).thenReturn(hugeCall);
+      when(hugeCallTask.getRpcCall()).thenReturn(hugeCall);
       when(hugeCall.getHeader()).thenReturn(hugeHead);
 
       when(priority.getDeadline(eq(smallHead), any(Message.class))).thenReturn(0L);
@@ -256,21 +256,21 @@ public class TestSimpleRpcScheduler {
       Message putParam = RequestConverter.buildMutateRequest(
           Bytes.toBytes("abc"), new Put(Bytes.toBytes("row")));
       RequestHeader putHead = RequestHeader.newBuilder().setMethodName("mutate").build();
-      when(putCallTask.getCall()).thenReturn(putCall);
+      when(putCallTask.getRpcCall()).thenReturn(putCall);
       when(putCall.getHeader()).thenReturn(putHead);
       when(putCall.getParam()).thenReturn(putParam);
 
       CallRunner getCallTask = mock(CallRunner.class);
       RpcServer.Call getCall = mock(RpcServer.Call.class);
       RequestHeader getHead = RequestHeader.newBuilder().setMethodName("get").build();
-      when(getCallTask.getCall()).thenReturn(getCall);
+      when(getCallTask.getRpcCall()).thenReturn(getCall);
       when(getCall.getHeader()).thenReturn(getHead);
 
       CallRunner scanCallTask = mock(CallRunner.class);
       RpcServer.Call scanCall = mock(RpcServer.Call.class);
       Message scanParam = ScanRequest.newBuilder().setScannerId(1).build();
       RequestHeader scanHead = RequestHeader.newBuilder().setMethodName("scan").build();
-      when(scanCallTask.getCall()).thenReturn(scanCall);
+      when(scanCallTask.getRpcCall()).thenReturn(scanCall);
       when(scanCall.getHeader()).thenReturn(scanHead);
       when(scanCall.getParam()).thenReturn(scanParam);
 

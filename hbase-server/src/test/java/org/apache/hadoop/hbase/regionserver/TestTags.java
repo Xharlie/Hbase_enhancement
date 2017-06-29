@@ -219,9 +219,8 @@ public class TestTags {
         for (Result result : next) {
           CellScanner cellScanner = result.cellScanner();
           cellScanner.advance();
-          KeyValue current = (KeyValue) cellScanner.current();
-          assertTrue(current.getValueOffset() + current.getValueLength() == current.getOffset()
-              + current.getLength());
+          Cell current = cellScanner.current();
+          assertEquals(0, current.getTagsLength());
         }
       } finally {
         if (scanner != null)
@@ -238,9 +237,8 @@ public class TestTags {
         for (Result result : next) {
           CellScanner cellScanner = result.cellScanner();
           cellScanner.advance();
-          KeyValue current = (KeyValue) cellScanner.current();
-          assertTrue(current.getValueOffset() + current.getValueLength() == current.getOffset()
-              + current.getLength());
+          Cell current = cellScanner.current();
+          assertEquals(0, current.getTagsLength());
         }
       } finally {
         if (scanner != null) {
@@ -324,7 +322,7 @@ public class TestTags {
           while ((next = scanner.next()) != null) {
             CellScanner cellScanner = next.cellScanner();
             cellScanner.advance();
-            KeyValue current = (KeyValue) cellScanner.current();
+            Cell current = cellScanner.current();
             if (CellUtil.matchingRow(current, row)) {
               assertEquals(1, TestCoprocessorForTags.tags.size());
               Tag tag = TestCoprocessorForTags.tags.get(0);
@@ -349,7 +347,7 @@ public class TestTags {
           while ((next = scanner.next()) != null) {
             CellScanner cellScanner = next.cellScanner();
             cellScanner.advance();
-            KeyValue current = (KeyValue) cellScanner.current();
+            Cell current = cellScanner.current();
             if (CellUtil.matchingRow(current, row)) {
               assertEquals(1, TestCoprocessorForTags.tags.size());
               Tag tag = TestCoprocessorForTags.tags.get(0);

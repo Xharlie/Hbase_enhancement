@@ -21,6 +21,8 @@ package org.apache.hadoop.hbase.regionserver;
 
 import static org.apache.hadoop.hbase.regionserver.ScanQueryMatcher.MatchCode.INCLUDE;
 import static org.apache.hadoop.hbase.regionserver.ScanQueryMatcher.MatchCode.SKIP;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -28,9 +30,10 @@ import java.util.List;
 import java.util.NavigableSet;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.CellComparator;
-import org.apache.hadoop.hbase.HBaseTestCase;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeepDeletedCells;
 import org.apache.hadoop.hbase.KeyValue;
@@ -43,10 +46,13 @@ import org.apache.hadoop.hbase.regionserver.ScanQueryMatcher.MatchCode;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.junit.experimental.categories.Category;
+import org.junit.Before;
+import org.junit.Test;
 
 @Category(SmallTests.class)
-public class TestQueryMatcher extends HBaseTestCase {
+public class TestQueryMatcher {
   private static final boolean PRINT = false;
+  private Configuration conf;
 
   private byte[] row1;
   private byte[] row2;
@@ -67,8 +73,9 @@ public class TestQueryMatcher extends HBaseTestCase {
   CellComparator rowComparator;
   private Scan scan;
 
+  @Before
   public void setUp() throws Exception {
-    super.setUp();
+    this.conf = HBaseConfiguration.create();
     row1 = Bytes.toBytes("row1");
     row2 = Bytes.toBytes("row2");
     row3 = Bytes.toBytes("row3");
@@ -92,6 +99,25 @@ public class TestQueryMatcher extends HBaseTestCase {
 
     rowComparator = CellComparator.COMPARATOR;
 
+  }
+
+  /**
+  * This is a cryptic test. It is checking that we don't include a fake cell, one that has a
+  * timestamp of {@link HConstants#OLDEST_TIMESTAMP}. See HBASE-16074 for background.
+  * @throws IOException
+  */
+  @Test
+  public void testNeverIncludeFakeCell() throws IOException {
+    long now = EnvironmentEdgeManager.currentTime();
+    // Do with fam2 which has a col2 qualifier.
+    ScanQueryMatcher qm = new ScanQueryMatcher(scan,
+        new ScanInfo(this.conf, fam2, 10, 1, ttl, KeepDeletedCells.FALSE, 0, rowComparator),
+        get.getFamilyMap().get(fam2), now - ttl, now);
+    Cell kv = new KeyValue(row1, fam2, col2, 1, data);
+    Cell cell = CellUtil.createLastOnRowCol(kv);
+    qm.setToNewRow(kv);
+    MatchCode code = qm.match(cell);
+    assertFalse(code.compareTo(MatchCode.SEEK_NEXT_COL) != 0);
   }
 
   private void _testMatch_ExplicitColumns(Scan scan, List<MatchCode> expected) throws IOException {
@@ -128,6 +154,7 @@ public class TestQueryMatcher extends HBaseTestCase {
     }
   }
 
+  @Test
   public void testMatch_ExplicitColumns()
   throws IOException {
     //Moving up from the Tracker by using Gets and List<KeyValue> instead
@@ -145,6 +172,7 @@ public class TestQueryMatcher extends HBaseTestCase {
     _testMatch_ExplicitColumns(scan, expected);
   }
 
+  @Test
   public void testMatch_Wildcard()
   throws IOException {
     //Moving up from the Tracker by using Gets and List<KeyValue> instead
@@ -200,6 +228,7 @@ public class TestQueryMatcher extends HBaseTestCase {
    *
    * @throws IOException
    */
+  @Test
   public void testMatch_ExpiredExplicit()
   throws IOException {
 
@@ -255,6 +284,7 @@ public class TestQueryMatcher extends HBaseTestCase {
    *
    * @throws IOException
    */
+   @Test
   public void testMatch_ExpiredWildcard()
   throws IOException {
 
@@ -300,6 +330,7 @@ public class TestQueryMatcher extends HBaseTestCase {
     }
   }
 
+   @Test
   public void testMatch_PartialRangeDropDeletes() throws Exception {
     // Some ranges.
     testDropDeletes(

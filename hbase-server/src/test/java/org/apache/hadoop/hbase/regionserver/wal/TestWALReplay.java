@@ -37,7 +37,9 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.NavigableMap;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -81,11 +83,13 @@ import org.apache.hadoop.hbase.regionserver.FlushRequester;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.regionserver.MemStoreSnapshot;
+import org.apache.hadoop.hbase.regionserver.MemstoreSize;
 import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.regionserver.RegionScanner;
 import org.apache.hadoop.hbase.regionserver.RegionServerServices;
 import org.apache.hadoop.hbase.regionserver.Store;
+import org.apache.hadoop.hbase.regionserver.HStore;
 import org.apache.hadoop.hbase.regionserver.controller.ThroughputController;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -306,9 +310,14 @@ public class TestWALReplay {
     WAL wal1 = createWAL(this.conf);
     // Add 1k to each family.
     final int countPerFamily = 1000;
+    NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+        Bytes.BYTES_COMPARATOR);
+    for(byte[] fam : htd.getFamiliesKeys()) {
+      scopes.put(fam, 0);
+    }
     for (HColumnDescriptor hcd: htd.getFamilies()) {
       addWALEdits(tableName, hri, rowName, hcd.getName(), countPerFamily, ee,
-          wal1, htd, mvcc);
+          wal1, htd, mvcc, scopes);
     }
     wal1.shutdown();
     runWALSplit(this.conf);
@@ -317,7 +326,7 @@ public class TestWALReplay {
     // Add 1k to each family.
     for (HColumnDescriptor hcd: htd.getFamilies()) {
       addWALEdits(tableName, hri, rowName, hcd.getName(), countPerFamily,
-          ee, wal2, htd, mvcc);
+          ee, wal2, htd, mvcc, scopes);
     }
     wal2.shutdown();
     runWALSplit(this.conf);
@@ -557,10 +566,9 @@ public class TestWALReplay {
         final AtomicInteger countOfRestoredEdits = new AtomicInteger(0);
         HRegion region3 = new HRegion(basedir, wal3, newFS, newConf, hri, htd, null) {
           @Override
-          protected boolean restoreEdit(Store s, Cell cell) {
-            boolean b = super.restoreEdit(s, cell);
+          protected void restoreEdit(final HStore s, final Cell cell, MemstoreSize memstoreSize) {
+            super.restoreEdit(s, cell, memstoreSize);
             countOfRestoredEdits.incrementAndGet();
-            return b;
           }
         };
         long seqid3 = region3.initialize();
@@ -803,9 +811,14 @@ public class TestWALReplay {
     // Add 1k to each family.
     final int countPerFamily = 1000;
     Set<byte[]> familyNames = new HashSet<byte[]>();
+    NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+        Bytes.BYTES_COMPARATOR);
+    for(byte[] fam : htd.getFamiliesKeys()) {
+      scopes.put(fam, 0);
+    }
     for (HColumnDescriptor hcd: htd.getFamilies()) {
       addWALEdits(tableName, hri, rowName, hcd.getName(), countPerFamily,
-          ee, wal, htd, mvcc);
+          ee, wal, htd, mvcc, scopes);
       familyNames.add(hcd.getName());
     }
 
@@ -817,13 +830,13 @@ public class TestWALReplay {
     WALEdit edit = new WALEdit();
     long now = ee.currentTime();
     edit.add(new KeyValue(rowName, Bytes.toBytes("c"), null, now, KeyValue.Type.DeleteFamily));
-    wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), tableName, now, mvcc), edit, true);
+    wal.append(hri, new WALKey(hri.getEncodedNameAsBytes(), tableName, now, mvcc, scopes), edit, true);
 
     // Delete the c family to verify deletes make it over.
     edit = new WALEdit();
     now = ee.currentTime();
     edit.add(new KeyValue(rowName, Bytes.toBytes("c"), null, now, KeyValue.Type.DeleteFamily));
-    wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), tableName, now), edit, true);
+    wal.append(hri, new WALKey(hri.getEncodedNameAsBytes(), tableName, now, mvcc, scopes), edit, true);
 
     // Sync.
     wal.sync();
@@ -1048,12 +1061,16 @@ public class TestWALReplay {
     deleteDir(basedir);
 
     final HTableDescriptor htd = createBasic1FamilyHTD(tableName);
+    NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(Bytes.BYTES_COMPARATOR);
+    for (byte[] fam : htd.getFamiliesKeys()) {
+      scopes.put(fam, 0);
+    }
     HRegion region = HBaseTestingUtility.createRegionAndWAL(hri, hbaseRootDir, this.conf, htd);
     HBaseTestingUtility.closeRegionAndWAL(region);
     final byte[] family = htd.getColumnFamilies()[0].getName();
     final byte[] rowName = tableName.getName();
-    FSWALEntry entry1 = createFSWALEntry(htd, hri, 1L, rowName, family, ee, mvcc, 1);
-    FSWALEntry entry2 = createFSWALEntry(htd, hri, 2L, rowName, family, ee, mvcc, 2);
+    FSWALEntry entry1 = createFSWALEntry(htd, hri, 1L, rowName, family, ee, mvcc, 1, scopes);
+    FSWALEntry entry2 = createFSWALEntry(htd, hri, 2L, rowName, family, ee, mvcc, 2, scopes);
 
     Path largeFile = new Path(logDir, "wal-1");
     Path smallFile = new Path(logDir, "wal-2");
@@ -1156,8 +1173,8 @@ public class TestWALReplay {
   }
 
   private WALKey createWALKey(final TableName tableName, final HRegionInfo hri,
-                              final MultiVersionConsistencyControl mvcc) {
-    return new WALKey(hri.getEncodedNameAsBytes(), tableName, 999, mvcc);
+            final MultiVersionConsistencyControl mvcc, NavigableMap<byte[], Integer> scopes) {
+    return new WALKey(hri.getEncodedNameAsBytes(), tableName, 999, mvcc, scopes);
   }
 
   private WALEdit createWALEdit(final byte[] rowName, final byte[] family, EnvironmentEdge ee,
@@ -1171,19 +1188,20 @@ public class TestWALReplay {
 
   private FSWALEntry createFSWALEntry(HTableDescriptor htd, HRegionInfo hri, long sequence,
                                       byte[] rowName, byte[] family, EnvironmentEdge ee, MultiVersionConsistencyControl mvcc,
-                                      int index) throws IOException {
+                                      int index, NavigableMap<byte[], Integer> scopes) throws IOException {
     FSWALEntry entry =
-            new FSWALEntry(sequence, createWALKey(htd.getTableName(), hri, mvcc), createWALEdit(
-                    rowName, family, ee, index), htd, hri, true);
-    entry.stampRegionSequenceId();
+            new FSWALEntry(sequence, createWALKey(htd.getTableName(), hri, mvcc, scopes), createWALEdit(
+                    rowName, family, ee, index), hri, true);
+    entry.stampRegionSequenceId(mvcc.beginMemstoreInsert());
     return entry;
   }
 
   private void addWALEdits(final TableName tableName, final HRegionInfo hri, final byte[] rowName,
       final byte[] family, final int count, EnvironmentEdge ee, final WAL wal,
-      final HTableDescriptor htd, final MultiVersionConsistencyControl mvcc) throws IOException {
+      final HTableDescriptor htd, final MultiVersionConsistencyControl mvcc,
+      NavigableMap<byte[], Integer> scopes) throws IOException {
     for (int j = 0; j < count; j++) {
-      wal.append(htd, hri, createWALKey(tableName, hri, mvcc),
+      wal.append(hri, createWALKey(tableName, hri, mvcc, scopes),
         createWALEdit(rowName, family, ee, j), true);
     }
     wal.sync();

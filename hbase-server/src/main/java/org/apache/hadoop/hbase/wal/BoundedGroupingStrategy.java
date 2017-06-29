@@ -38,8 +38,6 @@ public class BoundedGroupingStrategy implements RegionGroupingStrategy{
 
   private ConcurrentHashMap<String, String> groupNameCache =
       new ConcurrentHashMap<String, String>();
-  public ConcurrentHashMap<byte[], Integer> indexInGroupCache =
-      new ConcurrentHashMap<byte[], Integer>();
   private AtomicInteger counter = new AtomicInteger(0);
   private String[] groupNames;
 
@@ -48,10 +46,8 @@ public class BoundedGroupingStrategy implements RegionGroupingStrategy{
     String idStr = Bytes.toString(identifier);
     String groupName = groupNameCache.get(idStr);
     if (null == groupName) {
-      int count = counter.getAndIncrement();
-      groupName = groupNames[count % groupNames.length];
+      groupName = groupNames[counter.getAndIncrement() % groupNames.length];
       String extantName = groupNameCache.putIfAbsent(idStr, groupName);
-      indexInGroupCache.putIfAbsent(identifier, count / groupNames.length);
       if (extantName != null) {
         return extantName;
       }

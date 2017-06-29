@@ -20,13 +20,12 @@ package org.apache.hadoop.hbase.replication.regionserver;
 
 import static org.apache.hadoop.hbase.HConstants.HBASE_MASTER_LOGCLEANER_PLUGINS;
 import static org.apache.hadoop.hbase.HConstants.REPLICATION_ENABLE_KEY;
-import static org.apache.hadoop.hbase.HConstants.REPLICATION_SCOPE_LOCAL;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.NavigableMap;
 import java.util.TreeMap;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -43,11 +42,11 @@ import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.protobuf.generated.AdminProtos.WALEntry;
 import org.apache.hadoop.hbase.regionserver.ReplicationSinkService;
 import org.apache.hadoop.hbase.regionserver.ReplicationSourceService;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
 import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
@@ -57,7 +56,6 @@ import org.apache.hadoop.hbase.replication.ReplicationPeers;
 import org.apache.hadoop.hbase.replication.ReplicationQueues;
 import org.apache.hadoop.hbase.replication.ReplicationTracker;
 import org.apache.hadoop.hbase.replication.master.ReplicationLogCleaner;
-import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.zookeeper.ZKClusterId;
 import org.apache.zookeeper.KeeperException;
 
@@ -227,38 +225,33 @@ public class Replication extends WALActionsListener.Base implements
   }
 
   @Override
-  public void visitLogEntryBeforeWrite(HTableDescriptor htd, WALKey logKey,
+  public void visitLogEntryBeforeWrite(WALKey logKey,
                                        WALEdit logEdit) {
-    scopeWALEdits(htd, logKey, logEdit);
+    scopeWALEdits(logKey, logEdit);
   }
 
   /**
    * Utility method used to set the correct scopes on each log key. Doesn't set a scope on keys
    * from compaction WAL edits and if the scope is local.
-   * @param htd Descriptor used to find the scope to use
    * @param logKey Key that may get scoped according to its edits
    * @param logEdit Edits used to lookup the scopes
    */
-  public static void scopeWALEdits(HTableDescriptor htd, WALKey logKey,
-                                   WALEdit logEdit) {
+  public static void scopeWALEdits(WALKey logKey, WALEdit logEdit) {
     NavigableMap<byte[], Integer> scopes =
         new TreeMap<byte[], Integer>(Bytes.BYTES_COMPARATOR);
     byte[] family;
+    boolean foundOtherEdits = false;
     for (Cell cell : logEdit.getCells()) {
       family = CellUtil.cloneFamily(cell);
       // This is expected and the KV should not be replicated
       if (CellUtil.matchingFamily(cell, WALEdit.METAFAMILY)) continue;
-      // Unexpected, has a tendency to happen in unit tests
-      assert htd.getFamily(family) != null;
-
-      int scope = htd.getFamily(family).getScope();
-      if (scope != REPLICATION_SCOPE_LOCAL &&
-          !scopes.containsKey(family)) {
-        scopes.put(family, scope);
+      else {
+        foundOtherEdits = true;
       }
     }
-    if (!scopes.isEmpty()) {
-      logKey.setScopes(scopes);
+    
+    if (!foundOtherEdits || logEdit.isReplay()) {
+      logKey.serializeReplicationScope(false);
     }
   }
 

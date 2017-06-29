@@ -320,6 +320,8 @@ public class TestHFileCleaner {
     final int UPDATE_QUEUE_SIZE = 1024;
     final int LARGE_FILE_NUM = 5;
     final int SMALL_FILE_NUM = 20;
+    final int LARGE_THREAD_NUM = 2;
+    final int SMALL_THREAD_NUM = 4;
 
     Configuration conf = UTIL.getConfiguration();
     // no cleaner policies = delete all files
@@ -352,21 +354,25 @@ public class TestHFileCleaner {
     };
     t.setDaemon(true);
     t.start();
-    // let the cleaner run for some while
-    Thread.sleep(20);
+    // wait until file clean started
+    while (cleaner.getNumOfDeletedSmallFiles() == 0L) {
+      Thread.yield();
+    }
 
     // trigger configuration change
     Configuration newConf = new Configuration(conf);
     newConf.setInt(HFileCleaner.HFILE_DELETE_THROTTLE_THRESHOLD, UPDATE_THROTTLE_POINT);
     newConf.setInt(HFileCleaner.LARGE_HFILE_DELETE_QUEUE_SIZE, UPDATE_QUEUE_SIZE);
     newConf.setInt(HFileCleaner.SMALL_HFILE_DELETE_QUEUE_SIZE, UPDATE_QUEUE_SIZE);
+    newConf.setInt(HFileCleaner.LARGE_HFILE_DELETE_THREAD_NUMBER, LARGE_THREAD_NUM);
+    newConf.setInt(HFileCleaner.SMALL_HFILE_DELETE_THREAD_NUMBER, SMALL_THREAD_NUM);
     cleaner.onConfigurationChange(newConf);
 
     // check values after change
     Assert.assertEquals(UPDATE_THROTTLE_POINT, cleaner.getThrottlePoint());
     Assert.assertEquals(UPDATE_QUEUE_SIZE, cleaner.getLargeQueueSize());
     Assert.assertEquals(UPDATE_QUEUE_SIZE, cleaner.getSmallQueueSize());
-    Assert.assertEquals(2, cleaner.getCleanerThreads().size());
+    Assert.assertEquals(LARGE_THREAD_NUM + SMALL_THREAD_NUM, cleaner.getCleanerThreads().size());
     t.join();
     Assert.assertTrue("Should delete more than " + LARGE_FILE_NUM
         + " files from large queue but actually " + cleaner.getNumOfDeletedLargeFiles(),

@@ -196,7 +196,11 @@ public interface Region extends ConfigurationObserver {
    */
   void updateWriteRequestsCount(long i);
 
-  /** @return memstore size for this region, in bytes */
+  /**
+   * @return memstore size for this region, in bytes. It just accounts data size of cells added to
+   *         the memstores of this Region. Means size in bytes for key, value and tags within Cells.
+   *         It wont consider any java heap overhead for the cell objects or any other.
+   */
   long getMemstoreSize();
 
   /** @return the number of mutations processed bypassing the WAL */
@@ -502,13 +506,6 @@ public interface Region extends ConfigurationObserver {
    * @throws IOException
    */
   void put(Put put) throws IOException;
-
-  /**
-   * Puts some data in the table in an SEDA put path.
-   * @param put
-   * @throws IOException
-   */
-  void put(ResponseToolKit responseToolKit) throws IOException;
 
   /**
    * Listener class to enable callers of

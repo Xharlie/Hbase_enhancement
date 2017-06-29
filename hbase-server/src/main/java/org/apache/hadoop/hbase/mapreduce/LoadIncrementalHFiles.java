@@ -280,7 +280,9 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
           LOG.warn("Trying to bulk load hfile " + hfile.getPath() + " with size: " +
               length + " bytes can be problematic as it may lead to oversplitting.");
         }
-        ret.add(new LoadQueueItem(family, hfile.getPath()));
+        if (!hfile.getPath().toString().endsWith(HConstants.HFILE_BULKLOAD_SUCCEED_SUFFIX)) {
+          ret.add(new LoadQueueItem(family, hfile.getPath()));
+        }
       }
     }, validateHFile);
   }
@@ -559,6 +561,7 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
     Set<Future<List<LoadQueueItem>>> splittingFutures = new HashSet<Future<List<LoadQueueItem>>>();
     while (!queue.isEmpty()) {
       final LoadQueueItem item = queue.remove();
+      if (item.hfilePath.getName().endsWith(HConstants.HFILE_BULKLOAD_SUCCEED_SUFFIX)) continue;
 
       final Callable<List<LoadQueueItem>> call = new Callable<List<LoadQueueItem>>() {
         @Override

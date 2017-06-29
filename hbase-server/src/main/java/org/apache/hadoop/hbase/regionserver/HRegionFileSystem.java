@@ -1040,6 +1040,32 @@ public class HRegionFileSystem {
   }
 
   /**
+   * Creates a new file. Assumes the user has already checked for this directory existence.
+   * @param fileNameAndPath
+   * @return the result of fs.createNewFile(). In case underlying fs throws an IOException, it checks
+   *         whether the directory exists or not, and returns true if it exists.
+   * @throws IOException
+   */
+  boolean createNewFile(Path fileNameAndPath) throws IOException {
+    int i = 0;
+    IOException lastIOE = null;
+    do {
+      try {
+        return fs.createNewFile(fileNameAndPath);
+      } catch (IOException ioe) {
+        lastIOE = ioe;
+        if (fs.exists(fileNameAndPath)) return true;
+        try {
+          sleepBeforeRetry("Create NewFile", i+1);
+        } catch (InterruptedException e) {
+          throw (InterruptedIOException)new InterruptedIOException().initCause(e);
+        }
+      }
+    } while (++i <= hdfsClientRetriesNumber);
+      throw new IOException("Exception in createNewFile", lastIOE);
+  }
+
+  /**
    * Renames a directory. Assumes the user has already checked for this directory existence.
    * @param srcpath
    * @param dstPath
@@ -1063,8 +1089,7 @@ public class HRegionFileSystem {
         }
       }
     } while (++i <= hdfsClientRetriesNumber);
-
-    throw new IOException("Exception in rename", lastIOE);
+      throw new IOException("Exception in rename", lastIOE);
   }
 
   /**

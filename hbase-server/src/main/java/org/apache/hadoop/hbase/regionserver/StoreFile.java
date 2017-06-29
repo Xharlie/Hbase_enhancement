@@ -46,6 +46,7 @@ import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
+import org.apache.hadoop.hbase.io.TimeRange;
 import org.apache.hadoop.hbase.io.hfile.BlockType;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.HFile;
@@ -53,10 +54,13 @@ import org.apache.hadoop.hbase.io.hfile.HFileContext;
 import org.apache.hadoop.hbase.io.hfile.HFileScanner;
 import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.regionserver.compactions.Compactor;
+import org.apache.hadoop.hbase.util.BloomContext;
 import org.apache.hadoop.hbase.util.BloomFilter;
 import org.apache.hadoop.hbase.util.BloomFilterFactory;
 import org.apache.hadoop.hbase.util.BloomFilterWriter;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.RowBloomContext;
+import org.apache.hadoop.hbase.util.RowColBloomContext;
 import org.apache.hadoop.hbase.util.Writables;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.hbase.io.hfile.HFileBlock;
@@ -105,7 +109,7 @@ public class StoreFile {
       Bytes.toBytes("DELETE_FAMILY_COUNT");
 
   /** Last Bloom filter key in FileInfo */
-  private static final byte[] LAST_BLOOM_KEY = Bytes.toBytes("LAST_BLOOM_KEY");
+  public static final byte[] LAST_BLOOM_KEY = Bytes.toBytes("LAST_BLOOM_KEY");
 
   /** Key for Timerange information in metadata*/
   public static final byte[] TIMERANGE_KEY = Bytes.toBytes("TIMERANGE");
@@ -450,15 +454,11 @@ public class StoreFile {
     reader.loadBloomfilter(BlockType.DELETE_FAMILY_BLOOM_META);
 
     try {
-      byte [] timerangeBytes = metadataMap.get(TIMERANGE_KEY);
-      if (timerangeBytes != null) {
-        this.reader.timeRangeTracker = new TimeRangeTracker();
-        Writables.copyWritable(timerangeBytes, this.reader.timeRangeTracker);
-      }
+      this.reader.timeRange = TimeRangeTracker.getTimeRange(metadataMap.get(TIMERANGE_KEY));
     } catch (IllegalArgumentException e) {
       LOG.error("Error reading timestamp range data from meta -- " +
           "proceeding without", e);
-      this.reader.timeRangeTracker = null;
+      this.reader.timeRange = null;
     }
     return this.reader;
   }
@@ -551,6 +551,7 @@ public class StoreFile {
     private Path filePath;
     private InetSocketAddress[] favoredNodes;
     private HFileContext fileContext;
+    private TimeRangeTracker trt;
     private boolean shouldDropCacheBehind = false;
 
     public WriterBuilder(Configuration conf, CacheConfig cacheConf,
@@ -558,6 +559,17 @@ public class StoreFile {
       this.conf = conf;
       this.cacheConf = cacheConf;
       this.fs = fs;
+    }
+
+    /**
+     * @param trt A premade TimeRangeTracker to use rather than build one per append (building one
+     * of these is expensive so good to pass one in if you have one).
+     * @return this (for chained invocation)
+     */
+    public WriterBuilder withTimeRangeTracker(final TimeRangeTracker trt) {
+      Preconditions.checkNotNull(trt);
+      this.trt = trt;
+      return this;
     }
 
     /**
@@ -665,7 +677,7 @@ public class StoreFile {
         comparator = CellComparator.COMPARATOR;
       }
       return new Writer(fs, filePath,
-          conf, cacheConf, comparator, bloomType, maxKeyCount, favoredNodes, fileContext);
+          conf, cacheConf, comparator, bloomType, maxKeyCount, favoredNodes, fileContext, trt);
     }
   }
 
@@ -684,9 +696,11 @@ public class StoreFile {
   }
 
   public Long getMinimumTimestamp() {
-    return (getReader().timeRangeTracker == null) ?
-        null :
-        getReader().timeRangeTracker.getMinimumTimestamp();
+    return (getReader().timeRange == null) ? null : getReader().timeRange.getMin();
+  }
+
+  public Long getMaximumTimestamp() {
+    return getReader().timeRange == null? null: getReader().timeRange.getMax();
   }
 
   /**
@@ -728,27 +742,25 @@ public class StoreFile {
     private final BloomFilterWriter generalBloomFilterWriter;
     private final BloomFilterWriter deleteFamilyBloomFilterWriter;
     private final BloomType bloomType;
-    private byte[] lastBloomKey;
-    private int lastBloomKeyOffset, lastBloomKeyLen;
-    private Cell lastCell = null;
     private long earliestPutTs = HConstants.LATEST_TIMESTAMP;
-    private Cell lastDeleteFamilyCell = null;
     private long deleteFamilyCnt = 0;
+    private BloomContext bloomContext = null;
+    private BloomContext deleteFamilyBloomContext = null;
 
     /** Bytes per Checksum */
     protected int bytesPerChecksum;
 
-    TimeRangeTracker timeRangeTracker = new TimeRangeTracker();
-    /* isTimeRangeTrackerSet keeps track if the timeRange has already been set
-     * When flushing a memstore, we set TimeRange and use this variable to
-     * indicate that it doesn't need to be calculated again while
-     * appending KeyValues.
-     * It is not set in cases of compactions when it is recalculated using only
-     * the appended KeyValues*/
-    boolean isTimeRangeTrackerSet = false;
+    /**
+     * timeRangeTrackerSet is used to figure if we were passed a filled-out TimeRangeTracker or not.
+     * When flushing a memstore, we set the TimeRangeTracker that it accumulated during updates to
+     * memstore in here into this Writer and use this variable to indicate that we do not need to
+     * recalculate the timeRangeTracker bounds; it was done already as part of add-to-memstore.
+     * A completed TimeRangeTracker is not set in cases of compactions when it is recalculated.
+     */
+    private final boolean timeRangeTrackerSet;
+    final TimeRangeTracker timeRangeTracker;
 
     protected HFile.Writer writer;
-    private KeyValue.KeyOnlyKeyValue lastBloomKeyOnlyKV = null;
 
     /**
      * Creates an HFile.Writer that also write helpful meta data.
@@ -769,6 +781,37 @@ public class StoreFile {
         final CellComparator comparator, BloomType bloomType, long maxKeys,
         InetSocketAddress[] favoredNodes, HFileContext fileContext)
             throws IOException {
+      this(fs, path, conf, cacheConf, comparator, bloomType, maxKeys, favoredNodes, fileContext,
+        null);
+  }
+
+  /**
+   * Creates an HFile.Writer that also write helpful meta data.
+   * @param fs file system to write to
+   * @param path file name to create
+   * @param conf user configuration
+   * @param comparator key comparator
+   * @param bloomType bloom filter setting
+   * @param maxKeys the expected maximum number of keys to be added. Was used
+   *        for Bloom filter size in {@link HFile} format version 1.
+   * @param favoredNodes
+   * @param fileContext - The HFile context
+ * @param trt Ready-made timetracker to use.
+   * @throws IOException problem writing to FS
+   */
+  private Writer(FileSystem fs, Path path,
+      final Configuration conf,
+      CacheConfig cacheConf,
+      final CellComparator comparator, BloomType bloomType, long maxKeys,
+      InetSocketAddress[] favoredNodes, HFileContext fileContext,
+      final TimeRangeTracker trt)
+          throws IOException {
+    // If passed a TimeRangeTracker, use it. Set timeRangeTrackerSet so we don't destroy it.
+    // TODO: put the state of the TRT on the TRT; i.e. make a read-only version (TimeRange) when
+    // it no longer writable.
+    this.timeRangeTrackerSet = trt != null;
+    this.timeRangeTracker = this.timeRangeTrackerSet? trt: new TimeRangeTracker();
+      // TODO : Change all writers to be specifically created for compaction context
       writer = HFile.getWriterFactory(conf, cacheConf)
           .withPath(fs, path)
           .withComparator(comparator)
@@ -782,11 +825,22 @@ public class StoreFile {
 
       if (generalBloomFilterWriter != null) {
         this.bloomType = bloomType;
-        if(this.bloomType ==  BloomType.ROWCOL) {
-          lastBloomKeyOnlyKV = new KeyValue.KeyOnlyKeyValue();
+        if (LOG.isTraceEnabled()) {
+          LOG.trace("Bloom filter type for " + path + ": " + this.bloomType + ", "
+              + generalBloomFilterWriter.getClass().getSimpleName());
         }
-        if (LOG.isTraceEnabled()) LOG.trace("Bloom filter type for " + path + ": " +
-          this.bloomType + ", " + generalBloomFilterWriter.getClass().getSimpleName());
+        // init bloom context
+        switch (bloomType) {
+        case ROW:
+          bloomContext = new RowBloomContext(generalBloomFilterWriter, comparator);
+          break;
+        case ROWCOL:
+          bloomContext = new RowColBloomContext(generalBloomFilterWriter, comparator);
+          break;
+        default:
+          throw new IOException(
+              "Invalid Bloom filter type: " + bloomType + " (ROW or ROWCOL expected)");
+          }
       } else {
         // Not using Bloom filters.
         this.bloomType = BloomType.NONE;
@@ -798,11 +852,12 @@ public class StoreFile {
         this.deleteFamilyBloomFilterWriter = BloomFilterFactory
             .createDeleteBloomAtWrite(conf, cacheConf,
                 (int) Math.min(maxKeys, Integer.MAX_VALUE), writer);
+        deleteFamilyBloomContext = new RowBloomContext(deleteFamilyBloomFilterWriter, comparator);
       } else {
         deleteFamilyBloomFilterWriter = null;
       }
-      if (deleteFamilyBloomFilterWriter != null) {
-        if (LOG.isTraceEnabled()) LOG.trace("Delete Family Bloom filter type for " + path + ": "
+      if (deleteFamilyBloomFilterWriter != null && LOG.isTraceEnabled()) {
+        LOG.trace("Delete Family Bloom filter type for " + path + ": "
             + deleteFamilyBloomFilterWriter.getClass().getSimpleName());
       }
     }
@@ -831,15 +886,6 @@ public class StoreFile {
     }
 
     /**
-     * Set TimeRangeTracker
-     * @param trt
-     */
-    public void setTimeRangeTracker(final TimeRangeTracker trt) {
-      this.timeRangeTracker = trt;
-      isTimeRangeTrackerSet = true;
-    }
-
-    /**
      * Record the earlest Put timestamp.
      *
      * If the timeRangeTracker is not set,
@@ -850,95 +896,22 @@ public class StoreFile {
       if (KeyValue.Type.Put.getCode() == cell.getTypeByte()) {
         earliestPutTs = Math.min(earliestPutTs, cell.getTimestamp());
       }
-      if (!isTimeRangeTrackerSet) {
+      if (!timeRangeTrackerSet) {
         timeRangeTracker.includeTimestamp(cell);
       }
     }
 
     private void appendGeneralBloomfilter(final Cell cell) throws IOException {
       if (this.generalBloomFilterWriter != null) {
-        // only add to the bloom filter on a new, unique key
-        boolean newKey = true;
-        if (this.lastCell != null) {
-          switch(bloomType) {
-          case ROW:
-            newKey = ! CellUtil.matchingRows(cell, lastCell);
-            break;
-          case ROWCOL:
-            newKey = ! CellUtil.matchingRowColumn(cell, lastCell);
-            break;
-          case NONE:
-            newKey = false;
-            break;
-          default:
-            throw new IOException("Invalid Bloom filter type: " + bloomType +
-                " (ROW or ROWCOL expected)");
-          }
-        }
-        if (newKey) {
-          /*
-           * http://2.bp.blogspot.com/_Cib_A77V54U/StZMrzaKufI/AAAAAAAAADo/ZhK7bGoJdMQ/s400/KeyValue.png
-           * Key = RowLen + Row + FamilyLen + Column [Family + Qualifier] + TimeStamp
-           *
-           * 2 Types of Filtering:
-           *  1. Row = Row
-           *  2. RowCol = Row + Qualifier
-           */
-          byte[] bloomKey = null;
-          // Used with ROW_COL bloom
-          KeyValue bloomKeyKV = null;
-          int bloomKeyOffset, bloomKeyLen;
-
-          switch (bloomType) {
-          case ROW:
-            bloomKey = cell.getRowArray();
-            bloomKeyOffset = cell.getRowOffset();
-            bloomKeyLen = cell.getRowLength();
-            break;
-          case ROWCOL:
-            // merge(row, qualifier)
-            // TODO: could save one buffer copy in case of compound Bloom
-            // filters when this involves creating a KeyValue
-            // TODO : Handle while writes also
-            bloomKeyKV = KeyValueUtil.createFirstOnRow(cell.getRowArray(), cell.getRowOffset(),
-                cell.getRowLength(), 
-                HConstants.EMPTY_BYTE_ARRAY, 0, 0, cell.getQualifierArray(),
-                cell.getQualifierOffset(),
-                cell.getQualifierLength());
-            bloomKey = bloomKeyKV.getBuffer();
-            bloomKeyOffset = bloomKeyKV.getKeyOffset();
-            bloomKeyLen = bloomKeyKV.getKeyLength();
-            break;
-          default:
-            throw new IOException("Invalid Bloom filter type: " + bloomType +
-                " (ROW or ROWCOL expected)");
-          }
-          generalBloomFilterWriter.add(bloomKey, bloomKeyOffset, bloomKeyLen);
-          if (lastBloomKey != null) {
-            int res = 0;
-            // hbase:meta does not have blooms. So we need not have special interpretation
-            // of the hbase:meta cells.  We can safely use Bytes.BYTES_RAWCOMPARATOR for ROW Bloom
-            if (bloomType == BloomType.ROW) {
-              res = Bytes.BYTES_RAWCOMPARATOR.compare(bloomKey, bloomKeyOffset, bloomKeyLen,
-                  lastBloomKey, lastBloomKeyOffset, lastBloomKeyLen);
-            } else {
-              // TODO : Caching of kv components becomes important in these cases
-              res = CellComparator.COMPARATOR.compare(bloomKeyKV, lastBloomKeyOnlyKV);
-            }
-            if (res <= 0) {
-              throw new IOException("Non-increasing Bloom keys: "
-                  + Bytes.toStringBinary(bloomKey, bloomKeyOffset, bloomKeyLen) + " after "
-                  + Bytes.toStringBinary(lastBloomKey, lastBloomKeyOffset, lastBloomKeyLen));
-            }
-          }
-          lastBloomKey = bloomKey;
-          lastBloomKeyOffset = bloomKeyOffset;
-          lastBloomKeyLen = bloomKeyLen;
-          if (bloomType == BloomType.ROWCOL) {
-            lastBloomKeyOnlyKV.setKey(bloomKey, bloomKeyOffset, bloomKeyLen);
-          }
-          this.lastCell = cell;
-        }
+        /*
+         * http://2.bp.blogspot.com/_Cib_A77V54U/StZMrzaKufI/AAAAAAAAADo/ZhK7bGoJdMQ/s400/KeyValue.png
+         * Key = RowLen + Row + FamilyLen + Column [Family + Qualifier] + TimeStamp
+         *
+         * 2 Types of Filtering:
+         *  1. Row = Row
+         *  2. RowCol = Row + Qualifier
+         */
+        bloomContext.writeBloom(cell);
       }
     }
 
@@ -950,18 +923,8 @@ public class StoreFile {
 
       // increase the number of delete family in the store file
       deleteFamilyCnt++;
-      if (null != this.deleteFamilyBloomFilterWriter) {
-        boolean newKey = true;
-        if (lastDeleteFamilyCell != null) {
-          // hbase:meta does not have blooms. So we need not have special interpretation
-          // of the hbase:meta cells
-          newKey = !CellUtil.matchingRows(cell, lastDeleteFamilyCell);
-        }
-        if (newKey) {
-          this.deleteFamilyBloomFilterWriter.add(cell.getRowArray(),
-              cell.getRowOffset(), cell.getRowLength());
-          this.lastDeleteFamilyCell = cell;
-        }
+      if (this.deleteFamilyBloomFilterWriter != null) {
+        deleteFamilyBloomContext.writeBloom(cell);
       }
     }
 
@@ -975,12 +938,6 @@ public class StoreFile {
 
     @Override
     public void beforeShipped() throws IOException {
-      if (this.lastCell != null) {
-        this.lastCell = KeyValueUtil.toNewKeyCell(this.lastCell);
-      }
-      if (this.lastDeleteFamilyCell != null) {
-        this.lastDeleteFamilyCell = KeyValueUtil.toNewKeyCell(this.lastDeleteFamilyCell);
-      }
       // For now these writer will always be of type ShipperListener true.
       // TODO : Change all writers to be specifically created for compaction context
       writer.beforeShipped();
@@ -1025,11 +982,7 @@ public class StoreFile {
         writer.addGeneralBloomFilter(generalBloomFilterWriter);
         writer.appendFileInfo(BLOOM_FILTER_TYPE_KEY,
             Bytes.toBytes(bloomType.toString()));
-        if (lastBloomKey != null) {
-          writer.appendFileInfo(LAST_BLOOM_KEY, Arrays.copyOfRange(
-              lastBloomKey, lastBloomKeyOffset, lastBloomKeyOffset
-                  + lastBloomKeyLen));
-        }
+        bloomContext.addLastBloomKey(writer);
       }
       return hasGeneralBloom;
     }
@@ -1087,7 +1040,7 @@ public class StoreFile {
     protected BloomFilter deleteFamilyBloomFilter = null;
     protected BloomType bloomFilterType;
     private final HFile.Reader reader;
-    protected TimeRangeTracker timeRangeTracker = null;
+    protected TimeRange timeRange;
     protected long sequenceID = -1;
     private byte[] lastBloomKey;
     private long deleteFamilyCnt = -1;
@@ -1150,7 +1103,7 @@ public class StoreFile {
     }
 
     /**
-     * Warning: Do not write further code which depends on this call. Instead
+     * @deprecated Do not write further code which depends on this call. Instead
      * use getStoreFileScanner() which uses the StoreFileScanner class/interface
      * which is the preferred way to scan a store with higher level concepts.
      *
@@ -1164,7 +1117,7 @@ public class StoreFile {
     }
 
     /**
-     * Warning: Do not write further code which depends on this call. Instead
+     * @deprecated Do not write further code which depends on this call. Instead
      * use getStoreFileScanner() which uses the StoreFileScanner class/interface
      * which is the preferred way to scan a store with higher level concepts.
      *
@@ -1195,12 +1148,8 @@ public class StoreFile {
      * @return false if queried keys definitely don't exist in this StoreFile
      */
     boolean passesTimerangeFilter(Scan scan, long oldestUnexpiredTS) {
-      if (timeRangeTracker == null) {
-        return true;
-      } else {
-        return timeRangeTracker.includesTimeRange(scan.getTimeRange()) &&
-            timeRangeTracker.getMaximumTimestamp() >= oldestUnexpiredTS;
-      }
+      return this.timeRange == null ? true : this.timeRange.includesTimeRange(scan.getTimeRange())
+          && this.timeRange.getMax() >= oldestUnexpiredTS;
     }
 
     /**
@@ -1375,8 +1324,8 @@ public class StoreFile {
               exists = false;
             } else {
               exists =
-                  bloomFilter.contains(kvKey, bloom) ||
-                  bloomFilter.contains(rowBloomKey, bloom);
+                  bloomFilter.contains(kvKey, bloom, BloomType.ROWCOL) ||
+                  bloomFilter.contains(rowBloomKey, bloom, BloomType.ROWCOL);
             }
           } else {
             exists = !keyIsAfterLast
@@ -1616,7 +1565,7 @@ public class StoreFile {
     }
 
     public long getMaxTimestamp() {
-      return timeRangeTracker == null ? Long.MAX_VALUE : timeRangeTracker.getMaximumTimestamp();
+      return timeRange == null ? TimeRange.INITIAL_MAX_TIMESTAMP : timeRange.getMax();
     }
   }
 

@@ -84,7 +84,7 @@ public final class ResponseConverter {
     int requestRegionActionCount = request.getRegionActionCount();
     int responseRegionActionResultCount = response.getRegionActionResultCount();
     if (requestRegionActionCount != responseRegionActionResultCount) {
-      throw new IllegalStateException("Request mutation count=" + responseRegionActionResultCount +
+      throw new IllegalStateException("Request mutation count=" + requestRegionActionCount +
           " does not match response mutation result count=" + responseRegionActionResultCount);
     }
 

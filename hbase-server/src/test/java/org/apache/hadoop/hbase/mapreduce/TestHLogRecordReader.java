@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.mapreduce;
 
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.mapreduce.WALInputFormat.WALRecordReader;
+import java.util.NavigableMap;
 import org.apache.hadoop.hbase.mapreduce.HLogInputFormat.HLogKeyRecordReader;
 import org.apache.hadoop.hbase.regionserver.wal.HLogKey;
 import org.apache.hadoop.hbase.wal.WALKey;
@@ -31,8 +32,8 @@ import org.junit.experimental.categories.Category;
 public class TestHLogRecordReader extends TestWALRecordReader {
 
   @Override
-  protected WALKey getWalKey(final long time) {
-    return new HLogKey(info.getEncodedNameAsBytes(), tableName, time, mvcc);
+  protected WALKey getWalKey(final long time, NavigableMap<byte[], Integer> scopes) {
+    return new HLogKey(info.getEncodedNameAsBytes(), tableName, time, mvcc, scopes);
   }
 
   @Override

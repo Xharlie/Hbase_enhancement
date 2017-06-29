@@ -135,7 +135,7 @@ public class KeyValueUtil {
   public static byte[] copyToNewByteArray(final Cell cell) {
     int v1Length = length(cell);
     byte[] backingBytes = new byte[v1Length];
-    appendToByteArray(cell, backingBytes, 0);
+    appendToByteArray(cell, backingBytes, 0, true);
     return backingBytes;
   }
 
@@ -152,18 +152,15 @@ public class KeyValueUtil {
     return nextOffset;
   }
 
-
   /**************** copy key and value *********************/
 
-  public static int appendToByteArray(final Cell cell, final byte[] output, final int offset) {
-    // TODO when cell instance of KV we can bypass all steps and just do backing single array
-    // copy(?)
+  public static int appendToByteArray(Cell cell, byte[] output, int offset, boolean withTags) {
     int pos = offset;
     pos = Bytes.putInt(output, pos, keyLength(cell));
     pos = Bytes.putInt(output, pos, cell.getValueLength());
     pos = appendKeyTo(cell, output, pos);
     pos = CellUtil.copyValueTo(cell, output, pos);
-    if ((cell.getTagsLength() > 0)) {
+    if (withTags && (cell.getTagsLength() > 0)) {
       pos = Bytes.putAsShort(output, pos, cell.getTagsLength());
       pos = CellUtil.copyTagTo(cell, output, pos);
     }
@@ -171,15 +168,25 @@ public class KeyValueUtil {
   }
 
   /**
-   * The position will be set to the beginning of the new ByteBuffer
-   * @param cell
-   * @return the ByteBuffer containing the cell
+   * Copy the Cell content into the passed buf in KeyValue serialization format.
    */
-  public static ByteBuffer copyToNewByteBuffer(final Cell cell) {
-    byte[] bytes = new byte[length(cell)];
-    appendToByteArray(cell, bytes, 0);
-    ByteBuffer buffer = ByteBuffer.wrap(bytes);
-    return buffer;
+  public static int appendToByteBuffer(Cell cell, ByteBuffer buf, int offset, boolean withTags) {
+    offset = ByteBufferUtils.putInt(buf, offset, keyLength(cell));// Key length
+    offset = ByteBufferUtils.putInt(buf, offset, cell.getValueLength());// Value length
+    offset = ByteBufferUtils.putShort(buf, offset, cell.getRowLength());// RK length
+    offset = CellUtil.copyRowTo(cell, buf, offset);// Row bytes
+    offset = ByteBufferUtils.putByte(buf, offset, cell.getFamilyLength());// CF length
+    offset = CellUtil.copyFamilyTo(cell, buf, offset);// CF bytes
+    offset = CellUtil.copyQualifierTo(cell, buf, offset);// Qualifier bytes
+    offset = ByteBufferUtils.putLong(buf, offset, cell.getTimestamp());// TS
+    offset = ByteBufferUtils.putByte(buf, offset, cell.getTypeByte());// Type
+    offset = CellUtil.copyValueTo(cell, buf, offset);// Value bytes
+    int tagsLength = cell.getTagsLength();
+    if (withTags && (tagsLength > 0)) {
+      offset = ByteBufferUtils.putAsShort(buf, offset, tagsLength);// Tags length
+      offset = CellUtil.copyTagTo(cell, buf, offset);// Tags bytes
+    }
+    return offset;
   }
 
   public static void appendToByteBuffer(final ByteBuffer bb, final KeyValue kv,
@@ -251,7 +258,7 @@ public class KeyValueUtil {
   /**
    * Create a KeyValue for the specified row, family and qualifier that would be
    * larger than or equal to all other possible KeyValues that have the same
-   * row, family, qualifier. Used for reseeking.
+   * row, family, qualifier. Used for reseeking. Should NEVER be returned to a client.
    *
    * @param row
    *          row key
@@ -495,11 +502,12 @@ public class KeyValueUtil {
    * <code>iscreate</code> so doesn't clash with {@link #create(DataInput)}
    *
    * @param in
+   * @param withTags whether the keyvalue should include tags are not
    * @return Created KeyValue OR if we find a length of zero, we will return
    *         null which can be useful marking a stream as done.
    * @throws IOException
    */
-  public static KeyValue iscreate(final InputStream in) throws IOException {
+  public static KeyValue iscreate(final InputStream in, boolean withTags) throws IOException {
     byte[] intBytes = new byte[Bytes.SIZEOF_INT];
     int bytesRead = 0;
     while (bytesRead < intBytes.length) {
@@ -514,7 +522,11 @@ public class KeyValueUtil {
     // TODO: perhaps some sanity check is needed here.
     byte[] bytes = new byte[Bytes.toInt(intBytes)];
     IOUtils.readFully(in, bytes, 0, bytes.length);
-    return new KeyValue(bytes, 0, bytes.length);
+    if (withTags) {
+      return new KeyValue(bytes, 0, bytes.length);
+    } else {
+      return new NoTagsKeyValue(bytes, 0, bytes.length);
+    }
   }
 
   /**
@@ -587,10 +599,18 @@ public class KeyValueUtil {
     return new KeyValue(bytes, 0, length);
   }
 
+  public static int getSerializedSize(Cell cell, boolean withTags) {
+    if (cell instanceof ExtendedCell) {
+      return ((ExtendedCell) cell).getSerializedSize(withTags);
+    }
+    return length(cell.getRowLength(), cell.getFamilyLength(), cell.getQualifierLength(),
+        cell.getValueLength(), cell.getTagsLength(), withTags);
+  }
+
   public static void oswrite(final Cell cell, final OutputStream out, final boolean withTags)
       throws IOException {
-    if (cell instanceof Streamable) {
-      ((Streamable)cell).write(out, withTags);
+    if (cell instanceof ExtendedCell) {
+      ((ExtendedCell)cell).write(out, withTags);
     } else {
       short rlen = cell.getRowLength();
       byte flen = cell.getFamilyLength();
@@ -598,8 +618,6 @@ public class KeyValueUtil {
       int vlen = cell.getValueLength();
       int tlen = cell.getTagsLength();
 
-      // write total length
-      ByteBufferUtils.putInt(out, length(rlen, flen, qlen, vlen, tlen, withTags));
       // write key length
       ByteBufferUtils.putInt(out, keyLength(rlen, flen, qlen));
       // write value length

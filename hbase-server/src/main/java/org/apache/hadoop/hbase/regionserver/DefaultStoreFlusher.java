@@ -67,9 +67,9 @@ public class DefaultStoreFlusher extends StoreFlusher {
         writer = store.createWriterInTmp(cellsCount, store.getFamily().getCompression(),
             /* isCompaction = */ false,
             /* includeMVCCReadpoint = */ true,
-            /* includesTags = */ true,
-            /* shouldDropBehind = */ false);
-        writer.setTimeRangeTracker(snapshot.getTimeRangeTracker());
+            /* includesTags = */ snapshot.isTagsPresent(),
+            /* shouldDropBehind = */ false,
+            snapshot.getTimeRangeTracker());
         IOException e = null;
         try {
           performFlush(scanner, writer, smallestReadPoint, throughputController);
@@ -89,7 +89,7 @@ public class DefaultStoreFlusher extends StoreFlusher {
       scanner.close();
     }
     LOG.info("Flushed, sequenceid=" + cacheFlushId +", memsize="
-        + StringUtils.humanReadableInt(snapshot.getSize()) +
+        + StringUtils.humanReadableInt(snapshot.getDataSize()) +
         ", hasBloomFilter=" + writer.hasGeneralBloom() +
         ", into tmp file " + writer.getPath());
     result.add(writer.getPath());

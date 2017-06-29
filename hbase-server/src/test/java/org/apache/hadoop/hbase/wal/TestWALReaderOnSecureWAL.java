@@ -20,6 +20,7 @@ package org.apache.hadoop.hbase.wal;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -34,10 +35,14 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
+import java.util.NavigableMap;
+import java.nio.ByteBuffer;
+import java.util.TreeMap;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.ByteBufferKeyValue;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.io.crypto.KeyProviderForTesting;
@@ -51,7 +56,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
-
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 // imports for things that haven't moved from regionserver.wal yet.
 import org.apache.hadoop.hbase.regionserver.wal.ProtobufLogReader;
 import org.apache.hadoop.hbase.regionserver.wal.ProtobufLogWriter;
@@ -89,7 +94,8 @@ public class TestWALReaderOnSecureWAL {
     FSUtils.setRootDir(conf, TEST_UTIL.getDataTestDir());
   }
 
-  private Path writeWAL(final WALFactory wals, final String tblName) throws IOException {
+  @SuppressWarnings("deprecation")
+  private Path writeWAL(final WALFactory wals, final String tblName, boolean offheap) throws IOException {
     Configuration conf = TEST_UTIL.getConfiguration();
     String clsName = conf.get(WALCellCodec.WAL_CELL_CODEC_CLASS_KEY, WALCellCodec.class.getName());
     conf.setClass(WALCellCodec.WAL_CELL_CODEC_CLASS_KEY, SecureWALCellCodec.class,
@@ -98,6 +104,11 @@ public class TestWALReaderOnSecureWAL {
       TableName tableName = TableName.valueOf(tblName);
       HTableDescriptor htd = new HTableDescriptor(tableName);
       htd.addFamily(new HColumnDescriptor(tableName.getName()));
+      NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+          Bytes.BYTES_COMPARATOR);
+      for(byte[] fam : htd.getFamiliesKeys()) {
+        scopes.put(fam, 0);
+      }
       HRegionInfo regioninfo = new HRegionInfo(tableName,
         HConstants.EMPTY_START_ROW, HConstants.EMPTY_END_ROW, false);
       final int total = 10;
@@ -110,11 +121,20 @@ public class TestWALReaderOnSecureWAL {
       // Write the WAL
       WAL wal =
           wals.getWAL(regioninfo.getEncodedNameAsBytes(), regioninfo.getTable().getNamespace());
+      MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
       for (int i = 0; i < total; i++) {
         WALEdit kvs = new WALEdit();
-        kvs.add(new KeyValue(row, family, Bytes.toBytes(i), value));
-        wal.append(htd, regioninfo, new WALKey(regioninfo.getEncodedNameAsBytes(), tableName,
-            System.currentTimeMillis()), kvs, true);
+        KeyValue kv = new KeyValue(row, family, Bytes.toBytes(i), value);
+        if (offheap) {
+          ByteBuffer bb = ByteBuffer.allocateDirect(kv.getBuffer().length);
+          bb.put(kv.getBuffer());
+          ByteBufferKeyValue offheapKV = new ByteBufferKeyValue(bb, 0, kv.getLength());
+          kvs.add(offheapKV);
+        } else {
+          kvs.add(kv);
+        }
+        wal.append(regioninfo, new WALKey(regioninfo.getEncodedNameAsBytes(), tableName,
+            System.currentTimeMillis(), mvcc, scopes), kvs, true);
       }
       wal.sync();
       final Path walPath = DefaultWALProvider.getCurrentFileName(wal);
@@ -128,7 +148,14 @@ public class TestWALReaderOnSecureWAL {
   }
   
   @Test()
-  public void testWALReaderOnSecureWAL() throws Exception {
+  public void testWALReaderOnSecureWALWithKeyValues() throws Exception {
+    testSecureWALInternal(false);
+  }
+  @Test()
+  public void testWALReaderOnSecureWALWithOffheapKeyValues() throws Exception {
+    testSecureWALInternal(true);
+  }
+  private void testSecureWALInternal(boolean offheap) throws IOException, FileNotFoundException {
     Configuration conf = TEST_UTIL.getConfiguration();
     conf.setClass("hbase.regionserver.hlog.reader.impl", ProtobufLogReader.class,
       WAL.Reader.class);
@@ -137,7 +164,7 @@ public class TestWALReaderOnSecureWAL {
     conf.setBoolean(WAL_ENCRYPTION, true);
     FileSystem fs = TEST_UTIL.getTestFileSystem();
     final WALFactory wals = new WALFactory(conf, null, currentTest.getMethodName());
-    Path walPath = writeWAL(wals, currentTest.getMethodName());
+    Path walPath = writeWAL(wals, currentTest.getMethodName(), offheap);
 
     // Insure edits are not plaintext
     long length = fs.getFileStatus(walPath).getLen();
@@ -182,7 +209,7 @@ public class TestWALReaderOnSecureWAL {
     conf.setBoolean(WAL_ENCRYPTION, false);
     FileSystem fs = TEST_UTIL.getTestFileSystem();
     final WALFactory wals = new WALFactory(conf, null, currentTest.getMethodName());
-    Path walPath = writeWAL(wals, currentTest.getMethodName());
+    Path walPath = writeWAL(wals, currentTest.getMethodName(), false);
 
     // Ensure edits are plaintext
     long length = fs.getFileStatus(walPath).getLen();

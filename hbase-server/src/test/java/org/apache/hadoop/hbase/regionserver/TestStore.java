@@ -27,6 +27,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import com.google.common.collect.Lists;
 import java.io.IOException;
 import java.lang.ref.SoftReference;
 import java.security.PrivilegedExceptionAction;
@@ -51,14 +52,12 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
-import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Get;
@@ -80,7 +79,6 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManagerTestHelper;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.IncrementingEnvironmentEdge;
-import org.apache.hadoop.hbase.util.ManualEnvironmentEdge;
 import org.apache.hadoop.util.Progressable;
 import org.junit.After;
 import org.junit.Assert;
@@ -90,8 +88,6 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 import org.mockito.Mockito;
-
-import com.google.common.collect.Lists;
 
 /**
  * Test class for the Store
@@ -219,10 +215,11 @@ public class TestStore {
         // Initialize region
         init(name.getMethodName(), conf);
 
-        long size = store.memstore.getFlushableSize();
-        Assert.assertEquals(0, size);
+        MemstoreSize size = store.memstore.getFlushableSize();
+        Assert.assertEquals(0, size.getDataSize());
         LOG.info("Adding some data");
-        long kvSize = store.add(new KeyValue(row, family, qf1, 1, (byte[])null)).getFirst();
+        MemstoreSize kvSize = new MemstoreSize();
+        store.add(new KeyValue(row, family, qf1, 1, (byte[])null), kvSize);
         size = store.memstore.getFlushableSize();
         Assert.assertEquals(kvSize, size);
         // Flush.  Bug #1 from HBASE-10466.  Make sure size calculation on failed flush is right.
@@ -235,7 +232,8 @@ public class TestStore {
         }
         size = store.memstore.getFlushableSize();
         Assert.assertEquals(kvSize, size);
-        store.add(new KeyValue(row, family, qf2, 2, (byte[])null));
+        MemstoreSize kvSize2 = new MemstoreSize();
+        store.add(new KeyValue(row, family, qf2, 2, (byte[])null), kvSize2);
         // Even though we add a new kv, we expect the flushable size to be 'same' since we have
         // not yet cleared the snapshot -- the above flush failed.
         Assert.assertEquals(kvSize, size);
@@ -243,10 +241,11 @@ public class TestStore {
         flushStore(store, id++);
         size = store.memstore.getFlushableSize();
         // Size should be the foreground kv size.
-        Assert.assertEquals(kvSize, size);
+        Assert.assertEquals(kvSize2, size);
         flushStore(store, id++);
         size = store.memstore.getFlushableSize();
-        Assert.assertEquals(0, size);
+        assertEquals(0, size.getDataSize());
+        assertEquals(0, size.getHeapSize());
         return null;
       }
     });
@@ -316,9 +315,9 @@ public class TestStore {
     for (int i = 1; i <= storeFileNum; i++) {
       LOG.info("Adding some data for the store file #" + i);
       timeStamp = EnvironmentEdgeManager.currentTime();
-      this.store.add(new KeyValue(row, family, qf1, timeStamp, (byte[]) null));
-      this.store.add(new KeyValue(row, family, qf2, timeStamp, (byte[]) null));
-      this.store.add(new KeyValue(row, family, qf3, timeStamp, (byte[]) null));
+      this.store.add(new KeyValue(row, family, qf1, timeStamp, (byte[]) null), null);
+      this.store.add(new KeyValue(row, family, qf2, timeStamp, (byte[]) null), null);
+      this.store.add(new KeyValue(row, family, qf3, timeStamp, (byte[]) null), null);
       flush(i);
       edge.incrementTime(sleepTime);
     }
@@ -370,9 +369,9 @@ public class TestStore {
     int storeFileNum = 4;
     for (int i = 1; i <= storeFileNum; i++) {
       LOG.info("Adding some data for the store file #"+i);
-      this.store.add(new KeyValue(row, family, qf1, i, (byte[])null));
-      this.store.add(new KeyValue(row, family, qf2, i, (byte[])null));
-      this.store.add(new KeyValue(row, family, qf3, i, (byte[])null));
+      this.store.add(new KeyValue(row, family, qf1, i, (byte[])null), null);
+      this.store.add(new KeyValue(row, family, qf2, i, (byte[])null), null);
+      this.store.add(new KeyValue(row, family, qf3, i, (byte[])null), null);
       flush(i);
     }
     // after flush; check the lowest time stamp
@@ -423,8 +422,8 @@ public class TestStore {
   public void testEmptyStoreFile() throws IOException {
     init(this.name.getMethodName());
     // Write a store file.
-    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf2, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf2, 1, (byte[])null), null);
     flush(1);
     // Now put in place an empty store file.  Its a little tricky.  Have to
     // do manually with hacked in sequence id.
@@ -461,12 +460,12 @@ public class TestStore {
     init(this.name.getMethodName());
 
     //Put data in memstore
-    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf2, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf3, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf4, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf5, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf6, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf2, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf3, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf4, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf5, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf6, 1, (byte[])null), null);
 
     //Get
     result = HBaseTestingUtility.getFromStoreFile(store,
@@ -485,20 +484,20 @@ public class TestStore {
     init(this.name.getMethodName());
 
     //Put data in memstore
-    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf2, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf2, 1, (byte[])null), null);
     //flush
     flush(1);
 
     //Add more data
-    this.store.add(new KeyValue(row, family, qf3, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf4, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf3, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf4, 1, (byte[])null), null);
     //flush
     flush(2);
 
     //Add more data
-    this.store.add(new KeyValue(row, family, qf5, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf6, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf5, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf6, 1, (byte[])null), null);
     //flush
     flush(3);
 
@@ -524,20 +523,20 @@ public class TestStore {
     init(this.name.getMethodName());
 
     //Put data in memstore
-    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf2, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf2, 1, (byte[])null), null);
     //flush
     flush(1);
 
     //Add more data
-    this.store.add(new KeyValue(row, family, qf3, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf4, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf3, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf4, 1, (byte[])null), null);
     //flush
     flush(2);
 
     //Add more data
-    this.store.add(new KeyValue(row, family, qf5, 1, (byte[])null));
-    this.store.add(new KeyValue(row, family, qf6, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf5, 1, (byte[])null), null);
+    this.store.add(new KeyValue(row, family, qf6, 1, (byte[])null), null);
 
     //Get
     result = HBaseTestingUtility.getFromStoreFile(store,
@@ -554,7 +553,7 @@ public class TestStore {
     this.store.snapshot();
     flushStore(store, id++);
     Assert.assertEquals(storeFilessize, this.store.getStorefiles().size());
-    Assert.assertEquals(0, ((DefaultMemStore)this.store.memstore).cellSet.size());
+    Assert.assertEquals(0, ((AbstractMemStore)this.store.memstore).getActive().getCellsCount());
   }
 
   private void assertCheck() {
@@ -564,189 +563,9 @@ public class TestStore {
     }
   }
 
-  //////////////////////////////////////////////////////////////////////////////
-  // IncrementColumnValue tests
-  //////////////////////////////////////////////////////////////////////////////
-  /*
-   * test the internal details of how ICV works, especially during a flush scenario.
-   */
-  @Test
-  public void testIncrementColumnValue_ICVDuringFlush()
-      throws IOException, InterruptedException {
-    init(this.name.getMethodName());
-
-    long oldValue = 1L;
-    long newValue = 3L;
-    this.store.add(new KeyValue(row, family, qf1,
-        System.currentTimeMillis(),
-        Bytes.toBytes(oldValue)));
-
-    // snapshot the store.
-    this.store.snapshot();
-
-    // add other things:
-    this.store.add(new KeyValue(row, family, qf2,
-        System.currentTimeMillis(),
-        Bytes.toBytes(oldValue)));
-
-    // update during the snapshot.
-    long ret = this.store.updateColumnValue(row, family, qf1, newValue);
-
-    // memstore should have grown by some amount.
-    Assert.assertTrue(ret > 0);
-
-    // then flush.
-    flushStore(store, id++);
-    Assert.assertEquals(1, this.store.getStorefiles().size());
-    // from the one we inserted up there, and a new one
-    Assert.assertEquals(2, ((DefaultMemStore)this.store.memstore).cellSet.size());
-
-    // how many key/values for this row are there?
-    Get get = new Get(row);
-    get.addColumn(family, qf1);
-    get.setMaxVersions(); // all versions.
-    List<Cell> results = new ArrayList<Cell>();
-
-    results = HBaseTestingUtility.getFromStoreFile(store, get);
-    Assert.assertEquals(2, results.size());
-
-    long ts1 = results.get(0).getTimestamp();
-    long ts2 = results.get(1).getTimestamp();
-
-    Assert.assertTrue(ts1 > ts2);
-
-    Assert.assertEquals(newValue, Bytes.toLong(CellUtil.cloneValue(results.get(0))));
-    Assert.assertEquals(oldValue, Bytes.toLong(CellUtil.cloneValue(results.get(1))));
-  }
-
   @After
   public void tearDown() throws Exception {
     EnvironmentEdgeManagerTestHelper.reset();
-  }
-
-  @Test
-  public void testICV_negMemstoreSize()  throws IOException {
-      init(this.name.getMethodName());
-
-    long time = 100;
-    ManualEnvironmentEdge ee = new ManualEnvironmentEdge();
-    ee.setValue(time);
-    EnvironmentEdgeManagerTestHelper.injectEdge(ee);
-    long newValue = 3L;
-    long size = 0;
-
-
-    size += this.store.add(new KeyValue(Bytes.toBytes("200909091000"), family, qf1,
-        System.currentTimeMillis(),
-        Bytes.toBytes(newValue))).getFirst();
-    size += this.store.add(new KeyValue(Bytes.toBytes("200909091200"), family, qf1,
-        System.currentTimeMillis(),
-        Bytes.toBytes(newValue))).getFirst();
-    size += this.store.add(new KeyValue(Bytes.toBytes("200909091300"), family, qf1,
-        System.currentTimeMillis(),
-        Bytes.toBytes(newValue))).getFirst();
-    size += this.store.add(new KeyValue(Bytes.toBytes("200909091400"), family, qf1,
-        System.currentTimeMillis(),
-        Bytes.toBytes(newValue))).getFirst();
-    size += this.store.add(new KeyValue(Bytes.toBytes("200909091500"), family, qf1,
-        System.currentTimeMillis(),
-        Bytes.toBytes(newValue))).getFirst();
-
-
-    for ( int i = 0 ; i < 10000 ; ++i) {
-      newValue++;
-
-      long ret = this.store.updateColumnValue(row, family, qf1, newValue);
-      long ret2 = this.store.updateColumnValue(row2, family, qf1, newValue);
-
-      if (ret != 0) System.out.println("ret: " + ret);
-      if (ret2 != 0) System.out.println("ret2: " + ret2);
-
-      Assert.assertTrue("ret: " + ret, ret >= 0);
-      size += ret;
-      Assert.assertTrue("ret2: " + ret2, ret2 >= 0);
-      size += ret2;
-
-
-      if (i % 1000 == 0)
-        ee.setValue(++time);
-    }
-
-    long computedSize=0;
-    for (Cell cell : ((DefaultMemStore)this.store.memstore).cellSet) {
-      long kvsize = DefaultMemStore.heapSizeChange(cell, true);
-      //System.out.println(kv + " size= " + kvsize + " kvsize= " + kv.heapSize());
-      computedSize += kvsize;
-    }
-    Assert.assertEquals(computedSize, size);
-  }
-
-  @Test
-  public void testIncrementColumnValue_SnapshotFlushCombo() throws Exception {
-    ManualEnvironmentEdge mee = new ManualEnvironmentEdge();
-    EnvironmentEdgeManagerTestHelper.injectEdge(mee);
-    init(this.name.getMethodName());
-
-    long oldValue = 1L;
-    long newValue = 3L;
-    this.store.add(new KeyValue(row, family, qf1,
-        EnvironmentEdgeManager.currentTime(),
-        Bytes.toBytes(oldValue)));
-
-    // snapshot the store.
-    this.store.snapshot();
-
-    // update during the snapshot, the exact same TS as the Put (lololol)
-    long ret = this.store.updateColumnValue(row, family, qf1, newValue);
-
-    // memstore should have grown by some amount.
-    Assert.assertTrue(ret > 0);
-
-    // then flush.
-    flushStore(store, id++);
-    Assert.assertEquals(1, this.store.getStorefiles().size());
-    Assert.assertEquals(1, ((DefaultMemStore)this.store.memstore).cellSet.size());
-
-    // now increment again:
-    newValue += 1;
-    this.store.updateColumnValue(row, family, qf1, newValue);
-
-    // at this point we have a TS=1 in snapshot, and a TS=2 in kvset, so increment again:
-    newValue += 1;
-    this.store.updateColumnValue(row, family, qf1, newValue);
-
-    // the second TS should be TS=2 or higher., even though 'time=1' right now.
-
-
-    // how many key/values for this row are there?
-    Get get = new Get(row);
-    get.addColumn(family, qf1);
-    get.setMaxVersions(); // all versions.
-    List<Cell> results = new ArrayList<Cell>();
-
-    results = HBaseTestingUtility.getFromStoreFile(store, get);
-    Assert.assertEquals(2, results.size());
-
-    long ts1 = results.get(0).getTimestamp();
-    long ts2 = results.get(1).getTimestamp();
-
-    Assert.assertTrue(ts1 > ts2);
-    Assert.assertEquals(newValue, Bytes.toLong(CellUtil.cloneValue(results.get(0))));
-    Assert.assertEquals(oldValue, Bytes.toLong(CellUtil.cloneValue(results.get(1))));
-
-    mee.setValue(2); // time goes up slightly
-    newValue += 1;
-    this.store.updateColumnValue(row, family, qf1, newValue);
-
-    results = HBaseTestingUtility.getFromStoreFile(store, get);
-    Assert.assertEquals(2, results.size());
-
-    ts1 = results.get(0).getTimestamp();
-    ts2 = results.get(1).getTimestamp();
-
-    Assert.assertTrue(ts1 > ts2);
-    Assert.assertEquals(newValue, Bytes.toLong(CellUtil.cloneValue(results.get(0))));
-    Assert.assertEquals(oldValue, Bytes.toLong(CellUtil.cloneValue(results.get(1))));
   }
 
   @Test
@@ -770,9 +589,9 @@ public class TestStore {
         init(name.getMethodName(), conf);
 
         LOG.info("Adding some data");
-        store.add(new KeyValue(row, family, qf1, 1, (byte[])null));
-        store.add(new KeyValue(row, family, qf2, 1, (byte[])null));
-        store.add(new KeyValue(row, family, qf3, 1, (byte[])null));
+        store.add(new KeyValue(row, family, qf1, 1, (byte[])null), null);
+        store.add(new KeyValue(row, family, qf2, 1, (byte[])null), null);
+        store.add(new KeyValue(row, family, qf3, 1, (byte[])null), null);
 
         LOG.info("Before flush, we should have no files");
 
@@ -903,7 +722,7 @@ public class TestStore {
 
     List<Cell> kvList1 = getKeyValueSet(timestamps1,numRows, qf1, family);
     for (Cell kv : kvList1) {
-      this.store.add(KeyValueUtil.ensureKeyValue(kv));
+      this.store.add(kv, null);
     }
 
     this.store.snapshot();
@@ -911,7 +730,7 @@ public class TestStore {
 
     List<Cell> kvList2 = getKeyValueSet(timestamps2,numRows, qf1, family);
     for(Cell kv : kvList2) {
-      this.store.add(KeyValueUtil.ensureKeyValue(kv));
+      this.store.add(kv, null);
     }
 
     List<Cell> result;
@@ -1041,7 +860,7 @@ public class TestStore {
     assertEquals(0, this.store.getStorefilesCount());
 
     // add some data, flush
-    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null), null);
     flush(1);
     assertEquals(1, this.store.getStorefilesCount());
 
@@ -1088,7 +907,7 @@ public class TestStore {
     assertEquals(0, this.store.getStorefilesCount());
 
     // add some data, flush
-    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null));
+    this.store.add(new KeyValue(row, family, qf1, 1, (byte[])null), null);
     flush(1);
     // add one more file
     addStoreFile();

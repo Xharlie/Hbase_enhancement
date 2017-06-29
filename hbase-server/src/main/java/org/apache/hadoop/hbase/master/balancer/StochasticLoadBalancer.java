@@ -226,7 +226,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
         return null;
       }
       clusterState = new HashMap<ServerName, List<HRegionInfo>>(clusterState);
-      clusterState.remove(masterServerName);
+      if (!isEmbedded) clusterState.remove(masterServerName);
     }
 
     // On clusters with lots of HFileLinks or lots of reference files,

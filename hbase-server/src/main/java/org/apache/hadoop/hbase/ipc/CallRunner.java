@@ -20,10 +20,9 @@ import java.nio.channels.ClosedChannelException;
 
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.ipc.RpcServer.Call;
 import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
+import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.Pair;
-import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.htrace.Trace;
 import org.apache.htrace.TraceScope;
@@ -37,7 +36,7 @@ import com.google.protobuf.Message;
  */
 @InterfaceAudience.Private
 public class CallRunner {
-  private RpcServer.Call call;
+  private RpcCall call;
   private RpcServerInterface rpcServer;
   private MonitoredRPCHandler status;
 
@@ -47,15 +46,19 @@ public class CallRunner {
    * time we occupy heap.
    */
   // The constructor is shutdown so only RpcServer in this class can make one of these.
-  CallRunner(final RpcServerInterface rpcServer, final RpcServer.Call call) {
+  CallRunner(final RpcServerInterface rpcServer, final RpcCall call) {
     this.call = call;
     this.rpcServer = rpcServer;
     // Add size of the call to queue size.
     this.rpcServer.addCallSize(call.getSize());
   }
 
-  public RpcServer.Call getCall() {
+  public RpcCall getRpcCall() {
     return call;
+  }
+
+  public RpcServerInterface getRpcServer() {
+    return rpcServer;
   }
 
   public void setStatus(MonitoredRPCHandler status) {
@@ -65,29 +68,29 @@ public class CallRunner {
   /**
    * Cleanup after ourselves... let go of references.
    */
-  private void cleanup() {
+  public void cleanup() {
     this.call = null;
     this.rpcServer = null;
   }
 
   public void run() {
     try {
-      if (!call.getConnect().isConnectionOpen()) {
+      if (call.disconnectSince() >= 0) {
         if (RpcServer.LOG.isDebugEnabled()) {
           RpcServer.LOG.debug(Thread.currentThread().getName() + ": skipped " + call);
         }
         return;
       }
       this.status.setStatus("Setting up call");
-      this.status.setConnection(call.getConnect().getHostAddress(), call.getConnect().getRemotePort());
+      this.status.setConnection(call.getRemoteAddress().getHostAddress(), call.getRemotePort());
       if (RpcServer.LOG.isTraceEnabled()) {
-        UserGroupInformation remoteUser = call.getConnect().getUser();
+        User remoteUser = call.getRequestUser();
         RpcServer.LOG.trace(call.toShortString() + " executing as " +
-            ((remoteUser == null) ? "NULL principal" : remoteUser.getUserName()));
+            ((remoteUser == null) ? "NULL principal" : remoteUser.getName()));
       }
       Throwable errorThrowable = null;
       String error = null;
-      Pair<Message, PayloadCarryingRpcController> resultPair = null;
+      Pair<Message, CellScanner> resultPair = null;
       RpcServer.CurCall.set(call);
       TraceScope traceScope = null;
       try {
@@ -95,13 +98,15 @@ public class CallRunner {
           throw new ServerNotRunningYetException("Server " + rpcServer.getListenerAddress()
               + " is not running yet");
         }
-        if (call.getTinfo() != null) {
-          traceScope = Trace.startSpan(call.toTraceString(), call.getTinfo());
+        if (call.getTraceInfo() != null) {
+          String serviceName =
+              call.getService() != null ? call.getService().getDescriptorForType().getName() : "";
+          String methodName = (call.getMethod() != null) ? call.getMethod().getName() : "";
+          String traceString = serviceName + "." + methodName;
+          traceScope = Trace.startSpan(traceString, call.getTraceInfo());
         }
         // make the call
-        resultPair =
-            this.rpcServer.call(call.getService(), call.getMethodDescriptor(), call.getParam(),
-              call.getCellScanner(), call.getTimestamp(), this.status, call);
+        resultPair = this.rpcServer.call(call, this.status);
       } catch (Throwable e) {
         RpcServer.LOG.debug(Thread.currentThread().getName() + ": " + call.toShortString(), e);
         errorThrowable = e;
@@ -117,15 +122,12 @@ public class CallRunner {
       }
       // Set the response for undelayed calls and delayed calls with
       // undelayed responses.
-      // We should send response if call has exeception or has no exception and is not delegated.
-      if(resultPair == null || resultPair != null &&  !resultPair.getSecond().getResponseDelegated()) {
-        if (!call.isDelayed() || !call.isReturnValueDelayed()) {
-          Message param = resultPair != null ? resultPair.getFirst() : null;
-          CellScanner cells = resultPair != null ? resultPair.getSecond().cellScanner() : null;
-          call.setResponse(param, cells, errorThrowable, error);
-        }
-        call.sendResponseIfReady();
+      if (!call.isDelayed() || !call.isReturnValueDelayed()) {
+        Message param = resultPair != null ? resultPair.getFirst() : null;
+        CellScanner cells = resultPair != null ? resultPair.getSecond() : null;
+        call.setResponse(param, cells, errorThrowable, error);
       }
+      call.sendResponseIfReady();
       this.status.markComplete("Sent response");
       this.status.pause("Waiting for a call");
     } catch (OutOfMemoryError e) {

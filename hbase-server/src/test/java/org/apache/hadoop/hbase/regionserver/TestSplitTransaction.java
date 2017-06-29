@@ -177,6 +177,7 @@ public class TestSplitTransaction {
     HStore storeMock = Mockito.mock(HStore.class);
     when(storeMock.hasReferences()).thenReturn(true);
     when(storeMock.getFamily()).thenReturn(new HColumnDescriptor("cf"));
+    when(storeMock.getSizeToFlush()).thenReturn(new MemstoreSize());
     when(storeMock.close()).thenReturn(ImmutableList.<StoreFile>of());
     this.parent.stores.put(Bytes.toBytes(""), storeMock);
 

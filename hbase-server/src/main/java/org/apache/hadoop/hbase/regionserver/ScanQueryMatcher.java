@@ -145,21 +145,22 @@ public class ScanQueryMatcher implements ShipperListener {
   private final boolean isReversed;
 
   /**
+   * True if we are doing a 'Get' Scan. Every Get is actually a one-row Scan.
+   */
+  private final boolean get;
+
+  /**
    * Construct a QueryMatcher for a scan
-   * @param scan
    * @param scanInfo The store's immutable scan info
-   * @param columns
    * @param scanType Type of the scan
    * @param earliestPutTs Earliest put seen in any of the store files.
-   * @param oldestUnexpiredTS the oldest timestamp we are interested in,
-   *  based on TTL
-   * @param regionCoprocessorHost 
-   * @throws IOException 
+   * @param oldestUnexpiredTS the oldest timestamp we are interested in, based on TTL
    */
   public ScanQueryMatcher(Scan scan, ScanInfo scanInfo, NavigableSet<byte[]> columns,
       ScanType scanType, long readPointToUse, long earliestPutTs, long oldestUnexpiredTS,
       long now, RegionCoprocessorHost regionCoprocessorHost) throws IOException {
     this.tr = scan.getTimeRange();
+    this.get = scan.isGetScan();
     this.rowComparator = scanInfo.getComparator();
     this.regionCoprocessorHost = regionCoprocessorHost;
     this.deletes =  instantiateDeleteTracker();
@@ -228,8 +229,8 @@ public class ScanQueryMatcher implements ShipperListener {
    * @param now the current server time
    * @param dropDeletesFromRow The inclusive left bound of the range; can be EMPTY_START_ROW.
    * @param dropDeletesToRow The exclusive right bound of the range; can be EMPTY_END_ROW.
-   * @param regionCoprocessorHost 
-   * @throws IOException 
+   * @param regionCoprocessorHost
+   * @throws IOException
    */
   public ScanQueryMatcher(Scan scan, ScanInfo scanInfo, NavigableSet<byte[]> columns,
       long readPointToUse, long earliestPutTs, long oldestUnexpiredTS, long now,
@@ -277,27 +278,33 @@ public class ScanQueryMatcher implements ShipperListener {
     if (filter != null && filter.filterAllRemaining()) {
       return MatchCode.DONE_SCAN;
     }
-    int ret = this.rowComparator.compareRows(curCell, cell);
-    if (!this.isReversed) {
-      if (ret <= -1) {
-        return MatchCode.DONE;
-      } else if (ret >= 1) {
-        // could optimize this, if necessary?
-        // Could also be called SEEK_TO_CURRENT_ROW, but this
-        // should be rare/never happens.
-        return MatchCode.SEEK_NEXT_ROW;
+    if (curCell != null) {
+      int ret = this.rowComparator.compareRows(curCell, cell);
+      if (!this.isReversed) {
+        if (ret <= -1) {
+          return MatchCode.DONE;
+        } else if (ret >= 1) {
+          // could optimize this, if necessary?
+          // Could also be called SEEK_TO_CURRENT_ROW, but this
+          // should be rare/never happens.
+          return MatchCode.SEEK_NEXT_ROW;
+        }
+      } else {
+        if (ret <= -1) {
+          return MatchCode.SEEK_NEXT_ROW;
+        } else if (ret >= 1) {
+          return MatchCode.DONE;
+        }
       }
     } else {
-      if (ret <= -1) {
-        return MatchCode.SEEK_NEXT_ROW;
-      } else if (ret >= 1) {
-        return MatchCode.DONE;
-      }
+      // Since the curCell is null it means we are already sure that we have moved over to the next row
+      return MatchCode.DONE; 
     }
 
     // optimize case.
-    if (this.stickyNextRow)
+    if (this.stickyNextRow) {
       return MatchCode.SEEK_NEXT_ROW;
+    }
 
     if (this.columns.done()) {
       stickyNextRow = true;
@@ -312,7 +319,7 @@ public class ScanQueryMatcher implements ShipperListener {
     // check if the cell is expired by cell TTL
     if (HStore.isCellTTLExpired(cell, this.oldestUnexpiredTS, this.now)) {
       return MatchCode.SKIP;
-    }    
+    }
 
     /*
      * The delete logic is pretty complicated now.
@@ -347,10 +354,10 @@ public class ScanQueryMatcher implements ShipperListener {
         }
         // Can't early out now, because DelFam come before any other keys
       }
-     
+
       if ((!isUserScan)
           && timeToPurgeDeletes > 0
-          && (EnvironmentEdgeManager.currentTime() - timestamp) 
+          && (EnvironmentEdgeManager.currentTime() - timestamp)
             <= timeToPurgeDeletes) {
         return MatchCode.INCLUDE;
       } else if (retainDeletesInOutput || mvccVersion > maxReadPointToTrackVersions) {
@@ -391,7 +398,16 @@ public class ScanQueryMatcher implements ShipperListener {
         }
     }
 
-    int timestampComparison = tr.compare(timestamp);
+    // NOTE: Cryptic stuff!
+    // if the timestamp is HConstants.OLDEST_TIMESTAMP, then this is a fake cell made to prime a
+    // Scanner; See KeyValueUTil#createLastOnRow. This Cell should never end up returning out of
+    // here a matchcode of INCLUDE else we will return to the client a fake Cell. If we call
+    // TimeRange, it will return 0 because it doesn't deal in OLDEST_TIMESTAMP and we will fall
+    // into the later code where we could return a matchcode of INCLUDE. See HBASE-16074 "ITBLL
+    // fails, reports lost big or tiny families" for a horror story. Check here for
+    // OLDEST_TIMESTAMP. TimeRange#compare is about more generic timestamps, between 0L and
+    // Long.MAX_LONG. It doesn't do OLDEST_TIMESTAMP weird handling.
+    int timestampComparison = timestamp == HConstants.OLDEST_TIMESTAMP? -1: tr.compare(timestamp);
     if (timestampComparison >= 1) {
       return MatchCode.SKIP;
     } else if (timestampComparison <= -1) {
@@ -480,22 +496,27 @@ public class ScanQueryMatcher implements ShipperListener {
     }
   }
 
+  /**
+   * @return Returns false if we know there are no more rows to be scanned (We've reached the
+   * <code>stopRow</code> or we are scanning on row only because this Scan is for a Get, etc.
+   */
   public boolean moreRowsMayExistAfter(Cell kv) {
-    if (this.isReversed) {
-      if (rowComparator.compareRows(kv, stopRow, 0, stopRow.length) <= 0) {
-        return false;
-      } else {
-        return true;
-      }
-    }
-    if (!Bytes.equals(stopRow , HConstants.EMPTY_END_ROW) &&
-        rowComparator.compareRows(kv, stopRow, 0, stopRow.length) >= 0) {
-      // KV >= STOPROW
-      // then NO there is nothing left.
+    // If a 'get' Scan -- we are doing a Get (every Get is a single-row Scan in implementation) --
+    // then we are looking at one row only, the one specified in the Get coordinate..so we know
+    // for sure that there are no more rows on this Scan
+    if (this.get) {
       return false;
-    } else {
+    }
+    // If no stopRow, return that there may be more rows. The tests that follow depend on a
+    // non-empty, non-default stopRow so this little test below short-circuits out doing the
+    // following compares.
+    if (this.stopRow == null || this.stopRow == HConstants.EMPTY_BYTE_ARRAY) {
       return true;
     }
+    return this.isReversed?
+      rowComparator.compareRows(kv, stopRow, 0, stopRow.length) > 0:
+      Bytes.equals(stopRow, HConstants.EMPTY_END_ROW) ||
+        rowComparator.compareRows(kv, stopRow, 0, stopRow.length) < 0;
   }
 
   /**
@@ -547,10 +568,6 @@ public class ScanQueryMatcher implements ShipperListener {
       return CellUtil.createFirstOnRowCol(kv, nextColumn.getBuffer(), nextColumn.getOffset(),
           nextColumn.getLength());
     }
-  }
-
-  public Cell getKeyForNextRow(Cell c) {
-    return CellUtil.createLastOnRow(c);
   }
 
   /**

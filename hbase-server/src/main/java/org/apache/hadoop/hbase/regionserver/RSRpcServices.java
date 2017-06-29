@@ -216,7 +216,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   private static final boolean DEFAULT_REGION_SERVER_SCAN_HEARTBEAT = false;
 
   // Request counter. (Includes requests that are not serviced by regions.)
-  final Counter requestCount = new Counter();
+  public final Counter requestCount = new Counter();
 
   // Request counter for get included in multi action
   final Counter multiGetRequestCount = new Counter();
@@ -234,17 +234,18 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   final Counter rpcScanRequestCount = new Counter();
 
   // Request counter for rpc multi
-  final Counter rpcMultiRequestCount = new Counter();
+  public final Counter rpcMultiRequestCount = new Counter();
 
   // Request counter for rpc mutate
-  final Counter rpcMutateRequestCount = new Counter();
+  public final Counter rpcMutateRequestCount = new Counter();
 
   // Server to handle client requests.
   final RpcServerInterface rpcServer;
   final InetSocketAddress isa;
 
-  private final HRegionServer regionServer;
+  protected final HRegionServer regionServer;
   private final long maxScannerResultSize;
+  private final long maxGetResultSize;
 
   // The reference to the priority extraction function
   private final PriorityFunction priority;
@@ -317,7 +318,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     * An RpcCallBack that creates a list of scanners that needs to perform callBack operation on
     * completion of multiGets.
     */
-   static class RegionScannersCloseCallBack implements RpcCallback {
+   public static class RegionScannersCloseCallBack implements RpcCallback {
     private final List<RegionScanner> scanners = new ArrayList<RegionScanner>();
 
     public void addScanner(RegionScanner scanner) {
@@ -681,7 +682,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   private List<CellScannable> doNonAtomicRegionMutation(final Region region,
       final OperationQuota quota, final RegionAction actions, final CellScanner cellScanner,
       final RegionActionResult.Builder builder, List<CellScannable> cellsToReturn, long nonceGroup,
-      final RegionScannersCloseCallBack closeCallBack, RpcCallContext context) {
+      final RegionScannersCloseCallBack closeCallBack, RpcCallContext context) throws ServiceException {
     // Gather up CONTIGUOUS Puts and Deletes in this mutations List.  Idea is that rather than do
     // one at a time, we instead pass them in batch.  Be aware that the corresponding
     // ResultOrException instance that matches each Put or Delete is then added down in the
@@ -696,7 +697,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
           try {
             Get get = ProtobufUtil.toGet(action.getGet());
             if (context != null) {
-              r = get(get, ((HRegion) region), closeCallBack, context);
+              r = get(get, ((HRegion) region), closeCallBack, context, null, null);
             } else {
               r = region.get(get);
             }
@@ -773,6 +774,8 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
         rpcServer.getMetrics().exception(ie);
         resultOrExceptionBuilder = ResultOrException.newBuilder().
           setException(ResponseConverter.buildException(ie));
+      }catch (ServiceException e) {
+        throw e;
       }
       if (resultOrExceptionBuilder != null) {
         // Propagate index.
@@ -785,128 +788,6 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       doBatchOp(builder, region, quota, mutations, cellScanner);
     }
     return cellsToReturn;
-  }
-
-  /**
-   * Run through the regionMutation <code>rm</code> and per Mutation, do the work, and then when
-   * done, add an instance of a {@link ResultOrException} that corresponds to each Mutation.
-   * @param region
-   * @param actions
-   * @param cellScanner
-   * @param builder
-   * @param cellsToReturn  Could be null. May be allocated in this method.  This is what this
-   * method returns as a 'result'.
-   * @return Return the <code>cellScanner</code> passed
-   */
-  private Pair<List<CellScannable>,Boolean> doNonAtomicRegionMutation(
-      final OperationQuota quota, final RegionAction actions, final CellScanner cellScanner,
-      long nonceGroup, final RegionScannersCloseCallBack closeCallBack, RpcCallContext context,
-      Boolean mutateOnly, ResponseToolKit responseTK) {
-    // Gather up CONTIGUOUS Puts and Deletes in this mutations List.  Idea is that rather than do
-    // one at a time, we instead pass them in batch.  Be aware that the corresponding
-    // ResultOrException instance that matches each Put or Delete is then added down in the
-    // doBatchOp call.  We should be staying aligned though the Put and Delete are deferred/batched
-    List<ClientProtos.Action> mutations = null;
-    for (ClientProtos.Action action: actions.getActionList()) {
-      ClientProtos.ResultOrException.Builder resultOrExceptionBuilder = null;
-      try {
-        Result r = null;
-        if (action.hasGet()) {
-          mutateOnly = false;
-          long before = EnvironmentEdgeManager.currentTime();
-          try {
-            Get get = ProtobufUtil.toGet(action.getGet());
-            r = get(get, ((HRegion) responseTK.getRegion()), closeCallBack, context);
-          } finally {
-            if (regionServer.metricsRegionServer != null) {
-              regionServer.metricsRegionServer.updateGet(
-                EnvironmentEdgeManager.currentTime() - before);
-            }
-            multiGetRequestCount.increment();
-          }
-        } else if (action.hasServiceCall()) {
-          mutateOnly = false;
-          resultOrExceptionBuilder = ResultOrException.newBuilder();
-          try {
-            Message result = execServiceOnRegion(responseTK.getRegion(), action.getServiceCall());
-            ClientProtos.CoprocessorServiceResult.Builder serviceResultBuilder =
-                ClientProtos.CoprocessorServiceResult.newBuilder();
-            resultOrExceptionBuilder.setServiceResult(
-                serviceResultBuilder.setValue(
-                  serviceResultBuilder.getValueBuilder()
-                    .setName(result.getClass().getName())
-                    .setValue(result.toByteString())));
-          } catch (IOException ioe) {
-            rpcServer.getMetrics().exception(ioe);
-            resultOrExceptionBuilder.setException(ResponseConverter.buildException(ioe));
-          }
-        } else if (action.hasMutation()) {
-          MutationType type = action.getMutation().getMutateType();
-          if (type != MutationType.PUT && type != MutationType.DELETE && mutations != null &&
-              !mutations.isEmpty()) {
-            // Flush out any Puts or Deletes already collected.
-            doBatchOp(responseTK.getRegionActionResultBuilder(), responseTK.getRegion(), quota, mutations, cellScanner);
-            mutations.clear();
-          }
-          switch (type) {
-          case APPEND:
-            r = append(responseTK.getRegion(), quota, action.getMutation(), cellScanner, nonceGroup);
-            mutateOnly = false;
-            break;
-          case INCREMENT:
-            r = increment(responseTK.getRegion(), quota, action.getMutation(), cellScanner,  nonceGroup);
-            mutateOnly = false;
-            break;
-          case PUT:
-            putRequestCount.increment();
-          case DELETE:
-            // Collect the individual mutations and apply in a batch
-            if (mutations == null) {
-              mutations = new ArrayList<ClientProtos.Action>(actions.getActionCount());
-            }
-            mutations.add(action);
-            break;
-          default:
-            throw new DoNotRetryIOException("Unsupported mutate type: " + type.name());
-          }
-        } else {
-          throw new HBaseIOException("Unexpected Action type");
-        }
-        if (r != null) {
-          ClientProtos.Result pbResult = null;
-          if (isClientCellBlockSupport(context)) {
-            pbResult = ProtobufUtil.toResultNoData(r);
-            //  Hard to guess the size here.  Just make a rough guess.
-            if (responseTK.getCellsToReturn() == null) responseTK.setCellsToReturn(new ArrayList<CellScannable>());
-            responseTK.getCellsToReturn().add(r);
-          } else {
-            pbResult = ProtobufUtil.toResult(r);
-          }
-          resultOrExceptionBuilder =
-            ClientProtos.ResultOrException.newBuilder().setResult(pbResult);
-        }
-        // Could get to here and there was no result and no exception.  Presumes we added
-        // a Put or Delete to the collecting Mutations List for adding later.  In this
-        // case the corresponding ResultOrException instance for the Put or Delete will be added
-        // down in the doBatchOp method call rather than up here.
-      } catch (IOException ie) {
-        rpcServer.getMetrics().exception(ie);
-        resultOrExceptionBuilder = ResultOrException.newBuilder().
-          setException(ResponseConverter.buildException(ie));
-      }
-      if (resultOrExceptionBuilder != null) {
-        // Propagate index.
-        resultOrExceptionBuilder.setIndex(action.getIndex());
-        responseTK.getRegionActionResultBuilder().addResultOrException(resultOrExceptionBuilder.build());
-      }
-    }
-    Boolean responseDelegated = false;
-    // Finish up any outstanding mutations
-    if (mutations != null && !mutations.isEmpty()) {
-      responseTK.setMutations(mutations);
-      responseDelegated = doBatchOp(quota, cellScanner, mutateOnly, responseTK);
-    }
-    return new Pair<List<CellScannable>,Boolean>(responseTK.getCellsToReturn(), responseDelegated);
   }
 
   /**
@@ -986,62 +867,6 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     }
   }
 
-  /**  used by SEDA
-   +   * Execute a list of Put/Delete mutations.
-   +   * delegate the task of sending response to another thread
-   +   */
-  private boolean doBatchOp(final OperationQuota quota, final CellScanner cells,
-                            Boolean mutateOnly, ResponseToolKit responseTK) {
-    if (!mutateOnly) {
-      doBatchOp(responseTK.getRegionActionResultBuilder(), responseTK.getRegion(), quota, responseTK.getMutations(), cells);
-      return false;
-    }
-    Mutation[] mArray = new Mutation[responseTK.getMutations().size()];
-    long before = EnvironmentEdgeManager.currentTime();
-    boolean batchContainsPuts = false, batchContainsDelete = false;
-    try {
-      int i = 0;
-      for (ClientProtos.Action action : responseTK.getMutations()) {
-        MutationProto m = action.getMutation();
-        Mutation mutation;
-        if (m.getMutateType() == MutationType.PUT) {
-          mutation = ProtobufUtil.toPut(m, cells);
-          batchContainsPuts = true;
-        } else {
-          mutation = ProtobufUtil.toDelete(m, cells);
-          batchContainsDelete = true;
-        }
-        mArray[i++] = mutation;
-        quota.addMutation(mutation);
-      }
-
-      if (!responseTK.getRegion().getRegionInfo().isMetaTable()) {
-        regionServer.cacheFlusher.reclaimMemStoreMemory();
-      }
-      responseTK.setRegionServer(regionServer);
-      responseTK.batchContainsPuts = batchContainsPuts;
-      responseTK.batchContainsDelete = batchContainsDelete;
-      responseTK.before = before;
-      responseTK.mArray = mArray;
-      ((HRegion) responseTK.getRegion()).put(responseTK);
-      return true;
-    } catch (IOException ie) {
-      for (int i = 0; i < responseTK.getMutations().size(); i++) {
-        responseTK.getRegionActionResultBuilder().addResultOrException(getResultOrException(ie, responseTK.getMutations().get(i).getIndex()));
-      }
-    }
-    if (regionServer.metricsRegionServer != null) {
-      long after = EnvironmentEdgeManager.currentTime();
-      if (batchContainsPuts) {
-        regionServer.metricsRegionServer.updatePut(after - before);
-      }
-      if (batchContainsDelete) {
-        regionServer.metricsRegionServer.updateDelete(after - before);
-      }
-    }
-    return false;
-  }
-
   /**
    * Execute a list of Put/Delete mutations. The function returns OperationStatus instead of
    * constructing MultiResponse to save a possible loop if caller doesn't need MultiResponse.
@@ -1118,7 +943,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     }
   }
 
-  private void closeAllScanners() {
+  protected void closeAllScanners() {
     // Close any outstanding scanners. Means they'll get an UnknownScanner
     // exception next time they come in.
     for (Map.Entry<String, RegionScannerHolder> e : scanners.entrySet()) {
@@ -1180,6 +1005,9 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     maxScannerResultSize = rs.conf.getLong(
       HConstants.HBASE_SERVER_SCANNER_MAX_RESULT_SIZE_KEY,
       HConstants.DEFAULT_HBASE_SERVER_SCANNER_MAX_RESULT_SIZE);
+    maxGetResultSize = rs.conf.getLong(
+      HConstants.HBASE_SERVER_GET_MAX_RESULT_SIZE_KEY,
+      HConstants.DEFAULT_HBASE_SERVER_GET_MAX_RESULT_SIZE);
     rpcTimeout = rs.conf.getInt(
       HConstants.HBASE_RPC_TIMEOUT_KEY,
       HConstants.DEFAULT_HBASE_RPC_TIMEOUT);
@@ -1269,7 +1097,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
    * @throws IOException if the specifier is not null,
    *    but failed to find the region
    */
-  Region getRegion(
+  public Region getRegion(
       final RegionSpecifier regionSpecifier) throws IOException {
     ByteString value = regionSpecifier.getValue();
     RegionSpecifierType type = regionSpecifier.getType();
@@ -1299,11 +1127,11 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     return regionServer.getRegionServerQuotaManager();
   }
 
-  void start() {
+  protected void start() {
     rpcServer.start();
   }
 
-  void stop() {
+  protected void stop() {
     closeAllScanners();
     rpcServer.stop();
   }
@@ -2230,6 +2058,10 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       final GetRequest request) throws ServiceException {
     long before = EnvironmentEdgeManager.currentTime();
     OperationQuota quota = null;
+    if (!request.hasScannerId() && !request.hasRegion()) {
+      throw new ServiceException(
+          new DoNotRetryIOException("Missing required input: scannerId or region info"));
+    }
     try {
       checkOpen();
       requestCount.increment();
@@ -2259,7 +2091,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
         }
         if (existence == null) {
           if (context != null) {
-            r = get(clientGet, ((HRegion) region), null, context);
+            r = get(clientGet, ((HRegion) region), null, context, request, builder);
           } else {
             // for test purpose
             r = region.get(clientGet);
@@ -2284,7 +2116,12 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       if (r != null) {
         quota.addGetResult(r);
       }
-      return builder.build();
+
+      if (r != null && r.isPartial()) {
+        builder.setMoreResultsInRegion(true);
+      }
+      GetResponse response = builder.build();
+      return response;
     } catch (IOException ie) {
       throw new ServiceException(ie);
     } finally {
@@ -2298,10 +2135,87 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     }
   }
 
+  private void addScannerLeaseBack(Leases.Lease lease) {
+    try {
+      regionServer.leases.addLease(lease);
+    } catch (LeaseStillHeldException e) {
+      // should not happen as the scanner id is unique.
+      throw new AssertionError(e);
+    }
+  }
+  private void checkScanNextCallSeq(GetRequest request, RegionScannerHolder rsh)
+      throws OutOfOrderScannerNextException {
+    // if nextCallSeq does not match throw Exception straight away. This needs to be
+    // performed even before checking of Lease.
+    // See HBASE-5974
+    if (request.hasNextCallSeq()) {
+      if (rsh != null) {
+        if (request.getNextCallSeq() != rsh.getNextCallSeq()) {
+          throw new OutOfOrderScannerNextException(
+            "Expected nextCallSeq: " + rsh.getNextCallSeq()
+            + " But the nextCallSeq got from client: " + request.getNextCallSeq() +
+            "; request=" + TextFormat.shortDebugString(request));
+        }
+        // Increment the nextCallSeq value which is the next expected from client.
+        rsh.incNextCallSeq();
+      }
+    }
+  }
+  
+  private RegionScannerHolder getRegionScanner(GetRequest request) throws IOException {
+    String scannerName = Long.toString(request.getScannerId());
+    RegionScannerHolder rsh = scanners.get(scannerName);
+    if (rsh == null) {
+      LOG.warn("Client tried to access missing scanner " + scannerName);
+      throw new UnknownScannerException(
+          "Unknown scanner '" + scannerName + "'. This can happen due to any of the following "
+              + "reasons: a) Scanner id given is wrong, b) Scanner lease expired because of "
+              + "long wait between consecutive client checkins, c) Server may be closing down, "
+              + "d) RegionServer restart during upgrade.\nIf the issue is due to reason (b), a "
+              + "possible fix would be increasing the value of"
+              + "'hbase.client.scanner.timeout.period' configuration.");
+    }
+    HRegionInfo hri = rsh.s.getRegionInfo();
+    // Yes, should be the same instance
+    if (regionServer.getOnlineRegion(hri.getRegionName()) != rsh.r) {
+      String msg = "Region was re-opened after the scanner" + scannerName + " was created: "
+          + hri.getRegionNameAsString();
+      LOG.warn(msg + ", closing...");
+      scanners.remove(scannerName);
+      try {
+        rsh.s.close();
+      } catch (IOException e) {
+        LOG.warn("Getting exception closing " + scannerName, e);
+      } finally {
+        try {
+          regionServer.leases.cancelLease(scannerName);
+        } catch (LeaseException e) {
+          LOG.warn("Getting exception closing " + scannerName, e);
+        }
+      }
+      throw new NotServingRegionException(msg);
+    }
+
+    checkScanNextCallSeq(request, rsh);
+    return rsh;
+  }
+
+  private RegionScannerHolder newRegionScanner(Region region, Scan scan, long scannerId)
+      throws IOException {
+
+    RegionScanner scanner = null;
+    if (scanner == null) {
+      scanner = region.getScanner(scan);
+    }
+    String scannerName = String.valueOf(scannerId);
+    return addScanner(scannerName, scanner, region);
+  }
+
   private Result get(Get get, HRegion region, RegionScannersCloseCallBack closeCallBack,
-      RpcCallContext context) throws IOException {
+      RpcCallContext context, final GetRequest request, final GetResponse.Builder builder) throws IOException,ServiceException {
     region.prepareGet(get);
     List<Cell> results = new ArrayList<Cell>();
+    boolean fromMultiGet = (request == null) && (builder == null);
     boolean stale = region.getRegionInfo().getReplicaId() != 0;
     // pre-get CP hook
     if (region.getCoprocessorHost() != null) {
@@ -2314,24 +2228,80 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     Scan scan = new Scan(get);
 
     RegionScanner scanner = null;
+    boolean clientHandlesPartials =
+            fromMultiGet ? false : request.hasClientHandlesPartials() && request.getClientHandlesPartials();
+    final LimitScope sizeScope =
+               clientHandlesPartials ? LimitScope.BETWEEN_CELLS : LimitScope.BETWEEN_ROWS;
+    boolean moreRows = false;
+    Result r = null;
+    Leases.Lease lease = null;
+    String scannerName = null; 
+    RegionScannerHolder rsh = null;
+    boolean exceptionOccured = false;
+
     try {
-      scanner = region.getScanner(scan);
-      scanner.next(results);
+      if (!fromMultiGet && request.hasScannerId()) {
+        scannerName = Long.toString(request.getScannerId());
+        rsh = getRegionScanner(request);
+        builder.setScannerId(request.getScannerId());
+      } else {
+        long scannerId = this.scannerIdGen.incrementAndGet();
+        rsh = newRegionScanner(region, scan, scannerId);
+        // Increment the nextCallSeq value which is the next expected from client.
+        scannerName = Long.toString(scannerId);
+        //if from multi get, we dont need scannId to be write back
+        if (!fromMultiGet) {
+          builder.setScannerId(scannerId);
+        }
+        rsh.incNextCallSeq();
+      }
+
+      // Remove lease while its being processed in server; protects against case
+      // where processing of request takes > lease expiration time.
+      lease = regionServer.leases.removeLease(scannerName);
+
+      scanner = rsh.s;
+      // Configure with limits for this RPC. Set keep progress true since size progress
+      // towards size limit should be kept between calls to nextRaw
+      ScannerContext.Builder contextBuilder = ScannerContext.newBuilder(true);
+      // maxResultSize - either we can reach this much size for all cells(being read) data or sum
+      // of heap size occupied by cells(being read). Cell data means its key and value parts.
+      contextBuilder.setSizeLimit(sizeScope, maxGetResultSize, maxGetResultSize);
+      ScannerContext scannerContext = contextBuilder.build();
+      moreRows = scanner.next(results,scannerContext);
+
+      boolean isPartial = scannerContext.partialResultFormed();
+      r = Result.create(results, get.isCheckExistenceOnly() ? !results.isEmpty() : null, stale, isPartial);
+    } catch (IOException e) {
+      exceptionOccured = true;
+      throw e;
     } finally {
-      if (scanner != null) {
-        if (closeCallBack == null) {
-          // If there is a context then the scanner can be added to the current
-          // RpcCallContext. The rpc callback will take care of closing the
-          // scanner, for eg in case
-          // of get()
-          assert scanner instanceof org.apache.hadoop.hbase.ipc.RpcCallback;
-          context.setCallBack((RegionScannerImpl) scanner);
+      if (exceptionOccured || r == null || r != null && !r.isPartial()) {
+        if (scanner != null) {
+          scanners.remove(scannerName);
+          if (closeCallBack == null) {
+            // If there is a context then the scanner can be added to the current
+            // RpcCallContext. The rpc callback will take care of closing the
+            // scanner, for eg in case
+            // of get()
+            assert scanner instanceof org.apache.hadoop.hbase.ipc.RpcCallback;
+            context.setCallBack((RegionScannerImpl) scanner);
+          } else {
+            // The call is from multi() where the results from the get() are
+            // aggregated and then send out to the
+            // rpc. The rpccall back will close all such scanners created as part
+            // of multi().
+            closeCallBack.addScanner(scanner);
+          }
+        }
+      }else {
+        // Adding resets expiration time on lease.
+        // the closeCallBack will be set in closeScanner so here we only care about shippedCallback
+        if (context != null) {
+          context.setCallBack(rsh.shippedCallback);
         } else {
-          // The call is from multi() where the results from the get() are
-          // aggregated and then send out to the
-          // rpc. The rpccall back will close all such scanners created as part
-          // of multi().
-          closeCallBack.addScanner(scanner);
+          // When context != null, adding back the lease will be done in callback set above.
+          addScannerLeaseBack(lease);
         }
       }
     }
@@ -2341,7 +2311,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       region.getCoprocessorHost().postGet(get, results);
     }
     region.metricsUpdateForGet(results);
-    return Result.create(results, get.isCheckExistenceOnly() ? !results.isEmpty() : null, stale);
+    return r;
   }
 
   /**
@@ -2368,7 +2338,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
 
     long nonceGroup = request.hasNonceGroup() ? request.getNonceGroup() : HConstants.NO_NONCE;
 
-    // this will contain all the cells that we need to return. It's cre许秋汉ated later, if needed.
+    // this will contain all the cells that we need to return. It's created later, if needed.
     List<CellScannable> cellsToReturn = null;
     MultiResponse.Builder responseBuilder = MultiResponse.newBuilder();
     RegionActionResult.Builder regionActionResultBuilder = RegionActionResult.newBuilder();
@@ -2448,121 +2418,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     return responseBuilder.build();
   }
 
-  /**
-   * Execute multiple actions on a table: get, mutate, and/or execCoprocessor
-   *
-   * @param rpcc the RPC controller
-   * @param request the multi request
-   * @throws ServiceException
-   */
-  @Override
-  public MultiResponse multi(final RpcController rpcc, final MultiRequest request, Object objresponseTK)
-          throws ServiceException {
-    try {
-      checkOpen();
-    } catch (IOException ie) {
-      throw new ServiceException(ie);
-    }
-
-    // rpc controller is how we bring in data via the back door;  it is unprotobuf'ed data.
-    // It is also the conduit via which we pass back data.
-    PayloadCarryingRpcController controller = (PayloadCarryingRpcController)rpcc;
-    ResponseToolKit responseTK = (ResponseToolKit)objresponseTK;
-    CellScanner cellScanner = controller != null ? controller.cellScanner(): null;
-    if (controller != null) controller.setCellScanner(null);
-
-    long nonceGroup = request.hasNonceGroup() ? request.getNonceGroup() : HConstants.NO_NONCE;
-
-    // this will contain all the cells that we need to return. It's created later, if needed.
-    List<CellScannable> cellsToReturn = null;
-    MultiResponse.Builder responseBuilder = MultiResponse.newBuilder();
-    RegionActionResult.Builder regionActionResultBuilder = RegionActionResult.newBuilder();
-    Boolean processed = null;
-    RegionScannersCloseCallBack closeCallBack = null;
-    RpcCallContext context = null;
-    Boolean mutateOnly = request.getRegionActionList().size() == 1; // SEDA should be able to support multi action TODO.
-    Boolean responseDelegated = false;
-    this.rpcMultiRequestCount.increment();
-    for (RegionAction regionAction : request.getRegionActionList()) {
-      this.requestCount.add(regionAction.getActionCount());
-      OperationQuota quota;
-      Region region;
-      regionActionResultBuilder.clear();
-      try {
-        region = getRegion(regionAction.getRegion());
-        quota = getQuotaManager().checkQuota(region, regionAction.getActionList());
-      } catch (IOException e) {
-        rpcServer.getMetrics().exception(e);
-        regionActionResultBuilder.setException(ResponseConverter.buildException(e));
-        responseBuilder.addRegionActionResult(regionActionResultBuilder.build());
-        // All Mutations in this RegionAction not executed as we can not see the Region online here
-        // in this RS. Will be retried from Client. Skipping all the Cells in CellScanner
-        // corresponding to these Mutations.
-        skipCellsForMutations(regionAction.getActionList(), cellScanner);
-        continue;  // For this region it's a failure.
-      }
-
-      if (regionAction.hasAtomic() && regionAction.getAtomic()) {
-        // How does this call happen?  It may need some work to play well w/ the surroundings.
-        // Need to return an item per Action along w/ Action index.  TODO.
-        mutateOnly = false;
-        try {
-          if (request.hasCondition()) {
-            Condition condition = request.getCondition();
-            byte[] row = condition.getRow().toByteArray();
-            byte[] family = condition.getFamily().toByteArray();
-            byte[] qualifier = condition.getQualifier().toByteArray();
-            CompareOp compareOp = CompareOp.valueOf(condition.getCompareType().name());
-            ByteArrayComparable comparator =
-                    ProtobufUtil.toComparator(condition.getComparator());
-            processed = checkAndRowMutate(region, regionAction.getActionList(),
-                    cellScanner, row, family, qualifier, compareOp, comparator);
-          } else {
-            ClientProtos.RegionLoadStats stats = mutateRows(region, regionAction.getActionList(),
-                    cellScanner);
-            // add the stats to the request
-            if(stats != null) {
-              responseBuilder.addRegionActionResult(RegionActionResult.newBuilder()
-                      .addResultOrException(ResultOrException.newBuilder().setLoadStats(stats)));
-            }
-            processed = Boolean.TRUE;
-          }
-        } catch (IOException e) {
-          rpcServer.getMetrics().exception(e);
-          // As it's atomic, we may expect it's a global failure.
-          regionActionResultBuilder.setException(ResponseConverter.buildException(e));
-        }
-      } else {
-        if (closeCallBack == null) {
-          // An RpcCallBack that creates a list of scanners that needs to perform callBack
-          // operation on completion of multiGets.
-          // Set this only once
-          closeCallBack = new RegionScannersCloseCallBack();
-          context = RpcServer.getCurrentCall();
-          context.setCallBack(closeCallBack);
-        }
-        // doNonAtomicRegionMutation manages the exception internally
-        responseTK.setMultiResponseToolKit(region, responseBuilder, regionActionResultBuilder, cellsToReturn);
-        Pair<List<CellScannable>, Boolean> doNonAtomicResult = doNonAtomicRegionMutation(
-                quota, regionAction, cellScanner, nonceGroup, closeCallBack, context, mutateOnly, responseTK);
-        cellsToReturn = doNonAtomicResult.getFirst();
-        responseDelegated = doNonAtomicResult.getSecond();
-      }
-      if (!responseDelegated) {
-        responseBuilder.addRegionActionResult(regionActionResultBuilder.build());
-      }
-      quota.close();
-    }
-    // Load the controller with the Cells to return.
-    if (cellsToReturn != null && !cellsToReturn.isEmpty() && controller != null) {
-      controller.setCellScanner(CellUtil.createCellScanner(cellsToReturn));
-    }
-    if (processed != null) responseBuilder.setProcessed(processed);
-    controller.setResponseDelegated(responseDelegated);
-    return responseBuilder.build();
-  }
-
-  private void skipCellsForMutations(List<Action> actions, CellScanner cellScanner) {
+  public void skipCellsForMutations(List<Action> actions, CellScanner cellScanner) {
     try {
       for (Action action : actions) {
         if (action.hasMutation()) {
@@ -2582,6 +2438,36 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     }
   }
 
+  public Mutation sedaMutate(final MutateRequest request, MutationProto mutation,
+                         CellScanner cellScanner, MutationType type) throws ServiceException {
+    OperationQuota quota = null;
+    try {
+      checkOpen();
+//      requestCount.increment();
+//      this.rpcMutateRequestCount.increment();
+      Region region = getRegion(request.getRegion());
+      if (!region.getRegionInfo().isMetaTable()) {
+        regionServer.cacheFlusher.reclaimMemStoreMemory();
+      }
+      long nonceGroup = request.hasNonceGroup() ? request.getNonceGroup() : HConstants.NO_NONCE;
+      quota = getQuotaManager().checkQuota(region, OperationQuota.OperationType.MUTATE);
+      switch (type) {
+        case PUT: return ProtobufUtil.toPut(mutation, cellScanner);
+        case DELETE: return ProtobufUtil.toDelete(mutation, cellScanner);
+        default:
+          throw new DoNotRetryIOException(
+                  "Unsupported mutate type: " + type.name());
+      }
+    } catch (IOException ie) {
+      regionServer.checkFileSystem();
+      throw new ServiceException(ie);
+    } finally {
+      if (quota != null) {
+        quota.close();
+      }
+    }
+
+  }
   /**
    * Mutate data in a table.
    *
@@ -2691,134 +2577,6 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       return builder.build();
     } catch (IOException ie) {
       regionServer.checkFileSystem();
-      throw new ServiceException(ie);
-    } finally {
-      if (quota != null) {
-        quota.close();
-      }
-    }
-  }
-
-  /**
-   * Mutate data in a table.
-   *
-   * @param rpcc the RPC controller
-   * @param request the mutate request
-   * @throws ServiceException
-   */
-  @Override
-  public MutateResponse mutate(final RpcController rpcc,
-      final MutateRequest request, Object objresponseTK) throws ServiceException {
-    // rpc controller is how we bring in data via the back door;  it is unprotobuf'ed data.
-    // It is also the conduit via which we pass back data.
-    PayloadCarryingRpcController controller = (PayloadCarryingRpcController)rpcc;
-    ResponseToolKit responseTK = (ResponseToolKit)objresponseTK;
-    CellScanner cellScanner = controller != null? controller.cellScanner(): null;
-    OperationQuota quota = null;
-    responseTK.controller = controller;
-    // Clear scanner so we are not holding on to reference across call.
-    if (controller != null) controller.setCellScanner(null);
-    try {
-      checkOpen();
-      requestCount.increment();
-      this.rpcMutateRequestCount.increment();
-      Region region = getRegion(request.getRegion());
-      MutateResponse.Builder builder = MutateResponse.newBuilder();
-      responseTK.setMutateResponseToolKit(region, builder);
-      responseTK.setRegionServer(regionServer);
-      MutationProto mutation = request.getMutation();
-      if (!region.getRegionInfo().isMetaTable()) {
-        regionServer.cacheFlusher.reclaimMemStoreMemory();
-      }
-      long nonceGroup = request.hasNonceGroup() ? request.getNonceGroup() : HConstants.NO_NONCE;
-      Result r = null;
-      Boolean processed = null;
-      MutationType type = mutation.getMutateType();
-      long mutationSize = 0;
-      quota = getQuotaManager().checkQuota(region, OperationQuota.OperationType.MUTATE);
-      switch (type) {
-        case APPEND:
-          // TODO: this doesn't actually check anything.
-          r = append(region, quota, mutation, cellScanner, nonceGroup);
-          break;
-        case INCREMENT:
-          // TODO: this doesn't actually check anything.
-          r = increment(region, quota, mutation, cellScanner, nonceGroup);
-          break;
-        case PUT:
-          Put put = ProtobufUtil.toPut(mutation, cellScanner);
-          quota.addMutation(put);
-          if (request.hasCondition()) {
-            Condition condition = request.getCondition();
-            byte[] row = condition.getRow().toByteArray();
-            byte[] family = condition.getFamily().toByteArray();
-            byte[] qualifier = condition.getQualifier().toByteArray();
-            CompareOp compareOp = CompareOp.valueOf(condition.getCompareType().name());
-            ByteArrayComparable comparator =
-                    ProtobufUtil.toComparator(condition.getComparator());
-            if (region.getCoprocessorHost() != null) {
-              processed = region.getCoprocessorHost().preCheckAndPut(
-                      row, family, qualifier, compareOp, comparator, put);
-            }
-            if (processed == null) {
-              boolean result = region.checkAndMutate(row, family,
-                      qualifier, compareOp, comparator, put, true);
-              if (region.getCoprocessorHost() != null) {
-                result = region.getCoprocessorHost().postCheckAndPut(row, family,
-                        qualifier, compareOp, comparator, put, result);
-              }
-              processed = result;
-            }
-          } else {
-            if (region.getRegionInfo().isMetaTable()) {
-              region.put(put);
-            } else {
-              controller.setResponseDelegated(true);
-              responseTK.mutation = put;
-              region.put(responseTK);
-            }
-            processed = Boolean.TRUE;
-          }
-          break;
-        case DELETE:
-          Delete delete = ProtobufUtil.toDelete(mutation, cellScanner);
-          quota.addMutation(delete);
-          if (request.hasCondition()) {
-            Condition condition = request.getCondition();
-            byte[] row = condition.getRow().toByteArray();
-            byte[] family = condition.getFamily().toByteArray();
-            byte[] qualifier = condition.getQualifier().toByteArray();
-            CompareOp compareOp = CompareOp.valueOf(condition.getCompareType().name());
-            ByteArrayComparable comparator =
-                    ProtobufUtil.toComparator(condition.getComparator());
-            if (region.getCoprocessorHost() != null) {
-              processed = region.getCoprocessorHost().preCheckAndDelete(
-                      row, family, qualifier, compareOp, comparator, delete);
-            }
-            if (processed == null) {
-              boolean result = region.checkAndMutate(row, family,
-                      qualifier, compareOp, comparator, delete, true);
-              if (region.getCoprocessorHost() != null) {
-                result = region.getCoprocessorHost().postCheckAndDelete(row, family,
-                        qualifier, compareOp, comparator, delete, result);
-              }
-              processed = result;
-            }
-          } else {
-            region.delete(delete);
-            processed = Boolean.TRUE;
-          }
-          break;
-        default:
-          throw new DoNotRetryIOException(
-                  "Unsupported mutate type: " + type.name());
-      }
-      if (processed != null) builder.setProcessed(processed.booleanValue());
-      addResult(builder, r, controller);
-      return builder.build();
-    } catch (IOException ie) {
-      regionServer.checkFileSystem();
-      LOG.fatal("mutate error!!!!!!!!!!" , ie);
       throw new ServiceException(ie);
     } finally {
       if (quota != null) {
@@ -3049,7 +2807,9 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
                 // Configure with limits for this RPC. Set keep progress true since size progress
                 // towards size limit should be kept between calls to nextRaw
                 ScannerContext.Builder contextBuilder = ScannerContext.newBuilder(true);
-                contextBuilder.setSizeLimit(sizeScope, maxResultSize);
+                // maxResultSize - either we can reach this much size for all cells(being read) data or sum
+                // of heap size occupied by cells(being read). Cell data means its key and value parts.
+                contextBuilder.setSizeLimit(sizeScope, maxResultSize, maxResultSize);
                 contextBuilder.setBatchLimit(scanner.getBatch());
                 contextBuilder.setTimeLimit(timeScope, timeLimit);
                 ScannerContext scannerContext = contextBuilder.build();
@@ -3069,8 +2829,14 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
                   scanCachingRequestCount.increment();
 
                   if (!values.isEmpty()) {
+                    int rowCellSize = 0;
                     for (Cell cell : values) {
-                      totalCellSize += CellUtil.estimatedSerializedSizeOf(cell);
+                      rowCellSize += CellUtil.estimatedSerializedSizeOf(cell);
+                    }
+                    totalCellSize += rowCellSize;
+                    if (rowCellSize >= 512 * 1024 * 1024) {
+                      LOG.warn("Big row: " + values.get(0).toString() + ", totalBytesReturn: "
+                          + rowCellSize);
                     }
                     final boolean partial = scannerContext.partialResultFormed();
                     results.add(Result.create(values, null, stale, partial));
@@ -3232,5 +2998,17 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       throw new ServiceException(e);
     }
     return UpdateConfigurationResponse.getDefaultInstance();
+  }
+
+  protected void reclaimMemStoreMemory() {
+    regionServer.cacheFlusher.reclaimMemStoreMemory();
+  }
+
+  public Result get(RegionSpecifier regionSpecifier, Get get,
+      RegionScannersCloseCallBack closeCallBack, Object context) throws IOException,
+      ServiceException {
+    requestCount.increment();
+    Region region = getRegion(regionSpecifier);
+    return get(get, ((HRegion) region), closeCallBack, null, null, null);
   }
 }

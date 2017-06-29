@@ -19,22 +19,6 @@
 
 package org.apache.hadoop.hbase.io;
 
-import java.io.IOException;
-import java.lang.management.ManagementFactory;
-import java.lang.management.RuntimeMXBean;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Map;
-import java.util.TreeMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.KeyValue;
@@ -44,15 +28,29 @@ import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.io.hfile.BlockCacheKey;
 import org.apache.hadoop.hbase.io.hfile.LruCachedBlock;
 import org.apache.hadoop.hbase.io.hfile.LruBlockCache;
-import org.apache.hadoop.hbase.regionserver.CellSkipListSet;
-import org.apache.hadoop.hbase.regionserver.DefaultMemStore;
-import org.apache.hadoop.hbase.regionserver.HRegion;
-import org.apache.hadoop.hbase.regionserver.HStore;
-import org.apache.hadoop.hbase.regionserver.TimeRangeTracker;
+import org.apache.hadoop.hbase.regionserver.*;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+
+import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.junit.Assert.assertEquals;
 
@@ -235,10 +233,10 @@ public class TestHeapSize  {
       assertEquals(expected, actual);
     }
 
-    // CellSkipListSet
-    cl = CellSkipListSet.class;
+    // CellSet
+    cl = CellSet.class;
     expected = ClassSize.estimateBase(cl, false);
-    actual = ClassSize.CELL_SKIPLIST_SET;
+    actual = ClassSize.CELL_SET;
     if (expected != actual) {
       ClassSize.estimateBase(cl, true);
       assertEquals(expected, actual);
@@ -303,19 +301,65 @@ public class TestHeapSize  {
     // DefaultMemStore Deep Overhead
     actual = DefaultMemStore.DEEP_OVERHEAD;
     expected = ClassSize.estimateBase(cl, false);
-    expected += ClassSize.estimateBase(AtomicLong.class, false);
-    expected += (2 * ClassSize.estimateBase(CellSkipListSet.class, false));
-    expected += (2 * ClassSize.estimateBase(ConcurrentSkipListMap.class, false));
-    expected += (2 * ClassSize.estimateBase(TimeRangeTracker.class, false));
-    if(expected != actual) {
+    if (expected != actual) {
+      ClassSize.estimateBase(cl, true);
+      assertEquals(expected, actual);
+    }
+
+    // Segment Deep overhead
+    cl = Segment.class;
+    actual = Segment.DEEP_OVERHEAD;
+    expected = ClassSize.estimateBase(cl, false);
+    expected += 2 * ClassSize.estimateBase(AtomicLong.class, false);
+    expected += ClassSize.estimateBase(AtomicReference.class, false);
+    expected += ClassSize.estimateBase(CellSet.class, false);
+    expected += ClassSize.estimateBase(TimeRangeTracker.class, false);
+    if (expected != actual) {
       ClassSize.estimateBase(cl, true);
       ClassSize.estimateBase(AtomicLong.class, true);
-      ClassSize.estimateBase(CellSkipListSet.class, true);
-      ClassSize.estimateBase(CellSkipListSet.class, true);
-      ClassSize.estimateBase(ConcurrentSkipListMap.class, true);
-      ClassSize.estimateBase(ConcurrentSkipListMap.class, true);
+      ClassSize.estimateBase(AtomicReference.class, true);
+      ClassSize.estimateBase(CellSet.class, true);
       ClassSize.estimateBase(TimeRangeTracker.class, true);
+      assertEquals(expected, actual);
+    }
+
+    // MutableSegment Deep overhead
+    cl = MutableSegment.class;
+    actual = MutableSegment.DEEP_OVERHEAD;
+    expected = ClassSize.estimateBase(cl, false);
+    expected += 2 * ClassSize.estimateBase(AtomicLong.class, false);
+    expected += ClassSize.estimateBase(AtomicReference.class, false);
+    expected += ClassSize.estimateBase(CellSet.class, false);
+    expected += ClassSize.estimateBase(TimeRangeTracker.class, false);
+    expected += ClassSize.estimateBase(ConcurrentSkipListMap.class, false);
+    if (expected != actual) {
+      ClassSize.estimateBase(cl, true);
+      ClassSize.estimateBase(AtomicLong.class, true);
+      ClassSize.estimateBase(AtomicReference.class, true);
+      ClassSize.estimateBase(CellSet.class, true);
       ClassSize.estimateBase(TimeRangeTracker.class, true);
+      ClassSize.estimateBase(ConcurrentSkipListMap.class, true);
+      assertEquals(expected, actual);
+    }
+
+    // ImmutableSegment Deep overhead
+    cl = ImmutableSegment.class;
+    actual = ImmutableSegment.DEEP_OVERHEAD_CSLM;
+    expected = ClassSize.estimateBase(cl, false);
+    expected += 2 * ClassSize.estimateBase(AtomicLong.class, false);
+    expected += ClassSize.estimateBase(AtomicReference.class, false);
+    expected += ClassSize.estimateBase(CellSet.class, false);
+    expected += ClassSize.estimateBase(TimeRangeTracker.class, false);
+    expected += ClassSize.estimateBase(TimeRange.class, false);
+    expected += ClassSize.estimateBase(ConcurrentSkipListMap.class, false);
+    if (expected != actual) {
+      ClassSize.estimateBase(cl, true);
+      ClassSize.estimateBase(AtomicLong.class, true);
+      ClassSize.estimateBase(AtomicReference.class, true);
+      ClassSize.estimateBase(CellSet.class, true);
+      ClassSize.estimateBase(TimeRangeTracker.class, true);
+      ClassSize.estimateBase(TimeRange.class, true);
+      ClassSize.estimateBase(ConcurrentSkipListMap.class, true);
       assertEquals(expected, actual);
     }
 

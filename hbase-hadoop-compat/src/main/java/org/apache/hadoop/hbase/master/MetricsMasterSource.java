@@ -71,6 +71,8 @@ public interface MetricsMasterSource extends BaseSource {
   String SERVER_NAME_DESC = "Server Name";
   String CLUSTER_ID_DESC = "Cluster Id";
   String IS_ACTIVE_MASTER_DESC = "Is Active Master";
+  String OLD_WAL_COUNTER_NAME = "oldWALNumber";
+  String OLD_WAL_COUNTER_NAME_DESC = "Number of old WALs";
 
 
 
@@ -81,7 +83,10 @@ public interface MetricsMasterSource extends BaseSource {
    */
   void incRequests(final long inc);
 
-
-
+  /**
+   * Update the number of old WALs
+   * @param oldWALNumber current number of old WALs
+   */
+  void updateOldWALNumber(final long oldWALNumber);
 
 }

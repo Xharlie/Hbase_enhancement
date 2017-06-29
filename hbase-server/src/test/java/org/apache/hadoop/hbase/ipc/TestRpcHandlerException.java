@@ -217,15 +217,27 @@ public class TestRpcHandlerException {
     }
 
     @Override
-    public Pair<Message, PayloadCarryingRpcController> call(BlockingService service, MethodDescriptor md,
-        Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status, RpcServer.Call call)
-        throws IOException, ServiceException {
-      return rpcServer.call(service, md, param, cellScanner, receiveTime, status, call);
+    public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
+        Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
+        throws IOException {
+      return rpcServer.call(service, md, param, cellScanner, receiveTime, status);
+    }
+
+    @Override
+    public Pair<Message, CellScanner> call(RpcCall call, MonitoredRPCHandler status)
+        throws IOException {
+      return rpcServer.call(call, status);
     }
 
     @Override
     public void setRsRpcServices(RSRpcServices rsRpcServices) {
       // do nothing here in this test class
+    }
+
+    @Override
+    public RSRpcServices getRsRpcServices() {
+      // TODO Auto-generated method stub
+      return null;
     }
 
   }

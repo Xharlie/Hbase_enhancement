@@ -177,6 +177,7 @@ public class TestRegionMergeTransaction {
     HStore storeMock = Mockito.mock(HStore.class);
     when(storeMock.hasReferences()).thenReturn(true);
     when(storeMock.getFamily()).thenReturn(new HColumnDescriptor("cf"));
+    when(storeMock.getSizeToFlush()).thenReturn(new MemstoreSize());
     when(storeMock.close()).thenReturn(ImmutableList.<StoreFile>of());
     this.region_a.stores.put(Bytes.toBytes(""), storeMock);
     RegionMergeTransactionImpl mt = new RegionMergeTransactionImpl(this.region_a,

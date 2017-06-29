@@ -70,7 +70,7 @@ public class TagCompressionContext {
     while (pos < endOffset) {
       int tagLen = Bytes.readAsInt(in, pos, Tag.TAG_LENGTH_SIZE);
       pos += Tag.TAG_LENGTH_SIZE;
-      write(in, pos, tagLen, out);
+      Dictionary.write(out, in, pos, tagLen, tagDict);
       pos += tagLen;
     }
   }
@@ -79,17 +79,24 @@ public class TagCompressionContext {
    * Compress tags one by one and writes to the OutputStream.
    * @param out Stream to which the compressed tags to be written
    * @param in Source buffer where tags are available
+   * @param offset Offset for the tags byte buffer
    * @param length Length of all tag bytes
    * @throws IOException
    */
-  public void compressTags(OutputStream out, ByteBuffer in, int length) throws IOException {
+  public void compressTags(OutputStream out, ByteBuffer in, int offset, int length)
+      throws IOException {
     if (in.hasArray()) {
-      compressTags(out, in.array(), in.arrayOffset() + in.position(), length);
-      ByteBufferUtils.skip(in, length);
+      compressTags(out, in.array(), offset, length);
     } else {
-      byte[] tagBuf = new byte[length];
-      in.get(tagBuf);
-      compressTags(out, tagBuf, 0, length);
+      int pos = offset;
+      int endOffset = pos + length;
+      assert pos < endOffset;
+      while (pos < endOffset) {
+        int tagLen = ByteBufferUtils.readAsInt(in, pos, Tag.TAG_LENGTH_SIZE);
+        pos += Tag.TAG_LENGTH_SIZE;
+        Dictionary.write(out, in, pos, tagLen, tagDict);;
+        pos += tagLen;
+      }
     }
   }
 
@@ -167,7 +174,7 @@ public class TagCompressionContext {
    * @param src Stream where the compressed tags are available
    * @param dest Destination buffer where to write the uncompressed tags
    * @param length Length of all tag bytes
-   * @throws IOException
+   * @throws IOException when the dictionary does not have the entry
    */
   public void uncompressTags(InputStream src, ByteBuffer dest, int length) throws IOException {
     if (dest.hasArray()) {
@@ -176,20 +183,6 @@ public class TagCompressionContext {
       byte[] tagBuf = new byte[length];
       uncompressTags(src, tagBuf, 0, length);
       dest.put(tagBuf);
-    }
-  }
-
-  private void write(byte[] data, int offset, int length, OutputStream out) throws IOException {
-    short dictIdx = Dictionary.NOT_IN_DICTIONARY;
-    if (tagDict != null) {
-      dictIdx = tagDict.findEntry(data, offset, length);
-    }
-    if (dictIdx == Dictionary.NOT_IN_DICTIONARY) {
-      out.write(Dictionary.NOT_IN_DICTIONARY);
-      StreamUtils.writeRawVInt32(out, length);
-      out.write(data, offset, length);
-    } else {
-      StreamUtils.writeShort(out, dictIdx);
     }
   }
 }

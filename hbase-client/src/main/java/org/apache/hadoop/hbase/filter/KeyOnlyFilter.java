@@ -20,13 +20,14 @@ package org.apache.hadoop.hbase.filter;
 
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
+import org.apache.hadoop.hbase.ByteBufferCell;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.protobuf.generated.FilterProtos;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -61,19 +62,11 @@ public class KeyOnlyFilter extends FilterBase {
   }
 
   private Cell createKeyOnlyCell(Cell c) {
-    // KV format: <keylen:4><valuelen:4><key:keylen><value:valuelen>
-    // Rebuild as: <keylen:4><0:4><key:keylen>
-    int dataLen = lenAsVal ? Bytes.SIZEOF_INT : 0;
-    int keyOffset = (2 * Bytes.SIZEOF_INT);
-    int keyLen = KeyValueUtil.keyLength(c);
-    byte[] newBuffer = new byte[keyLen + keyOffset + dataLen];
-    Bytes.putInt(newBuffer, 0, keyLen);
-    Bytes.putInt(newBuffer, Bytes.SIZEOF_INT, dataLen);
-    KeyValueUtil.appendKeyTo(c, newBuffer, keyOffset);
-    if (lenAsVal) {
-      Bytes.putInt(newBuffer, newBuffer.length - dataLen, c.getValueLength());
+    if (c instanceof ByteBufferCell) {
+      return new KeyOnlyByteBufferCell((ByteBufferCell) c, lenAsVal);
+    } else {
+      return new KeyOnlyCell(c, lenAsVal);
     }
-    return new KeyValue(newBuffer);
   }
 
   @Override
@@ -130,4 +123,315 @@ public class KeyOnlyFilter extends FilterBase {
     KeyOnlyFilter other = (KeyOnlyFilter)o;
     return this.lenAsVal == other.lenAsVal;
   }
+
+  static class KeyOnlyCell implements Cell {
+    private Cell cell;
+    private boolean lenAsVal;
+
+    public KeyOnlyCell(Cell c, boolean lenAsVal) {
+      this.cell = c;
+      this.lenAsVal = lenAsVal;
+    }
+
+    @Override
+    public byte[] getRowArray() {
+      return cell.getRowArray();
+    }
+
+    @Override
+    public int getRowOffset() {
+      return cell.getRowOffset();
+    }
+
+    @Override
+    public short getRowLength() {
+      return cell.getRowLength();
+    }
+
+    @Override
+    public byte[] getFamilyArray() {
+      return cell.getFamilyArray();
+    }
+
+    @Override
+    public int getFamilyOffset() {
+      return cell.getFamilyOffset();
+    }
+
+    @Override
+    public byte getFamilyLength() {
+      return cell.getFamilyLength();
+    }
+
+    @Override
+    public byte[] getQualifierArray() {
+      return cell.getQualifierArray();
+    }
+
+    @Override
+    public int getQualifierOffset() {
+      return cell.getQualifierOffset();
+    }
+
+    @Override
+    public int getQualifierLength() {
+      return cell.getQualifierLength();
+    }
+
+    @Override
+    public long getTimestamp() {
+      return cell.getTimestamp();
+    }
+
+    @Override
+    public byte getTypeByte() {
+      return cell.getTypeByte();
+    }
+
+    @Override
+    public long getSequenceId() {
+      return 0;
+    }
+
+    @Override
+    public byte[] getValueArray() {
+      if (lenAsVal) {
+        return Bytes.toBytes(cell.getValueLength());
+      } else {
+        return HConstants.EMPTY_BYTE_ARRAY;
+      }
+    }
+
+    @Override
+    public int getValueOffset() {
+      return 0;
+    }
+
+    @Override
+    public int getValueLength() {
+      if (lenAsVal) {
+        return Bytes.SIZEOF_INT;
+      } else {
+        return 0;
+      }
+    }
+
+    @Override
+    public byte[] getTagsArray() {
+      return HConstants.EMPTY_BYTE_ARRAY;
+    }
+
+    @Override
+    public int getTagsOffset() {
+      return 0;
+    }
+
+    @Override
+    public int getTagsLength() {
+      return 0;
+    }
+
+    @Override
+    public byte[] getFamily() {
+      return null;
+    }
+
+    @Override
+    public byte[] getQualifier() {
+      return null;
+    }
+
+    @Override
+    public byte[] getRow() {
+      return null;
+    }
+
+    @Override
+    public byte[] getValue() {
+      return null;
+    }
+  }
+
+  static class KeyOnlyByteBufferCell extends ByteBufferCell {
+    private ByteBufferCell cell;
+    private boolean lenAsVal;
+
+    public KeyOnlyByteBufferCell(ByteBufferCell c, boolean lenAsVal) {
+      this.cell = c;
+      this.lenAsVal = lenAsVal;
+    }
+
+    @Override
+    public byte[] getRowArray() {
+      return cell.getRowArray();
+    }
+
+    @Override
+    public int getRowOffset() {
+      return cell.getRowOffset();
+    }
+
+    @Override
+    public short getRowLength() {
+      return cell.getRowLength();
+    }
+
+    @Override
+    public byte[] getFamilyArray() {
+      return cell.getFamilyArray();
+    }
+
+    @Override
+    public int getFamilyOffset() {
+      return cell.getFamilyOffset();
+    }
+
+    @Override
+    public byte getFamilyLength() {
+      return cell.getFamilyLength();
+    }
+
+    @Override
+    public byte[] getQualifierArray() {
+      return cell.getQualifierArray();
+    }
+
+    @Override
+    public int getQualifierOffset() {
+      return cell.getQualifierOffset();
+    }
+
+    @Override
+    public int getQualifierLength() {
+      return cell.getQualifierLength();
+    }
+
+    @Override
+    public long getTimestamp() {
+      return cell.getTimestamp();
+    }
+
+    @Override
+    public byte getTypeByte() {
+      return cell.getTypeByte();
+    }
+
+    @Override
+    public long getSequenceId() {
+      return 0;
+    }
+
+    @Override
+    public byte[] getValueArray() {
+      if (lenAsVal) {
+        return Bytes.toBytes(cell.getValueLength());
+      } else {
+        return HConstants.EMPTY_BYTE_ARRAY;
+      }
+    }
+
+    @Override
+    public int getValueOffset() {
+      return 0;
+    }
+
+    @Override
+    public int getValueLength() {
+      if (lenAsVal) {
+        return Bytes.SIZEOF_INT;
+      } else {
+        return 0;
+      }
+    }
+
+    @Override
+    public byte[] getTagsArray() {
+      return HConstants.EMPTY_BYTE_ARRAY;
+    }
+
+    @Override
+    public int getTagsOffset() {
+      return 0;
+    }
+
+    @Override
+    public int getTagsLength() {
+      return 0;
+    }
+
+    @Override
+    public ByteBuffer getRowByteBuffer() {
+      return cell.getRowByteBuffer();
+    }
+
+    @Override
+    public int getRowPosition() {
+      return cell.getRowPosition();
+    }
+
+    @Override
+    public ByteBuffer getFamilyByteBuffer() {
+      return cell.getFamilyByteBuffer();
+    }
+
+    @Override
+    public int getFamilyPosition() {
+      return cell.getFamilyPosition();
+    }
+
+    @Override
+    public ByteBuffer getQualifierByteBuffer() {
+      return cell.getQualifierByteBuffer();
+    }
+
+    @Override
+    public int getQualifierPosition() {
+      return cell.getQualifierPosition();
+    }
+
+    @Override
+    public ByteBuffer getValueByteBuffer() {
+      if (lenAsVal) {
+        return ByteBuffer.wrap(Bytes.toBytes(cell.getValueLength()));
+      } else {
+        return HConstants.EMPTY_BYTE_BUFFER;
+      }
+    }
+
+    @Override
+    public int getValuePosition() {
+      return 0;
+    }
+
+    @Override
+    public ByteBuffer getTagsByteBuffer() {
+      return HConstants.EMPTY_BYTE_BUFFER;
+    }
+
+    @Override
+    public int getTagsPosition() {
+      return 0;
+    }
+
+    @Override
+    public byte[] getFamily() {
+      return null;
+    }
+
+    @Override
+    public byte[] getQualifier() {
+      return null;
+    }
+
+    @Override
+    public byte[] getRow() {
+      return null;
+    }
+
+    @Override
+    public byte[] getValue() {
+      return null;
+    }
+  }
+
 }

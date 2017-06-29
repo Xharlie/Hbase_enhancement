@@ -41,7 +41,7 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.KeyOnlyKeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
-import org.apache.hadoop.hbase.ByteBufferedKeyOnlyKeyValue;
+import org.apache.hadoop.hbase.ByteBufferKeyOnlyKeyValue;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
@@ -75,6 +75,16 @@ public class HFileBlockIndex {
    * root). If not specified, <code>DEFAULT_MAX_CHUNK_SIZE</code> is used.
    */
   public static final String MAX_CHUNK_SIZE_KEY = "hfile.index.block.max.size";
+
+  /**
+   * Minimum number of entries in a single index block. Even if we are above the
+   * hfile.index.block.max.size we will keep writing to the same block unless we have that many
+   * entries. We should have at least a few entries so that we don't have too many levels in the
+   * multi-level index. This should be at least 2 to make sure there is no infinite recursion.
+   */
+  public static final String MIN_INDEX_NUM_ENTRIES_KEY = "hfile.index.block.min.entries";
+
+  static final int DEFAULT_MIN_INDEX_NUM_ENTRIES = 16;
 
   /**
    * The number of bytes stored in each "secondary index" entry in addition to
@@ -120,6 +130,7 @@ public class HFileBlockIndex {
       searchTreeLevel = treeLevel;
     }
 
+    @Override
     protected long calculateHeapSizeForBlockKeys(long heapSize) {
       // Calculating the size of blockKeys
       if (blockKeys != null) {
@@ -162,10 +173,12 @@ public class HFileBlockIndex {
       return null;
     }
 
+    @Override
     protected void initialize(int numEntries) {
       blockKeys = new byte[numEntries][];
     }
 
+    @Override
     protected void add(final byte[] key, final long offset, final int dataSize) {
       blockOffsets[rootCount] = offset;
       blockKeys[rootCount] = key;
@@ -242,6 +255,7 @@ public class HFileBlockIndex {
       searchTreeLevel = treeLevel;
     }
 
+    @Override
     protected long calculateHeapSizeForBlockKeys(long heapSize) {
       if (blockKeys != null) {
         heapSize += ClassSize.REFERENCE;
@@ -431,6 +445,7 @@ public class HFileBlockIndex {
       return targetMidKey;
     }
 
+    @Override
     protected void initialize(int numEntries) {
       blockKeys = new Cell[numEntries];
     }
@@ -442,6 +457,7 @@ public class HFileBlockIndex {
      * @param offset file offset where the block is stored
      * @param dataSize the uncompressed data size
      */
+    @Override
     protected void add(final byte[] key, final long offset, final int dataSize) {
       blockOffsets[rootCount] = offset;
       // Create the blockKeys as Cells once when the reader is opened
@@ -498,7 +514,7 @@ public class HFileBlockIndex {
    * blocks at all other levels will be cached in the LRU cache in practice,
    * although this API does not enforce that.
    *
-   * All non-root (leaf and intermediate) index blocks contain what we call a
+   * <p>All non-root (leaf and intermediate) index blocks contain what we call a
    * "secondary index": an array of offsets to the entries within the block.
    * This allows us to do binary search for the entry corresponding to the
    * given key without having to deserialize the block.
@@ -567,17 +583,12 @@ public class HFileBlockIndex {
     }
 
     /**
-     * Return the BlockWithScanInfo which contains the DataBlock with other scan
-     * info such as nextIndexedKey. This function will only be called when the
-     * HFile version is larger than 1.
+     * Return the BlockWithScanInfo, a data structure which contains the Data HFileBlock with
+     * other scan info such as the key that starts the next HFileBlock. This function will only
+     * be called when the HFile version is larger than 1.
      * 
-     * @param key
-     *          the key we are looking for
-     * @param currentBlock
-     *          the current block, to avoid re-reading the same block
-     * @param cacheBlocks
-     * @param pread
-     * @param isCompaction
+     * @param key the key we are looking for
+     * @param currentBlock the current block, to avoid re-reading the same block
      * @param expectedDataBlockEncoding the data block encoding the caller is
      *          expecting the data block to be in, or null to not perform this
      *          check and return the block irrespective of the encoding.
@@ -729,7 +740,7 @@ public class HFileBlockIndex {
       // If we imagine that keys[-1] = -Infinity and
       // keys[numEntries] = Infinity, then we are maintaining an invariant that
       // keys[low - 1] < key < keys[high + 1] while narrowing down the range.
-      ByteBufferedKeyOnlyKeyValue nonRootIndexkeyOnlyKV = new ByteBufferedKeyOnlyKeyValue();
+      ByteBufferKeyOnlyKeyValue nonRootIndexkeyOnlyKV = new ByteBufferKeyOnlyKeyValue();
       ObjectIntPair<ByteBuffer> pair = new ObjectIntPair<ByteBuffer>();
       while (low <= high) {
         mid = (low + high) >>> 1;
@@ -986,6 +997,9 @@ public class HFileBlockIndex {
     /** The maximum size guideline of all multi-level index blocks. */
     private int maxChunkSize;
 
+    /** The maximum level of multi-level index blocks */
+    private int minIndexNumEntries;
+
     /** Whether we require this block index to always be single-level. */
     private boolean singleLevelOnly;
 
@@ -1018,13 +1032,21 @@ public class HFileBlockIndex {
       this.cacheConf = cacheConf;
       this.nameForCaching = nameForCaching;
       this.maxChunkSize = HFileBlockIndex.DEFAULT_MAX_CHUNK_SIZE;
+      this.minIndexNumEntries = HFileBlockIndex.DEFAULT_MIN_INDEX_NUM_ENTRIES;
     }
 
     public void setMaxChunkSize(int maxChunkSize) {
       if (maxChunkSize <= 0) {
-        throw new IllegalArgumentException("Invald maximum index block size");
+        throw new IllegalArgumentException("Invalid maximum index block size");
       }
       this.maxChunkSize = maxChunkSize;
+    }
+
+    public void setMinIndexNumEntries(int minIndexNumEntries) {
+      if (minIndexNumEntries <= 1) {
+        throw new IllegalArgumentException("Invalid maximum index level, should be >= 2");
+      }
+      this.minIndexNumEntries = minIndexNumEntries;
     }
 
     /**
@@ -1058,7 +1080,11 @@ public class HFileBlockIndex {
           : null;
 
       if (curInlineChunk != null) {
-        while (rootChunk.getRootSize() > maxChunkSize) {
+        while (rootChunk.getRootSize() > maxChunkSize
+            // HBASE-16288: if firstKey is larger than maxChunkSize we will loop indefinitely
+            && rootChunk.getNumEntries() > minIndexNumEntries
+            // Sanity check. We will not hit this (minIndexNumEntries ^ 16) blocks can be addressed
+            && numLevels < 16) {
           rootChunk = writeIntermediateLevel(out, rootChunk);
           numLevels += 1;
         }
@@ -1149,8 +1175,12 @@ public class HFileBlockIndex {
         curChunk.add(currentLevel.getBlockKey(i),
             currentLevel.getBlockOffset(i), currentLevel.getOnDiskDataSize(i));
 
-        if (curChunk.getRootSize() >= maxChunkSize)
+        // HBASE-16288: We have to have at least minIndexNumEntries(16) items in the index so that
+        // we won't end up with too-many levels for a index with very large rowKeys. Also, if the
+        // first key is larger than maxChunkSize this will cause infinite recursion.
+        if (i >= minIndexNumEntries && curChunk.getRootSize() >= maxChunkSize) {
           writeIntermediateBlock(out, parent, curChunk);
+        }
       }
 
       if (curChunk.getNumEntries() > 0) {
@@ -1642,5 +1672,9 @@ public class HFileBlockIndex {
 
   public static int getMaxChunkSize(Configuration conf) {
     return conf.getInt(MAX_CHUNK_SIZE_KEY, DEFAULT_MAX_CHUNK_SIZE);
+  }
+
+  public static int getMinIndexNumEntries(Configuration conf) {
+    return conf.getInt(MIN_INDEX_NUM_ENTRIES_KEY, DEFAULT_MIN_INDEX_NUM_ENTRIES);
   }
 }

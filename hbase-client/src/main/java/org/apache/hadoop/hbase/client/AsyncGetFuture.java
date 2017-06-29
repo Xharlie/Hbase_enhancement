@@ -29,9 +29,13 @@ import java.util.concurrent.TimeoutException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.NotServingRegionException;
+import org.apache.hadoop.hbase.UnknownScannerException;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.classification.InterfaceStability;
 import org.apache.hadoop.hbase.client.RetriesExhaustedException.ThrowableWithExtraContext;
+import org.apache.hadoop.hbase.exceptions.OutOfOrderScannerNextException;
+import org.apache.hadoop.hbase.regionserver.RegionServerStoppedException;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.GetResponse;
 import org.apache.hadoop.hbase.util.Bytes;
 
@@ -47,6 +51,7 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
   final String tableName;
   final int operationTimeout;
   final AsyncGetCallback callback;
+  List<Result> partialResults = new ArrayList<Result>();
   CountDownLatch latch = new CountDownLatch(1);
 
   public AsyncGetFuture(final HTable table, final Get get, int tries, final long retryPause,
@@ -61,14 +66,30 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
 
       @Override
       public void processResult(Result result) {
-        toReturn = result;
-        markDone();
+        partialResults.add(result);
+        if (!result.isPartial()) {
+          try {
+            toReturn = Result.createCompleteResult(partialResults);
+          } catch (IOException e) {
+            toReturn = null;
+            LOG.warn(
+              "Failed form complete result on table: " + tableName + " on row : " + row, e);
+          }
+          markDone();
+        }else {
+          doRequest(null, callback);
+        }
       }
 
       @Override
       public void processError(Throwable exception) {
+        //before retry, we should reset callback and clear partial result list
+        ((AsyncGetCallback)callback).reset();
+        partialResults.clear();
+
         if (exception instanceof DoNotRetryIOException) {
           toThrow = (DoNotRetryIOException) exception;
+          toReturn = null;
           markDone();
           return;
         }
@@ -76,8 +97,9 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
         ThrowableWithExtraContext exceptionWithDetails =
             new ThrowableWithExtraContext(exception, System.currentTimeMillis(), null);
         exceptions.add(exceptionWithDetails);
+
         // check and retry
-        int attempts = numAttempts.get();
+        int attempts = numAttempts.incrementAndGet();
         if (attempts < maxAttempts && !isCanceled) {
           if (attempts > startLogErrorsCnt) {
             LOG.warn(
@@ -134,7 +156,7 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
   @SuppressWarnings("unchecked")
   @Override
   void doRequest(List<Action<Row>> actions, AsyncRpcCallback<? extends Message> callback) {
-    while (numAttempts.getAndIncrement() < maxAttempts) {
+    while (numAttempts.get() < maxAttempts) {
       try {
         try {
           this.table.asyncGet(get, (AsyncRpcCallback<GetResponse>) callback);
@@ -145,6 +167,7 @@ public class AsyncGetFuture extends AsyncFuture<Result> {
       } catch (IOException e) {
         if (e instanceof DoNotRetryIOException) {
           callback.onError(e);
+          numAttempts.set(Integer.MAX_VALUE);
           break;
         }
         LOG.debug("Failed to issue async get request for table " + this.tableName + " on row "

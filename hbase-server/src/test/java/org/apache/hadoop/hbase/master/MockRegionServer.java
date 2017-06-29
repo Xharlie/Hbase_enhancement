@@ -388,13 +388,6 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
-  public MutateResponse mutate(RpcController controller, MutateRequest request, Object responseTK)
-      throws ServiceException {
-    // TODO Auto-generated method stub
-    return null;
-  }
-
-  @Override
   public ScanResponse scan(RpcController controller, ScanRequest request)
       throws ServiceException {
     ScanResponse.Builder builder = ScanResponse.newBuilder();
@@ -443,11 +436,6 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   public org.apache.hadoop.hbase.protobuf.generated.ClientProtos.MultiResponse multi(
       RpcController controller, MultiRequest request) throws ServiceException {
     // TODO Auto-generated method stub
-    return null;
-  }
-
-  @Override
-  public ClientProtos.MultiResponse multi(RpcController controller, MultiRequest request, Object responseTK) throws ServiceException {
     return null;
   }
 

@@ -33,6 +33,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.NavigableMap;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -643,9 +644,9 @@ public class TestImportExport {
     Table importTable = UTIL.createTable(TableName.valueOf(importTableName), FAMILYA, 3);
 
     // Register the wal listener for the import table
-    TableWALActionListener walListener = new TableWALActionListener(importTableName);
     HRegionInfo region = UTIL.getHBaseCluster().getRegionServerThreads().get(0).getRegionServer()
         .getOnlineRegions(importTable.getName()).get(0).getRegionInfo();
+    TableWALActionListener walListener = new TableWALActionListener(region);
     WAL wal = UTIL.getMiniHBaseCluster().getRegionServer(0).getWAL(region);
     wal.registerWALActionsListener(walListener);
 
@@ -665,7 +666,7 @@ public class TestImportExport {
     region = UTIL.getHBaseCluster().getRegionServerThreads().get(0).getRegionServer()
         .getOnlineRegions(importTable.getName()).get(0).getRegionInfo();
     wal = UTIL.getMiniHBaseCluster().getRegionServer(0).getWAL(region);
-    walListener = new TableWALActionListener(importTableName);
+    walListener = new TableWALActionListener(region);
     wal.registerWALActionsListener(walListener);
     args = new String[] { importTableName, FQ_OUTPUT_DIR };
     assertTrue(runImport(args));
@@ -681,16 +682,17 @@ public class TestImportExport {
    */
   private static class TableWALActionListener extends WALActionsListener.Base {
 
-    private String tableName;
+    private HRegionInfo regionInfo;
     private boolean isVisited = false;
 
-    public TableWALActionListener(String tableName) {
-      this.tableName = tableName;
+    public TableWALActionListener(HRegionInfo region) {
+      this.regionInfo = region;
     }
 
     @Override
-    public void visitLogEntryBeforeWrite(HTableDescriptor htd, WALKey logKey, WALEdit logEdit) {
-      if (tableName.equalsIgnoreCase(htd.getNameAsString())) {
+      public void visitLogEntryBeforeWrite(WALKey logKey, WALEdit logEdit) {
+        if (logKey.getTablename().getNameAsString().equalsIgnoreCase(
+            this.regionInfo.getTable().getNameAsString()) && (!logEdit.isMetaEdit())) {
         isVisited = true;
       }
     }

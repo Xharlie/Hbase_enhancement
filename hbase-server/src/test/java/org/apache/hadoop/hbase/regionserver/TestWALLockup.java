@@ -22,6 +22,8 @@ package org.apache.hadoop.hbase.regionserver;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -217,13 +219,18 @@ public class TestWALLockup {
     HTableDescriptor htd = new HTableDescriptor(TableName.META_TABLE_NAME);
     final HRegion region = initHRegion(tableName, null, null, dodgyWAL);
     byte [] bytes = Bytes.toBytes(getName());
+    MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
+    NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+        Bytes.BYTES_COMPARATOR);
+    scopes.put(COLUMN_FAMILY_BYTES, 0);
     try {
       // First get something into memstore. Make a Put and then pull the Cell out of it. Will
       // manage append and sync carefully in below to manufacture hang. We keep adding same
       // edit. WAL subsystem doesn't care.
       Put put = new Put(bytes);
       put.addColumn(COLUMN_FAMILY_BYTES, Bytes.toBytes("1"), bytes);
-      WALKey key = new WALKey(region.getRegionInfo().getEncodedNameAsBytes(), htd.getTableName());
+      WALKey key = new WALKey(region.getRegionInfo().getEncodedNameAsBytes(), htd.getTableName(),
+          System.currentTimeMillis(), mvcc, scopes);
       WALEdit edit = new WALEdit();
       CellScanner CellScanner = put.cellScanner();
       assertTrue(CellScanner.advance());
@@ -237,7 +244,7 @@ public class TestWALLockup {
       LOG.info("SET throwing of exception on append");
       dodgyWAL.throwException = true;
       // This append provokes a WAL roll request
-      dodgyWAL.append(htd, region.getRegionInfo(), key, edit, true);
+      dodgyWAL.append(region.getRegionInfo(), key, edit, true);
       boolean exception = false;
       try {
         dodgyWAL.sync();
@@ -382,11 +389,15 @@ public class TestWALLockup {
     final HRegion region = initHRegion(tableName, null, null, dodgyWAL1);
     byte[] bytes = Bytes.toBytes(getName());
 
+    MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
+    NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+        Bytes.BYTES_COMPARATOR);
+    scopes.put(COLUMN_FAMILY_BYTES, 0);
     try {
       Put put = new Put(bytes);
       put.addColumn(COLUMN_FAMILY_BYTES, Bytes.toBytes("1"), bytes);
-      WALKey key = new WALKey(region.getRegionInfo().getEncodedNameAsBytes(),
-          htd.getTableName());
+      WALKey key = new WALKey(region.getRegionInfo().getEncodedNameAsBytes(), htd.getTableName(),
+          System.currentTimeMillis(), mvcc, scopes);
       WALEdit edit = new WALEdit();
       CellScanner CellScanner = put.cellScanner();
       assertTrue(CellScanner.advance());
@@ -395,7 +406,7 @@ public class TestWALLockup {
       LOG.info("SET throwing of exception on append");
       dodgyWAL1.throwException = true;
       // This append provokes a WAL roll request
-      dodgyWAL1.append(htd, region.getRegionInfo(), key, edit, true);
+      dodgyWAL1.append(region.getRegionInfo(), key, edit, true);
       boolean exception = false;
       try {
         dodgyWAL1.sync();
@@ -417,9 +428,9 @@ public class TestWALLockup {
 
       // make RingBufferEventHandler sleep 1s, so the following sync
       // endOfBatch=false
-      key = new WALKey(region.getRegionInfo().getEncodedNameAsBytes(),
-          TableName.valueOf("sleep"));
-      dodgyWAL2.append(htd, region.getRegionInfo(), key, edit, true);
+      key = new WALKey(region.getRegionInfo().getEncodedNameAsBytes(), TableName.valueOf("sleep"),
+          System.currentTimeMillis(), mvcc, scopes);
+      dodgyWAL2.append(region.getRegionInfo(), key, edit, true);
 
       Thread t = new Thread("Sync") {
         public void run() {
@@ -442,8 +453,8 @@ public class TestWALLockup {
       }
       // make append throw DamagedWALException
       key = new WALKey(region.getRegionInfo().getEncodedNameAsBytes(),
-          TableName.valueOf("DamagedWALException"));
-      dodgyWAL2.append(htd, region.getRegionInfo(), key, edit, true);
+          TableName.valueOf("DamagedWALException"), System.currentTimeMillis(), mvcc, scopes);
+      dodgyWAL2.append(region.getRegionInfo(), key, edit, true);
 
       while (latch.getCount() > 0) {
         Threads.sleep(100);
@@ -540,7 +551,7 @@ public class TestWALLockup {
   static class DummyWALActionsListener extends WALActionsListener.Base {
 
     @Override
-    public void visitLogEntryBeforeWrite(HTableDescriptor htd, WALKey logKey,
+    public void visitLogEntryBeforeWrite(WALKey logKey,
         WALEdit logEdit) throws IOException {
       if (logKey.getTablename().getNameAsString().equalsIgnoreCase("sleep")) {
         try {

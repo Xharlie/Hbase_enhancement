@@ -63,6 +63,19 @@ public class MultiVersionConsistencyControl {
   }
 
   /**
+   * Call {@link #beginMemstoreInsert(Runnable)} with an empty {@link Runnable}.
+   */
+  public WriteEntry beginMemstoreInsert() {
+    Runnable emptyAction = new Runnable() {
+      @Override
+      public void run() {
+        // do nothing here
+      }
+    };
+    return beginMemstoreInsert(emptyAction);
+  }
+
+  /**
    * Start a write transaction. Create a new {@link WriteEntry} with a new write number and add it
    * to our queue of ongoing writes. Return this WriteEntry instance.
    * <p>
@@ -70,14 +83,18 @@ public class MultiVersionConsistencyControl {
    * {@link #completeMemstoreInsert(WriteEntry)}. If the write failed, call
    * {@link #advanceMemstore(WriteEntry)} so we can clean up AFTER removing ALL trace of the failed write
    * transaction.
+   * <p>
+   * The {@code action} will be executed under the lock which means it can keep the same order with
+   * mvcc.
    * @see #completeMemstoreInsert(WriteEntry)
    * @see #advanceMemstore(WriteEntry)
    */
-  public WriteEntry beginMemstoreInsert() {
+  public WriteEntry beginMemstoreInsert(Runnable action) {
     synchronized (writeQueue) {
       long nextWriteNumber = writePoint.incrementAndGet();
       WriteEntry e = new WriteEntry(nextWriteNumber);
       writeQueue.add(e);
+      action.run();
       return e;
     }
   }

@@ -20,15 +20,17 @@
 package org.apache.hadoop.hbase.regionserver;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.PriorityQueue;
-import java.util.Set;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.regionserver.MemStoreScanner;
 import org.apache.hadoop.hbase.regionserver.ScannerContext.NextState;
 
 /**
@@ -50,7 +52,7 @@ public class KeyValueHeap extends NonReversedNonLazyKeyValueScanner
   // Holds the scanners when a ever a eager close() happens.  All such eagerly closed
   // scans are collected and when the final scanner.close() happens will perform the
   // actual close.
-  protected Set<KeyValueScanner> scannersForDelayedClose = new HashSet<KeyValueScanner>();
+  protected List<KeyValueScanner> scannersForDelayedClose = null;
 
   /**
    * The current sub-scanner, i.e. the one that contains the next key/value
@@ -65,6 +67,9 @@ public class KeyValueHeap extends NonReversedNonLazyKeyValueScanner
   protected KeyValueScanner current = null;
 
   protected KVScannerComparator comparator;
+
+  // Records all memstore scanners, unmodified
+  protected final Collection<MemStoreScanner> memstoreScanners;
 
   /**
    * Constructor.  This KeyValueHeap will handle closing of passed in
@@ -86,17 +91,25 @@ public class KeyValueHeap extends NonReversedNonLazyKeyValueScanner
   KeyValueHeap(List<? extends KeyValueScanner> scanners,
       KVScannerComparator comparator) throws IOException {
     this.comparator = comparator;
+    this.scannersForDelayedClose = new ArrayList<KeyValueScanner>(scanners.size());
     if (!scanners.isEmpty()) {
       this.heap = new PriorityQueue<KeyValueScanner>(scanners.size(),
           this.comparator);
+      List<MemStoreScanner> memstoreScanners = new ArrayList<MemStoreScanner>();
       for (KeyValueScanner scanner : scanners) {
+        if (scanner instanceof MemStoreScanner) {
+          memstoreScanners.add((MemStoreScanner) scanner);
+        }
         if (scanner.peek() != null) {
           this.heap.add(scanner);
         } else {
           this.scannersForDelayedClose.add(scanner);
         }
       }
+      this.memstoreScanners = Collections.unmodifiableCollection(memstoreScanners);
       this.current = pollRealKV();
+    } else {
+      this.memstoreScanners = Collections.emptyList();
     }
   }
 
@@ -297,12 +310,10 @@ public class KeyValueHeap extends NonReversedNonLazyKeyValueScanner
     if (current == null) {
       return false;
     }
-    heap.add(current);
-    current = null;
 
-    KeyValueScanner scanner = null;
+    KeyValueScanner scanner = current;
     try {
-      while ((scanner = heap.poll()) != null) {
+      while (scanner != null) {
         Cell topKey = scanner.peek();
         if (comparator.getComparator().compare(seekKey, topKey) <= 0) {
           // Top KeyValue is at-or-after Seek KeyValue. We only know that all
@@ -312,6 +323,7 @@ public class KeyValueHeap extends NonReversedNonLazyKeyValueScanner
           // invariant that the top scanner has done a real seek. This way
           // StoreScanner and RegionScanner do not have to worry about fake keys.
           heap.add(scanner);
+          scanner = null;
           current = pollRealKV();
           return current != null;
         }
@@ -328,6 +340,10 @@ public class KeyValueHeap extends NonReversedNonLazyKeyValueScanner
           this.scannersForDelayedClose.add(scanner);
         } else {
           heap.add(scanner);
+        }
+        scanner = heap.poll();
+        if (scanner == null) {
+          current = null;
         }
       }
     } catch (Throwable e) {
@@ -415,6 +431,17 @@ public class KeyValueHeap extends NonReversedNonLazyKeyValueScanner
 
   KeyValueScanner getCurrentForTesting() {
     return current;
+  }
+
+  public KeyValueScanner getCurrent() {
+    return current;
+  }
+
+  /**
+   * @return the memstore scanners included in this heap
+   */
+  public Collection<MemStoreScanner> getMemstoreScanners() {
+    return this.memstoreScanners;
   }
 
   @Override

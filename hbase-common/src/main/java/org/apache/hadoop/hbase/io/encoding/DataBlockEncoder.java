@@ -39,7 +39,8 @@ import org.apache.hadoop.hbase.nio.ByteBuff;
  */
 @InterfaceAudience.Private
 public interface DataBlockEncoder {
-
+// TODO: This Interface should be deprecated and replaced. It presumes hfile and carnal knowledge of
+// Cell internals. It was done for a different time. Remove. Purge.
   /**
    * Starts encoding for a block of KeyValues. Call
    * {@link #endBlockEncoding(HFileBlockEncodingContext, DataOutputStream, byte[])} to finish
@@ -154,10 +155,6 @@ public interface DataBlockEncoder {
      * @return value at current position
      */
     ByteBuffer getValueShallowCopy();
-    
-    //TODO : to be removed - currently used in testcases only
-    /** @return a key value buffer with the position set at the beginning of the buffer */
-    ByteBuffer getKeyValueBuffer();
 
     /**
      * @return the Cell at the current position. Includes memstore timestamp.

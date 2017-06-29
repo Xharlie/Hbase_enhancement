@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.lang.Thread.UncaughtExceptionHandler;
 import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryType;
 import java.lang.management.MemoryUsage;
 import java.lang.reflect.Constructor;
 import java.net.BindException;
@@ -45,6 +46,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -97,6 +99,7 @@ import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.http.InfoServer;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.HFile;
+import org.apache.hadoop.hbase.io.util.MemorySizeUtil;
 import org.apache.hadoop.hbase.ipc.*;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.RegionState.State;
@@ -153,16 +156,14 @@ import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.HasThread;
 import org.apache.hadoop.hbase.util.JSONBean;
 import org.apache.hadoop.hbase.util.JvmPauseMonitor;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.ServerRegionReplicaUtil;
 import org.apache.hadoop.hbase.util.Sleeper;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.util.VersionInfo;
-import org.apache.hadoop.hbase.wal.BoundedGroupingStrategy;
 import org.apache.hadoop.hbase.wal.DefaultWALProvider;
-import org.apache.hadoop.hbase.wal.RegionGroupingProvider;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALFactory;
-import org.apache.hadoop.hbase.wal.WALProvider;
 import org.apache.hadoop.hbase.zookeeper.ClusterStatusTracker;
 import org.apache.hadoop.hbase.zookeeper.MasterAddressTracker;
 import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
@@ -174,6 +175,7 @@ import org.apache.hadoop.hbase.zookeeper.ZooKeeperNodeTracker;
 import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.metrics.util.MBeanUtil;
+import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.zookeeper.KeeperException;
@@ -301,6 +303,8 @@ public class HRegionServer extends HasThread implements
   // space regions.
   private boolean stopping = false;
 
+  private boolean shutdown = false;
+
   private volatile boolean killed = false;
 
   protected final Configuration conf;
@@ -334,7 +338,7 @@ public class HRegionServer extends HasThread implements
   /** region server process name */
   public static final String REGIONSERVER = "regionserver";
 
-  MetricsRegionServer metricsRegionServer;
+  public MetricsRegionServer metricsRegionServer;
   private SpanReceiverHost spanReceiverHost;
 
   /**
@@ -511,47 +515,6 @@ public class HRegionServer extends HasThread implements
     this.directHealthCheckNumUnhealthy = directHealthCheckNumUnhealthy;
   }
 
-  public int getAllPreAppendQueueSize() {
-    if (!(walFactory.getWALProvider() instanceof RegionGroupingProvider)) return 0;
-    RegionGroupingProvider provider = (RegionGroupingProvider)walFactory.getWALProvider();
-    int amount = 0;
-    for (String regionGP : provider.cachedRegion.keySet()){
-      HRegionGroupProcess hrgp = provider.cachedRegion.get(regionGP);
-      if (hrgp != null) {
-        amount += hrgp.getAllPreAppendQueueSize();
-      }
-    }
-    return amount;
-  }
-
-  public int getAllSyncFinishQueueSize() {
-    if (!(walFactory.getWALProvider() instanceof RegionGroupingProvider)) return 0;
-    RegionGroupingProvider provider = (RegionGroupingProvider)walFactory.getWALProvider();
-    int amount = 0;
-    for (String regionGP : provider.cachedRegion.keySet()){
-      HRegionGroupProcess hrgp = provider.cachedRegion.get(regionGP);
-      if (hrgp != null) {
-        amount += hrgp.getAllSyncFinishQueueSize();
-      }
-    }
-    return amount;
-  }
-
-  public int getAllAsyncFinishQueueSize() {
-    if (!(walFactory.getWALProvider() instanceof RegionGroupingProvider)) return 0;
-    RegionGroupingProvider provider = (RegionGroupingProvider)walFactory.getWALProvider();
-    int amount = 0;
-    for (String regionGP : provider.cachedRegion.keySet()){
-      HRegionGroupProcess hrgp = provider.cachedRegion.get(regionGP);
-      if (hrgp != null) {
-        amount += hrgp.getAllAsyncFinishQueueSize();
-      }
-    }
-    return amount;
-  }
-
-
-
   /**
    * Configuration manager is used to register/deregister and notify the configuration observers
    * when the regionserver is notified that there was a change in the on disk configs.
@@ -581,6 +544,7 @@ public class HRegionServer extends HasThread implements
       throws IOException, InterruptedException {
     this.fsOk = true;
     this.conf = conf;
+    MemorySizeUtil.checkForClusterFreeHeapMemoryLimit(this.conf);
     HFile.checkHFileVersion(this.conf);
     checkCodecs(this.conf);
     this.userProvider = UserProvider.instantiate(conf);
@@ -634,7 +598,7 @@ public class HRegionServer extends HasThread implements
     // login the server principal (if using secure Hadoop)
     login(userProvider, hostName);
 
-    regionServerAccounting = new RegionServerAccounting();
+    regionServerAccounting = new RegionServerAccounting(conf);
     uncaughtExceptionHandler = new UncaughtExceptionHandler() {
       @Override
       public void uncaughtException(Thread t, Throwable e) {
@@ -753,7 +717,7 @@ public class HRegionServer extends HasThread implements
 
   /**
    * Create a 'smarter' HConnection, one that is capable of by-passing RPC if the request is to
-   * the local server.  Safe to use going to local or remote server.
+   * the local server. Safe to use going to local or remote server.
    * Create this instance in a method can be intercepted and mocked in tests.
    * @throws IOException
    */
@@ -762,8 +726,8 @@ public class HRegionServer extends HasThread implements
     // Create a cluster connection that when appropriate, can short-circuit and go directly to the
     // local server if the request is to the local server bypassing RPC. Can be used for both local
     // and remote invocations.
-    return ConnectionUtils.createShortCircuitHConnection(
-      ConnectionFactory.createConnection(conf), serverName, rpcServices, rpcServices);
+    return ConnectionUtils.createShortCircuitConnection(conf, null, userProvider.getCurrent(),
+      serverName, rpcServices, rpcServices);
   }
 
   /**
@@ -1182,6 +1146,7 @@ public class HRegionServer extends HasThread implements
     LOG.info("stopping server " + this.serverName +
       "; zookeeper connection closed.");
 
+    shutdown = true;
     LOG.info(Thread.currentThread().getName() + " exiting");
   }
 
@@ -1459,6 +1424,8 @@ public class HRegionServer extends HasThread implements
 
       startServiceThreads();
       startHeapMemoryManager();
+      // Call it after starting HeapMemoryManager.
+      initializeMemStoreChunkPool();
       LOG.info("Serving as " + this.serverName +
         ", RpcServer on " + rpcServices.isa +
         ", sessionid=0x" +
@@ -1478,8 +1445,32 @@ public class HRegionServer extends HasThread implements
     }
   }
 
+  private void initializeMemStoreChunkPool() {
+    if (MemStoreLAB.isEnabled(conf)) {
+      // MSLAB is enabled. So initialize MemStoreChunkPool
+      // By this time, the MemstoreFlusher is already initialized. We can get the global limits from
+      // it.
+      Pair<Long, MemoryType> pair = MemorySizeUtil.getGlobalMemstoreSize(conf);
+      long globalMemStoreSize = pair.getFirst();
+      boolean offheap = this.regionServerAccounting.isOffheap();
+      // When off heap memstore in use, take full area for chunk pool.
+      float poolSizePercentage = offheap ? 1.0F
+          : conf.getFloat(MemStoreLAB.CHUNK_POOL_MAXSIZE_KEY, MemStoreLAB.POOL_MAX_SIZE_DEFAULT);
+      float initialCountPercentage = conf.getFloat(MemStoreLAB.CHUNK_POOL_INITIALSIZE_KEY,
+          MemStoreLAB.POOL_INITIAL_SIZE_DEFAULT);
+      int chunkSize = conf.getInt(MemStoreLAB.CHUNK_SIZE_KEY, MemStoreLAB.CHUNK_SIZE_DEFAULT);
+      MemStoreChunkPool pool = MemStoreChunkPool.initialize(globalMemStoreSize, poolSizePercentage,
+          initialCountPercentage, chunkSize, offheap);
+      if (pool != null && this.hMemManager != null) {
+        // Register with Heap Memory manager
+        this.hMemManager.registerTuneObserver(pool);
+      }
+    }
+  }
+
   private void startHeapMemoryManager() {
-    this.hMemManager = HeapMemoryManager.create(this.conf, this.cacheFlusher, this);
+    this.hMemManager = HeapMemoryManager.create(this.conf, this.cacheFlusher, this,
+        this.regionServerAccounting);
     if (this.hMemManager != null) {
       this.hMemManager.start(getChoreService());
     }
@@ -2237,6 +2228,9 @@ public class HRegionServer extends HasThread implements
       if (this.replicationSinkHandler != null) {
         this.replicationSinkHandler.stopReplicationService();
       }
+    }
+    if (metricsRegionServer != null) {
+      DefaultMetricsSystem.instance().shutdown();
     }
   }
 
@@ -3400,11 +3394,6 @@ public class HRegionServer extends HasThread implements
   }
 
   @Override
-  public HeapMemoryManager getHeapMemoryManager() {
-    return hMemManager;
-  }
-
-  @Override
   public double getCompactionPressure() {
     double max = 0;
     for (Region region : onlineRegions.values()) {
@@ -3416,6 +3405,11 @@ public class HRegionServer extends HasThread implements
       }
     }
     return max;
+  }
+
+  @Override
+  public HeapMemoryManager getHeapMemoryManager() {
+    return hMemManager;
   }
 
   /**
@@ -3438,8 +3432,7 @@ public class HRegionServer extends HasThread implements
       // return 0 during RS initialization
       return 0.0;
     }
-    return getRegionServerAccounting().getGlobalMemstoreSize() * 1.0
-        / cacheFlusher.globalMemStoreLimitLowMark;
+    return getRegionServerAccounting().getFlushPressure();
   }
 
   @Override
@@ -3476,5 +3469,9 @@ public class HRegionServer extends HasThread implements
       allRegions.addAll(onlineRegions.values());
     }
     return allRegions;
+  }
+
+  protected boolean isShutDown() {
+    return this.shutdown;
   }
 }

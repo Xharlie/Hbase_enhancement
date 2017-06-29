@@ -20,7 +20,7 @@ package org.apache.hadoop.hbase.codec.prefixtree;
 
 import java.nio.ByteBuffer;
 
-import org.apache.hadoop.hbase.ByteBufferedCell;
+import org.apache.hadoop.hbase.ByteBufferCell;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
@@ -89,19 +89,11 @@ public class PrefixTreeSeeker implements EncodedSeeker {
    * currently must do deep copy into new array
    */
   @Override
-  public ByteBuffer getKeyValueBuffer() {
-    return KeyValueUtil.copyToNewByteBuffer(ptSearcher.current());
-  }
-
-  /**
-   * currently must do deep copy into new array
-   */
-  @Override
   public Cell getCell() {
     // The PrefixTreecell is of type BytebufferedCell and the value part of the cell
     // determines whether we are offheap cell or onheap cell.  All other parts of the cell-
     // row, fam and col are all represented as onheap byte[]
-    ByteBufferedCell cell = (ByteBufferedCell)ptSearcher.current();
+    ByteBufferCell cell = (ByteBufferCell)ptSearcher.current();
     if (cell == null) {
       return null;
     }
@@ -400,7 +392,7 @@ public class PrefixTreeSeeker implements EncodedSeeker {
 	}
   }
 
-  private static class OffheapPrefixTreeCell extends ByteBufferedCell implements Cell,
+  private static class OffheapPrefixTreeCell extends ByteBufferCell implements Cell,
       SettableSequenceId, HeapSize {
     private static final long FIXED_OVERHEAD = ClassSize.align(ClassSize.OBJECT
         + (5 * ClassSize.REFERENCE) + (2 * Bytes.SIZEOF_LONG) + (4 * Bytes.SIZEOF_INT)
@@ -596,7 +588,7 @@ public class PrefixTreeSeeker implements EncodedSeeker {
 
     @Override
     public long heapSize() {
-      return FIXED_OVERHEAD + rowLength + famLength + qualLength + valLength + tagsLength;
+      return FIXED_OVERHEAD;
     }
 
     @Override

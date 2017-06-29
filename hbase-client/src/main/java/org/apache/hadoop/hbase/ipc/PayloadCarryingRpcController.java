@@ -43,7 +43,7 @@ public class PayloadCarryingRpcController
    * undoing the old annotation-based mechanism.
    */
   private int priority = PRIORITY_UNSET;
-  private Boolean responseDelegated = false;
+
   /**
    * They are optionally set on construction, cleared after we make the call, and then optionally
    * set on response with the result. We use this lowest common denominator access to Cells because
@@ -103,13 +103,5 @@ public class PayloadCarryingRpcController
     super.reset();
     priority = 0;
     cellScanner = null;
-  }
-
-  public void setResponseDelegated(final Boolean responseDelegated){
-    this.responseDelegated = responseDelegated;
-  }
-
-  public Boolean getResponseDelegated(){
-    return this.responseDelegated;
   }
 }

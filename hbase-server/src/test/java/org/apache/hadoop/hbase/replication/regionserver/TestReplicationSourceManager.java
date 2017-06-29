@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
 import java.util.SortedSet;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -52,6 +54,7 @@ import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ClusterConnection;
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
 import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 import org.apache.hadoop.hbase.replication.ReplicationFactory;
@@ -121,6 +124,7 @@ public class TestReplicationSourceManager {
   private static CountDownLatch latch;
 
   private static List<String> files = new ArrayList<String>();
+  private static NavigableMap<byte[], Integer> scopes;
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
@@ -167,6 +171,11 @@ public class TestReplicationSourceManager {
     col.setScope(HConstants.REPLICATION_SCOPE_LOCAL);
     htd.addFamily(col);
 
+    scopes = new TreeMap<byte[], Integer>(
+        Bytes.BYTES_COMPARATOR);
+    for(byte[] fam : htd.getFamiliesKeys()) {
+      scopes.put(fam, 0);
+    }
     hri = new HRegionInfo(htd.getTableName(), r1, r2);
   }
 
@@ -205,14 +214,20 @@ public class TestReplicationSourceManager {
     manager.init();
     HTableDescriptor htd = new HTableDescriptor();
     htd.addFamily(new HColumnDescriptor(f1));
+    NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+            Bytes.BYTES_COMPARATOR);
+    for(byte[] fam : htd.getFamiliesKeys()) {
+      scopes.put(fam, 0);
+    }
     // Testing normal log rolling every 20
+    MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
     for(long i = 1; i < 101; i++) {
       if(i > 1 && i % 20 == 0) {
         wal.rollWriter();
       }
       LOG.info(i);
-      final long txid = wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), test,
-          System.currentTimeMillis()), edit, true);
+      final long txid = wal.append(hri, new WALKey(hri.getEncodedNameAsBytes(), test,
+          System.currentTimeMillis(), mvcc, scopes), edit, true);
       wal.sync(txid);
     }
 
@@ -224,8 +239,8 @@ public class TestReplicationSourceManager {
     LOG.info(baseline + " and " + time);
 
     for (int i = 0; i < 3; i++) {
-      wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), test,
-          System.currentTimeMillis()), edit, true);
+      wal.append(hri, new WALKey(hri.getEncodedNameAsBytes(), test,
+          System.currentTimeMillis(), mvcc, scopes), edit, true);
     }
     wal.sync();
 
@@ -240,8 +255,8 @@ public class TestReplicationSourceManager {
     manager.logPositionAndCleanOldLogs(manager.getSources().get(0).getCurrentPath(),
         "1", 0, false, false);
 
-    wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(), test,
-        System.currentTimeMillis()), edit, true);
+    wal.append(hri, new WALKey(hri.getEncodedNameAsBytes(), test,
+        System.currentTimeMillis(), mvcc, scopes), edit, true);
     wal.sync();
 
     assertEquals(1, manager.getWALs().size());

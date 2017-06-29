@@ -170,6 +170,27 @@ public final class RequestConverter {
     builder.setGet(ProtobufUtil.toGet(get));
     return builder.build();
   }
+  /**
+   * Create a protocol buffer GetRequest for a client Get
+   *
+   * @param regionName the name of the region to get
+   * @param get the client Get
+   * @return a protocol buffer GetRequest
+   **/
+  public static GetRequest buildGetRequest(final byte[] regionName,
+      final Get get, long scannerId, long nextCallSeq, boolean clientHandlePartialResult) throws IOException {
+    GetRequest.Builder builder = GetRequest.newBuilder();
+    RegionSpecifier region = buildRegionSpecifier(
+        RegionSpecifierType.REGION_NAME, regionName);
+      builder.setRegion(region);
+      builder.setGet(ProtobufUtil.toGet(get));
+      if (scannerId != -1) {
+        builder.setScannerId(scannerId);
+      }
+      builder.setNextCallSeq(nextCallSeq);
+      builder.setClientHandlesPartials(clientHandlePartialResult);
+      return builder.build();
+   }
 
   /**
    * Create a protocol buffer MutateRequest for a client increment

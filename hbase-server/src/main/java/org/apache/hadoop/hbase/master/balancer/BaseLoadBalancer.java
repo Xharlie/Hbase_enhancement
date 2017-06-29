@@ -40,6 +40,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.ClusterStatus;
 import org.apache.hadoop.hbase.HBaseIOException;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HDFSBlocksDistribution;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.RegionLoad;
@@ -800,6 +801,7 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
   protected ClusterStatus clusterStatus = null;
   protected ServerName masterServerName;
   protected MasterServices services;
+  protected boolean isEmbedded;
 
   protected static String[] getTablesOnMaster(Configuration conf) {
     String valueString = conf.get(TABLES_ON_MASTER);
@@ -832,6 +834,7 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
       Collections.addAll(tablesOnMaster, tables);
     }
     this.rackManager = new RackManager(getConf());
+    this.isEmbedded = conf.getBoolean(HConstants.EMBEDDED_MODE, false);
     regionFinder.setConf(conf);
   }
 
@@ -1007,7 +1010,7 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
     if (assignments != null && !assignments.isEmpty()) {
       servers = new ArrayList<ServerName>(servers);
       // Guarantee not to put other regions on master
-      servers.remove(masterServerName);
+      if (!isEmbedded) servers.remove(masterServerName);
       List<HRegionInfo> masterRegions = assignments.get(masterServerName);
       if (!masterRegions.isEmpty()) {
         regions = new ArrayList<HRegionInfo>(regions);
@@ -1148,7 +1151,7 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
       }
       servers = new ArrayList<ServerName>(servers);
       // Guarantee not to put other regions on master
-      servers.remove(masterServerName);
+      if (!isEmbedded) servers.remove(masterServerName);
     }
 
     int numServers = servers == null ? 0 : servers.size();
@@ -1192,7 +1195,7 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
     if (assignments != null && !assignments.isEmpty()) {
       servers = new ArrayList<ServerName>(servers);
       // Guarantee not to put other regions on master
-      servers.remove(masterServerName);
+      if (!isEmbedded) servers.remove(masterServerName);
       List<HRegionInfo> masterRegions = assignments.get(masterServerName);
       if (!masterRegions.isEmpty()) {
         regions = new HashMap<HRegionInfo, ServerName>(regions);

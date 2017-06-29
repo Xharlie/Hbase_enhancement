@@ -23,6 +23,10 @@ import org.apache.hadoop.hbase.security.User;
 
 import org.apache.hadoop.hbase.protobuf.generated.RPCProtos.VersionInfo;
 
+/**
+ * Interface of all necessary to carry out a RPC service invocation on the server. This interface
+ * focus on the information needed or obtained during the actual execution of the service method.
+ */
 public interface RpcCallContext extends Delayable {
   /**
    * Check if the caller who made this IPC call has disconnected.

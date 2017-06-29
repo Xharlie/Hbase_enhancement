@@ -55,4 +55,8 @@ public class MetricsMaster {
   public void incrementRequests(final long inc) {
     masterSource.incRequests(inc);
   }
+
+  public void updateOldWALNumber(final long oldWALNumber) {
+    masterSource.updateOldWALNumber(oldWALNumber);
+  }
 }

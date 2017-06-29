@@ -382,19 +382,4 @@ public interface MetricsRegionServerWrapper {
    */
   int getDirectHealthCheckNumUnhealthy();
 
-  /**
-   * @return the number of calls in all preAppend queues.
-   */
-  int getPreAppendQueueSize();
-
-  /**
-   * @return the number of calls in all syncFinish queues.
-   */
-  int getSyncFinishQueueSize();
-
-  /**
-   * @return the number of calls in the asyncFinish queues.
-   */
-  int getAsyncFinishQueueSize();
-
 }

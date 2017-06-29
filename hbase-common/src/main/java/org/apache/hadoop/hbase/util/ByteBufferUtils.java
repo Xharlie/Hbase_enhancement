@@ -598,6 +598,22 @@ public final class ByteBufferUtils {
     return compareTo(buf1, o1, l1, buf2, o2, l2) == 0;
   }
 
+  /**
+   * @param buf
+   *          ByteBuffer to hash
+   * @param offset
+   *          offset to start from
+   * @param length
+   *          length to hash
+   */
+  public static int hashCode(ByteBuffer buf, int offset, int length) {
+    int hash = 1;
+    for (int i = offset; i < offset + length; i++) {
+      hash = (31 * hash) + (int) toByte(buf, i);
+    }
+    return hash;
+  }
+
   public static int compareTo(ByteBuffer buf1, int o1, int l1, ByteBuffer buf2, int o2, int l2) {
     if (UNSAFE_UNALIGNED) {
       long offset1Adj, offset2Adj;
@@ -762,6 +778,19 @@ public final class ByteBufferUtils {
   }
 
   /**
+   * Reads an int value at the given buffer's current position. Also advances the buffer's position
+   */
+  public static int toInt(ByteBuffer buffer) {
+    if (UNSAFE_UNALIGNED) {
+      int i = UnsafeAccess.toInt(buffer, buffer.position());
+      buffer.position(buffer.position() + Bytes.SIZEOF_INT);
+      return i;
+    } else {
+      return buffer.getInt();
+    }
+  }
+
+  /**
    * Reads an int value at the given buffer's offset.
    * @param buffer
    * @param offset
@@ -810,6 +839,14 @@ public final class ByteBufferUtils {
     } else {
       return buffer.getLong(offset);
     }
+  }
+
+  public static int putInt(ByteBuffer buffer, int index, int val) {
+    if (UNSAFE_UNALIGNED) {
+      return UnsafeAccess.putInt(buffer, index, val);
+    }
+    buffer.putInt(index, val);
+    return index + Bytes.SIZEOF_INT;
   }
 
   /**
@@ -870,6 +907,21 @@ public final class ByteBufferUtils {
     }
   }
 
+  public static int putShort(ByteBuffer buffer, int index, short val) {
+    if (UNSAFE_UNALIGNED) {
+      return UnsafeAccess.putShort(buffer, index, val);
+    }
+    buffer.putShort(index, val);
+    return index + Bytes.SIZEOF_SHORT;
+  }
+
+  public static int putAsShort(ByteBuffer buf, int index, int val) {
+    buf.put(index + 1, (byte) val);
+    val >>= 8;
+    buf.put(index, (byte) val);
+    return index + Bytes.SIZEOF_SHORT;
+  }
+
   /**
    * Put a long value out to the given ByteBuffer's current position in big-endian format.
    * This also advances the position in buffer by long size.
@@ -884,6 +936,15 @@ public final class ByteBufferUtils {
       buffer.putLong(val);
     }
   }
+
+  public static int putLong(ByteBuffer buffer, int index, long val) {
+    if (UNSAFE_UNALIGNED) {
+      return UnsafeAccess.putLong(buffer, index, val);
+    }
+    buffer.putLong(index, val);
+    return index + Bytes.SIZEOF_LONG;
+  }
+
   /**
    * Copies the bytes from given array's offset to length part into the given buffer. Puts the bytes
    * to buffer's current position. This also advances the position in the 'out' buffer by 'length'

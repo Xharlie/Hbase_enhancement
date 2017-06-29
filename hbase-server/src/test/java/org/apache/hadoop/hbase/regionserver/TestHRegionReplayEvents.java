@@ -165,7 +165,7 @@ public class TestHRegionReplayEvents {
     rss = mock(RegionServerServices.class);
     when(rss.getServerName()).thenReturn(ServerName.valueOf("foo", 1, 1));
     when(rss.getConfiguration()).thenReturn(CONF);
-    when(rss.getRegionServerAccounting()).thenReturn(new RegionServerAccounting());
+    when(rss.getRegionServerAccounting()).thenReturn(new RegionServerAccounting(CONF));
 
     primaryRegion = HRegion.createHRegion(primaryHri, rootDir, CONF, htd, walPrimary);
     primaryRegion.close();
@@ -268,12 +268,12 @@ public class TestHRegionReplayEvents {
       }
     }
 
-    assertTrue(rss.getRegionServerAccounting().getGlobalMemstoreSize() > 0);
+    assertTrue(rss.getRegionServerAccounting().getGlobalMemstoreDataSize() > 0);
     // now close the region which should not cause hold because of un-committed flush
     secondaryRegion.close();
 
     // verify that the memstore size is back to what it was
-    assertEquals(0, rss.getRegionServerAccounting().getGlobalMemstoreSize());
+    assertEquals(0, rss.getRegionServerAccounting().getGlobalMemstoreDataSize());
   }
 
   static int replayEdit(HRegion region, WAL.Entry entry) throws IOException {
@@ -942,8 +942,8 @@ public class TestHRegionReplayEvents {
       assertEquals(expectedStoreFileCount, s.getStorefilesCount());
     }
     Store store = secondaryRegion.getStore(Bytes.toBytes("cf1"));
-    long newSnapshotSize = store.getSnapshotSize();
-    assertTrue(newSnapshotSize == 0);
+    MemstoreSize newSnapshotSize = store.getSizeOfSnapshot();
+    assertTrue(newSnapshotSize.getDataSize() == 0);
 
     // assert that the region memstore is empty
     long newRegionMemstoreSize = secondaryRegion.getMemstoreSize();
@@ -1114,7 +1114,7 @@ public class TestHRegionReplayEvents {
 
     // test for region open and close
     secondaryRegion = HRegion.openHRegion(secondaryHri, htd, walSecondary, CONF, rss, null);
-    verify(walSecondary, times(0)).append((HTableDescriptor)any(), (HRegionInfo)any(),
+    verify(walSecondary, times(0)).append((HRegionInfo)any(),
       (WALKey)any(), (WALEdit)any(), anyBoolean());
 
     // test for replay prepare flush
@@ -1128,11 +1128,11 @@ public class TestHRegionReplayEvents {
       .setRegionName(ByteString.copyFrom(primaryRegion.getRegionInfo().getRegionName()))
       .build());
 
-    verify(walSecondary, times(0)).append((HTableDescriptor)any(), (HRegionInfo)any(),
+    verify(walSecondary, times(0)).append((HRegionInfo)any(),
       (WALKey)any(), (WALEdit)any(), anyBoolean());
 
     secondaryRegion.close();
-    verify(walSecondary, times(0)).append((HTableDescriptor)any(), (HRegionInfo)any(),
+    verify(walSecondary, times(0)).append((HRegionInfo)any(),
       (WALKey)any(), (WALEdit)any(), anyBoolean());
   }
 

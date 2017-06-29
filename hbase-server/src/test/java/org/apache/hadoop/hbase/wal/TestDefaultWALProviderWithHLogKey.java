@@ -20,13 +20,15 @@ package org.apache.hadoop.hbase.wal;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.TableName;
 import org.junit.experimental.categories.Category;
+import java.util.NavigableMap;
 
 import org.apache.hadoop.hbase.regionserver.wal.HLogKey;
 
 @Category(LargeTests.class)
 public class TestDefaultWALProviderWithHLogKey extends TestDefaultWALProvider {
   @Override
-  WALKey getWalKey(final byte[] info, final TableName tableName, final long timestamp) {
-    return new HLogKey(info, tableName, timestamp, mvcc);
+  WALKey getWalKey(final byte[] info, final TableName tableName, final long timestamp,
+          final NavigableMap<byte[], Integer> scopes) {
+    return new HLogKey(info, tableName, timestamp, mvcc,scopes);
   }
 }

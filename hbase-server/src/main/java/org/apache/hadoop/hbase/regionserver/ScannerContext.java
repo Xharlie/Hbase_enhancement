@@ -101,7 +101,7 @@ public class ScannerContext {
     if (limitsToCopy != null) this.limits.copy(limitsToCopy);
 
     // Progress fields are initialized to 0
-    progress = new LimitFields(0, LimitFields.DEFAULT_SCOPE, 0, LimitFields.DEFAULT_SCOPE, 0);
+    progress = new LimitFields(0, LimitFields.DEFAULT_SCOPE, 0, 0, LimitFields.DEFAULT_SCOPE, 0);
 
     this.keepProgress = keepProgress;
     this.scannerState = DEFAULT_STATE;
@@ -132,9 +132,11 @@ public class ScannerContext {
   /**
    * Progress towards the size limit has been made. Increment internal tracking of size progress
    */
-  void incrementSizeProgress(long size) {
-    long currentSize = progress.getSize();
-    progress.setSize(currentSize + size);
+  void incrementSizeProgress(long dataSize, long heapSize) {
+    long curDataSize = progress.getDataSize();
+    progress.setDataSize(curDataSize + dataSize);
+    long curHeapSize = progress.getHeapSize();
+    progress.setHeapSize(curHeapSize + heapSize);
   }
 
   /**
@@ -148,22 +150,27 @@ public class ScannerContext {
     return progress.getBatch();
   }
 
-  long getSizeProgress() {
-    return progress.getSize();
+  long getDataSizeProgress() {
+    return progress.getDataSize();
+  }
+
+  long getHeapSizeProgress() {
+    return progress.getHeapSize();
   }
 
   long getTimeProgress() {
     return progress.getTime();
   }
 
-  void setProgress(int batchProgress, long sizeProgress, long timeProgress) {
+  void setProgress(int batchProgress, long sizeProgress, long heapSizeProgress, long timeProgress) {
     setBatchProgress(batchProgress);
-    setSizeProgress(sizeProgress);
+    setSizeProgress(sizeProgress, heapSizeProgress);
     setTimeProgress(timeProgress);
   }
 
-  void setSizeProgress(long sizeProgress) {
-    progress.setSize(sizeProgress);
+  void setSizeProgress(long dataSizeProgress, long heapSizeProgress) {
+    progress.setDataSize(dataSizeProgress);
+    progress.setHeapSize(heapSizeProgress);
   }
 
   void setBatchProgress(int batchProgress) {
@@ -179,7 +186,7 @@ public class ScannerContext {
    * values
    */
   void clearProgress() {
-    progress.setFields(0, LimitFields.DEFAULT_SCOPE, 0, LimitFields.DEFAULT_SCOPE, 0);
+    progress.setFields(0, LimitFields.DEFAULT_SCOPE, 0, 0, LimitFields.DEFAULT_SCOPE, 0);
   }
 
   /**
@@ -230,7 +237,8 @@ public class ScannerContext {
    * @return true if the size limit can be enforced in the checker's scope
    */
   boolean hasSizeLimit(LimitScope checkerScope) {
-    return limits.canEnforceSizeLimitFromScope(checkerScope) && limits.getSize() > 0;
+    return limits.canEnforceSizeLimitFromScope(checkerScope)
+        && (limits.getDataSize() > 0 || limits.getHeapSize() > 0);
   }
 
   /**
@@ -267,8 +275,8 @@ public class ScannerContext {
     return limits.getBatch();
   }
 
-  long getSizeLimit() {
-    return limits.getSize();
+  long getDataSizeLimit() {
+    return limits.getDataSize();
   }
 
   long getTimeLimit() {
@@ -288,7 +296,8 @@ public class ScannerContext {
    * @return true when the limit is enforceable from the checker's scope and it has been reached
    */
   boolean checkSizeLimit(LimitScope checkerScope) {
-    return hasSizeLimit(checkerScope) && progress.getSize() >= limits.getSize();
+    return hasSizeLimit(checkerScope) && (progress.getDataSize() >= limits.getDataSize()
+        || progress.getHeapSize() >= limits.getHeapSize());
   }
 
   /**
@@ -354,8 +363,9 @@ public class ScannerContext {
       return this;
     }
 
-    public Builder setSizeLimit(LimitScope sizeScope, long sizeLimit) {
-      limits.setSize(sizeLimit);
+    public Builder setSizeLimit(LimitScope sizeScope, long dataSizeLimit, long heapSizeLimit) {
+      limits.setDataSize(dataSizeLimit);
+      limits.setHeapSize(heapSizeLimit);
       limits.setSizeScope(sizeScope);
       return this;
     }
@@ -499,7 +509,11 @@ public class ScannerContext {
     int batch = DEFAULT_BATCH;
 
     LimitScope sizeScope = DEFAULT_SCOPE;
-    long size = DEFAULT_SIZE;
+    // The sum of cell data sizes(key + value). The Cell data might be in on heap or off heap area.
+    long dataSize = DEFAULT_SIZE;
+    // The sum of heap space occupied by all tracked cells. This includes Cell POJO's overhead as
+    // such AND data cells of Cells which are in on heap area.
+    long heapSize = DEFAULT_SIZE;
 
     LimitScope timeScope = DEFAULT_SCOPE;
     long time = DEFAULT_TIME;
@@ -510,14 +524,15 @@ public class ScannerContext {
     LimitFields() {
     }
 
-    LimitFields(int batch, LimitScope sizeScope, long size, LimitScope timeScope, long time) {
-      setFields(batch, sizeScope, size, timeScope, time);
+    LimitFields(int batch, LimitScope sizeScope, long size, long heapSize, LimitScope timeScope,
+        long time) {
+      setFields(batch, sizeScope, size, heapSize, timeScope, time);
     }
 
     void copy(LimitFields limitsToCopy) {
       if (limitsToCopy != null) {
-        setFields(limitsToCopy.getBatch(), limitsToCopy.getSizeScope(), limitsToCopy.getSize(),
-          limitsToCopy.getTimeScope(), limitsToCopy.getTime());
+        setFields(limitsToCopy.getBatch(), limitsToCopy.getSizeScope(), limitsToCopy.getDataSize(),
+            limitsToCopy.getHeapSize(), limitsToCopy.getTimeScope(), limitsToCopy.getTime());
       }
     }
 
@@ -525,12 +540,14 @@ public class ScannerContext {
      * Set all fields together.
      * @param batch
      * @param sizeScope
-     * @param size
+     * @param dataSize
      */
-    void setFields(int batch, LimitScope sizeScope, long size, LimitScope timeScope, long time) {
+    void setFields(int batch, LimitScope sizeScope, long dataSize, long heapSize,
+        LimitScope timeScope, long time) {
       setBatch(batch);
       setSizeScope(sizeScope);
-      setSize(size);
+      setDataSize(dataSize);
+      setHeapSize(heapSize);
       setTimeScope(timeScope);
       setTime(time);
     }
@@ -551,12 +568,20 @@ public class ScannerContext {
       return LimitScope.BETWEEN_CELLS.canEnforceLimitFromScope(checkerScope);
     }
 
-    long getSize() {
-      return this.size;
+    long getDataSize() {
+      return this.dataSize;
     }
 
-    void setSize(long size) {
-      this.size = size;
+    long getHeapSize() {
+      return this.heapSize;
+    }
+
+    void setDataSize(long dataSize) {
+      this.dataSize = dataSize;
+    }
+
+    void setHeapSize(long heapSize) {
+      this.heapSize = heapSize;
     }
 
     /**
@@ -619,8 +644,11 @@ public class ScannerContext {
       sb.append("batch:");
       sb.append(batch);
 
-      sb.append(", size:");
-      sb.append(size);
+      sb.append(", dataSize:");
+      sb.append(dataSize);
+
+      sb.append(", heapSize:");
+      sb.append(heapSize);
 
       sb.append(", sizeScope:");
       sb.append(sizeScope);

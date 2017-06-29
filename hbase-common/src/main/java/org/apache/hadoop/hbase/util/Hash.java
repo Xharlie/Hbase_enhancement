@@ -98,48 +98,11 @@ public abstract class Hash {
   }
 
   /**
-   * Calculate a hash using all bytes from the input argument, and
-   * a seed of -1.
-   * @param bytes input bytes
+   * Calculate a hash using bytes from HashKey and the provided seed value.
+   * @param <T>
+   * @param hashKey key to extract the hash
+   * @param initval the seed value
    * @return hash value
    */
-  public int hash(byte[] bytes) {
-    return hash(bytes, bytes.length, -1);
-  }
-
-  /**
-   * Calculate a hash using all bytes from the input argument,
-   * and a provided seed value.
-   * @param bytes input bytes
-   * @param initval seed value
-   * @return hash value
-   */
-  public int hash(byte[] bytes, int initval) {
-    return hash(bytes, 0, bytes.length, initval);
-  }
-
-  /**
-   * Calculate a hash using bytes from 0 to <code>length</code>, and
-   * the provided seed value
-   * @param bytes input bytes
-   * @param length length of the valid bytes after offset to consider
-   * @param initval seed value
-   * @return hash value
-   */
-  public int hash(byte[] bytes, int length, int initval) {
-    return hash(bytes, 0, length, initval);
-  }
-
-  /**
-   * Calculate a hash using bytes from <code>offset</code> to <code>offset + 
-   * length</code>, and the provided seed value.
-   * @param bytes input bytes
-   * @param offset the offset into the array to start consideration
-   * @param length length of the valid bytes after offset to consider
-   * @param initval seed value
-   * @return hash value
-   */
-  public abstract int hash(byte[] bytes, int offset, int length, int initval);
-
-  // TODO : a buffer based hash function would be needed.. Not adding it for now
+  public abstract <T> int hash(HashKey<T> hashKey, int initval);
 }

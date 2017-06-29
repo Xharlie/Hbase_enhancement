@@ -53,6 +53,10 @@ import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.RegionLocations;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.NotServingRegionException;
+import org.apache.hadoop.hbase.UnknownScannerException;
+import org.apache.hadoop.hbase.exceptions.OutOfOrderScannerNextException;
+import org.apache.hadoop.hbase.regionserver.RegionServerStoppedException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
@@ -136,6 +140,7 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
   private volatile Configuration configuration;
   private TableConfiguration tableConfiguration;
   protected BufferedMutatorImpl mutator;
+  private final Object mutatorLock = new Object();
   private boolean autoFlush = true;
   private boolean closed = false;
   protected int scannerCaching;
@@ -322,7 +327,7 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
   @Deprecated
   public HTable(TableName tableName, final Connection connection,
       final ExecutorService pool) throws IOException {
-    this(tableName, (ClusterConnection)connection, null, null, null, pool);
+    this(tableName, (ClusterConnection) connection, null, null, null, pool);
   }
 
   /**
@@ -510,8 +515,7 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
   public static boolean isTableEnabled(Configuration conf,
       final TableName tableName) throws IOException {
     return HConnectionManager.execute(new HConnectable<Boolean>(conf) {
-      @Override
-      public Boolean connect(HConnection connection) throws IOException {
+      @Override public Boolean connect(HConnection connection) throws IOException {
         return connection.isTableEnabled(tableName);
       }
     });
@@ -623,20 +627,19 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
       return HTableDescriptor.META_TABLEDESC;
     }
     HTableDescriptor htd = executeMasterCallable(
-      new MasterCallable<HTableDescriptor>(getConnection()) {
-      @Override
-      public HTableDescriptor call(int callTimeout) throws ServiceException {
-        GetTableDescriptorsResponse htds;
-        GetTableDescriptorsRequest req =
-            RequestConverter.buildGetTableDescriptorsRequest(tableName);
-        htds = master.getTableDescriptors(null, req);
+        new MasterCallable<HTableDescriptor>(getConnection()) {
+          @Override public HTableDescriptor call(int callTimeout) throws ServiceException {
+            GetTableDescriptorsResponse htds;
+            GetTableDescriptorsRequest req =
+                RequestConverter.buildGetTableDescriptorsRequest(tableName);
+            htds = master.getTableDescriptors(null, req);
 
-        if (!htds.getTableSchemaList().isEmpty()) {
-          return HTableDescriptor.convert(htds.getTableSchemaList().get(0));
-        }
-        return null;
-      }
-    });
+            if (!htds.getTableSchemaList().isEmpty()) {
+              return HTableDescriptor.convert(htds.getTableSchemaList().get(0));
+            }
+            return null;
+          }
+        });
     if (htd != null) {
       return new UnmodifyableHTableDescriptor(htd);
     }
@@ -890,6 +893,7 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
           this.connection, this.rpcCallerFactory, this.rpcControllerFactory,
           pool, tableConfiguration.getReplicaCallTimeoutMicroSecondScan());
     } else {
+
       return new ClientScanner(getConfiguration(), scan, getName(), this.connection,
           this.rpcCallerFactory, this.rpcControllerFactory,
           pool, tableConfiguration.getReplicaCallTimeoutMicroSecondScan());
@@ -954,10 +958,48 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
       RegionServerCallable<Result> callable = new RegionServerCallable<Result>(this.connection,
           getName(), get.getRow()) {
 
+        private Result syncGet(final PayloadCarryingRpcController controller) throws ServiceException, IOException {
+          ClientProtos.GetResponse response = null;
+          ClientProtos.GetRequest request = null;
+          List<Result> partialResults = new ArrayList<Result>();
+          long scannerId = -1;
+          long nextCallSeq = 0;
+          boolean clientHandlesPartialResults = true;
+          boolean hasMoreCells = true;
+          try {
+            while (hasMoreCells) {
+              request = RequestConverter.buildGetRequest(getLocation().getRegionInfo().getRegionName(),
+                getReq, scannerId, nextCallSeq, clientHandlesPartialResults);
+              response = getStub().get(controller, request);
+              if (response == null) {
+                break;
+              }
+              partialResults.add(ProtobufUtil.toResult(response.getResult()));
+              hasMoreCells = response.getMoreResultsInRegion();
+              scannerId = response.getScannerId();
+              nextCallSeq++;
+            }
+          }catch (IOException e) {
+            //reset partial results for retry
+            partialResults.clear();
+            scannerId = -1;
+            nextCallSeq = 0;
+            hasMoreCells = true;
+            throw e;
+          }
+
+          Result r = Result.createCompleteResult(partialResults);
+          return r;
+    	}
+
         @Override
         public Result call(int callTimeout) throws IOException {
-          ClientProtos.GetRequest request =
-            RequestConverter.buildGetRequest(getLocation().getRegionInfo().getRegionName(), getReq);
+          long scannerId = -1;;
+          long nextCallSeq = 0;;
+          if (callback != null) {
+            scannerId = ((AsyncGetCallback)callback).scannerId;
+            nextCallSeq = ((AsyncGetCallback)callback).nextCallSeq;
+          }
           final PayloadCarryingRpcController controller = rpcControllerFactory.newController();
           controller.setPriority(tableName);
           controller.setCallTimeout(callTimeout);
@@ -965,8 +1007,11 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
           try {
             ClientProtos.GetResponse response = null;
             if (callback == null) {
-              response = getStub().get(controller, request);
+              Result r = syncGet(controller);
+              return r;
             } else {
+              ClientProtos.GetRequest request = RequestConverter.buildGetRequest(getLocation().getRegionInfo().getRegionName(),
+				getReq, scannerId, nextCallSeq, true);
               controller.notifyOnFail(new FailureCallback(callback));
               // for async call, we will always reload location from cache
               // set into callback for checking and clearing cache on failure
@@ -986,9 +1031,9 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
                   }
                 }
               });
+              if (response == null) return null;
+              return ProtobufUtil.toResult(response.getResult());
             }
-            if (response == null) return null;
-            return ProtobufUtil.toResult(response.getResult());
           } catch (ServiceException se) {
             throw ProtobufUtil.getRemoteException(se);
           }
@@ -1329,7 +1374,7 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
       final byte [] qualifier, final long amount, final boolean writeToWAL)
   throws IOException {
     return incrementColumnValue(row, family, qualifier, amount,
-      writeToWAL? Durability.SYNC_WAL: Durability.SKIP_WAL);
+        writeToWAL ? Durability.SYNC_WAL : Durability.SKIP_WAL);
   }
 
   /**
@@ -1483,7 +1528,7 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
           try {
             CompareType compareType = CompareType.valueOf(compareOp.name());
             MutateRequest request = RequestConverter.buildMutateRequest(
-              getLocation().getRegionInfo().getRegionName(), row, family, qualifier,
+                getLocation().getRegionInfo().getRegionName(), row, family, qualifier,
                 new BinaryComparator(value), compareType, delete);
             MutateResponse response = getStub().mutate(controller, request);
             return Boolean.valueOf(response.getProcessed());
@@ -1945,6 +1990,10 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
     return operationTimeout;
   }
 
+  public int getTimeout() {
+    return timeout;
+  }
+
   @Override
   public String toString() {
     return tableName + ";" + connection;
@@ -2066,12 +2115,12 @@ public class HTable implements AsyncableHTableInterface, RegionLocator {
   @VisibleForTesting
   BufferedMutator getBufferedMutator() {
     if (mutator == null) {
-      this.mutator = (BufferedMutatorImpl) connection.getBufferedMutator(
-          new BufferedMutatorParams(tableName)
-              .pool(pool)
-              .writeBufferSize(tableConfiguration.getWriteBufferSize())
-              .maxKeyValueSize(tableConfiguration.getMaxKeyValueSize())
-      );
+      synchronized (mutatorLock) {
+        this.mutator = (BufferedMutatorImpl) connection.getBufferedMutator(
+            new BufferedMutatorParams(tableName).pool(pool)
+                .writeBufferSize(tableConfiguration.getWriteBufferSize())
+                .maxKeyValueSize(tableConfiguration.getMaxKeyValueSize()));
+      }
     }
     return mutator;
   }

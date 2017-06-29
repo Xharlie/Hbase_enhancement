@@ -26,7 +26,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.internal.verification.VerificationModeFactory.times;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -38,6 +40,7 @@ import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.exceptions.ConnectionClosingException;
 import org.apache.hadoop.hbase.ipc.protobuf.generated.TestProtos.EchoRequestProto;
 import org.apache.hadoop.hbase.ipc.protobuf.generated.TestProtos.EchoResponseProto;
 import org.apache.hadoop.hbase.ipc.protobuf.generated.TestProtos.EmptyRequestProto;
@@ -141,10 +144,10 @@ public abstract class AbstractTestIPC {
     }
 
     @Override
-    public Pair<Message, PayloadCarryingRpcController> call(BlockingService service, MethodDescriptor md,
-          Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status, RpcServer.Call call)
-            throws IOException, ServiceException {
-      return super.call(service, md, param, cellScanner, receiveTime, status, call);
+    public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
+        Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
+        throws IOException {
+      return super.call(service, md, param, cellScanner, receiveTime, status);
     }
   }
 
@@ -299,5 +302,20 @@ public abstract class AbstractTestIPC {
     } finally {
       rpcServer.stop();
     }
+  }
+
+  @Test
+  public void testWrapException() throws Exception {
+    AbstractRpcClient client =
+        (AbstractRpcClient) RpcClientFactory.createClient(CONF, "AbstractTestIPC");
+    final InetSocketAddress address = InetSocketAddress.createUnresolved("localhost", 0);
+    assertTrue(client.wrapException(address, new ConnectException()) instanceof ConnectException);
+    assertTrue(client.wrapException(address,
+      new SocketTimeoutException()) instanceof SocketTimeoutException);
+    assertTrue(client.wrapException(address, new ConnectionClosingException(
+        "Test AbstractRpcClient#wrapException")) instanceof ConnectionClosingException);
+    assertTrue(client
+        .wrapException(address, new CallTimeoutException("Test AbstractRpcClient#wrapException"))
+        .getCause() instanceof CallTimeoutException);
   }
 }

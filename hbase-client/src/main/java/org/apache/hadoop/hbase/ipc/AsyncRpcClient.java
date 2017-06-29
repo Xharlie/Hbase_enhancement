@@ -236,10 +236,11 @@ public class AsyncRpcClient extends AbstractRpcClient {
       if (e.getCause() instanceof IOException) {
         throw (IOException) e.getCause();
       } else {
-        throw new IOException(e.getCause());
+        throw wrapException(addr, (Exception) e.getCause());
       }
     } catch (TimeoutException e) {
-      throw new CallTimeoutException(promise.toString());
+      CallTimeoutException cte = new CallTimeoutException(promise.toString());
+      throw wrapException(addr, cte);
     }
   }
 
@@ -266,6 +267,7 @@ public class AsyncRpcClient extends AbstractRpcClient {
               toThrow = new IOException(cause);
             }
             pcrc.setFailed(toThrow);
+            callback.run(null);
           }else{
             try {
               callback.run(future.get());
@@ -276,8 +278,10 @@ public class AsyncRpcClient extends AbstractRpcClient {
               }else{
                 pcrc.setFailed(new IOException(cause));
               }
+              callback.run(null);
             }catch (InterruptedException e){
               pcrc.setFailed(new IOException(e));
+              callback.run(null);
             }
           }
         }

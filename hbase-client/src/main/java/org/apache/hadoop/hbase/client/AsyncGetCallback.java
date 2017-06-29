@@ -35,15 +35,33 @@ public abstract class AsyncGetCallback implements AsyncRpcCallback<GetResponse> 
 
   protected final String row;
   protected HRegionLocation location;
+  protected long scannerId;
+  protected long nextCallSeq;
 
   public AsyncGetCallback(byte[] row) {
     this.row = Bytes.toString(row);
+    this.scannerId = -1;
+    this.nextCallSeq = 0;
   }
 
   @Override
   public void run(GetResponse response) {
     Result result = ProtobufUtil.toResult(response.getResult());
+    if (result.isPartial()) {
+      scannerId = response.getScannerId();
+      if (scannerId <= 0) {
+        // should throw DNRIOEs ?
+      }
+    }else {
+      scannerId = -1;
+    }
+    this.nextCallSeq++;
     processResult(result);
+  }
+
+  public void reset() {
+    scannerId = -1;
+    nextCallSeq = 0;
   }
 
   @Override

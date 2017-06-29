@@ -74,27 +74,27 @@ public class MetricsRegionServerSourceImpl
     super(metricsName, metricsDescription, metricsContext, metricsJmxContext);
     this.rsWrap = rsWrap;
 
-    putHisto = getMetricsRegistry().newHistogram(MUTATE_KEY);
+    putHisto = getMetricsRegistry().newTimeHistogram(MUTATE_KEY);
     slowPut = getMetricsRegistry().newCounter(SLOW_MUTATE_KEY, SLOW_MUTATE_DESC, 0l);
 
-    deleteHisto = getMetricsRegistry().newHistogram(DELETE_KEY);
+    deleteHisto = getMetricsRegistry().newTimeHistogram(DELETE_KEY);
     slowDelete = getMetricsRegistry().newCounter(SLOW_DELETE_KEY, SLOW_DELETE_DESC, 0l);
 
-    getHisto = getMetricsRegistry().newHistogram(GET_KEY);
+    getHisto = getMetricsRegistry().newTimeHistogram(GET_KEY);
     slowGet = getMetricsRegistry().newCounter(SLOW_GET_KEY, SLOW_GET_DESC, 0l);
 
-    incrementHisto = getMetricsRegistry().newHistogram(INCREMENT_KEY);
+    incrementHisto = getMetricsRegistry().newTimeHistogram(INCREMENT_KEY);
     slowIncrement = getMetricsRegistry().newCounter(SLOW_INCREMENT_KEY, SLOW_INCREMENT_DESC, 0L);
 
-    appendHisto = getMetricsRegistry().newHistogram(APPEND_KEY);
+    appendHisto = getMetricsRegistry().newTimeHistogram(APPEND_KEY);
     slowAppend = getMetricsRegistry().newCounter(SLOW_APPEND_KEY, SLOW_APPEND_DESC, 0l);
     
-    replayHisto = getMetricsRegistry().newHistogram(REPLAY_KEY);
-    scanSizeHisto = getMetricsRegistry().newHistogram(SCAN_SIZE_KEY);
-    scanTimeHisto = getMetricsRegistry().newHistogram(SCAN_TIME_KEY);
+    replayHisto = getMetricsRegistry().newTimeHistogram(REPLAY_KEY);
+    scanSizeHisto = getMetricsRegistry().newSizeHistogram(SCAN_SIZE_KEY);
+    scanTimeHisto = getMetricsRegistry().newTimeHistogram(SCAN_TIME_KEY);
 
-    splitTimeHisto = getMetricsRegistry().newHistogram(SPLIT_KEY);
-    flushTimeHisto = getMetricsRegistry().newHistogram(FLUSH_KEY);
+    splitTimeHisto = getMetricsRegistry().newTimeHistogram(SPLIT_KEY);
+    flushTimeHisto = getMetricsRegistry().newTimeHistogram(FLUSH_KEY);
 
     splitRequest = getMetricsRegistry().newCounter(SPLIT_REQUEST_KEY, SPLIT_REQUEST_DESC, 0l);
     splitSuccess = getMetricsRegistry().newCounter(SPLIT_SUCCESS_KEY, SPLIT_SUCCESS_DESC, 0l);
@@ -104,8 +104,8 @@ public class MetricsRegionServerSourceImpl
         getMetricsRegistry().newCounter(INFO_THRESHOLD_COUNT_KEY, INFO_THRESHOLD_COUNT_DESC, 0L);
     warnPauseThresholdExceeded =
         getMetricsRegistry().newCounter(WARN_THRESHOLD_COUNT_KEY, WARN_THRESHOLD_COUNT_DESC, 0L);
-    pausesWithGc = getMetricsRegistry().newHistogram(PAUSE_TIME_WITH_GC_KEY);
-    pausesWithoutGc = getMetricsRegistry().newHistogram(PAUSE_TIME_WITHOUT_GC_KEY);
+    pausesWithGc = getMetricsRegistry().newTimeHistogram(PAUSE_TIME_WITH_GC_KEY);
+    pausesWithoutGc = getMetricsRegistry().newTimeHistogram(PAUSE_TIME_WITHOUT_GC_KEY);
   }
 
   @Override
@@ -337,13 +337,7 @@ public class MetricsRegionServerSourceImpl
           .addGauge(Interns.info(DIRECT_HEALTH_CHECK_FAILED_RATIO, DIRECT_HEALTH_CHECK_FAILED_RARIO_DESC),
               rsWrap.getDirectHealthCheckFailedRatio())
           .addCounter(Interns.info(DIRECT_HEALTH_CHECK_NUM_UNHEALTHY, DIRECT_HEALTH_CHECK_NUM_UNHEALTHY_DESC),
-                      rsWrap.getDirectHealthCheckNumUnhealthy())
-          .addGauge(Interns.info(PREAPPEND_QUEUE_SIZE, PREAPPEND_QUEUE_SIZE_DESC),
-                  rsWrap.getPreAppendQueueSize())
-          .addGauge(Interns.info(SYNCFINISH_QUEUE_SIZE, SYNCFINISH_QUEUE_SIZE_DESC),
-              rsWrap.getSyncFinishQueueSize())
-          .addGauge(Interns.info(ASYNCFINISH_QUEUE_SIZE, ASYNCFINISH_QUEUE_SIZE_DESC),
-              rsWrap.getAsyncFinishQueueSize());
+                      rsWrap.getDirectHealthCheckNumUnhealthy());
     }
 
     metricsRegistry.snapshot(mrb, all);

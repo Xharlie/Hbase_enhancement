@@ -35,8 +35,8 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.CompatibilitySingletonFactory;
-import org.apache.hadoop.hbase.ByteBufferedKeyOnlyKeyValue;
-import org.apache.hadoop.hbase.OffheapKeyValue;
+import org.apache.hadoop.hbase.ByteBufferKeyOnlyKeyValue;
+import org.apache.hadoop.hbase.ByteBufferKeyValue;
 import org.apache.hadoop.hbase.SizeCachedKeyValue;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
@@ -253,18 +253,24 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
     if (cacheConf.shouldPrefetchOnOpen()) {
       PrefetchExecutor.request(path, new Runnable() {
         public void run() {
+          long offset = 0;
+          long end = 0;
           try {
-            long offset = 0;
-            long end = fileSize - getTrailer().getTrailerSize();
+            end = getTrailer().getLoadOnOpenDataOffset();
+            if (LOG.isTraceEnabled()) {
+              LOG.trace("File=" + path.toString() + ", offset=" + offset + ", end=" + end);
+            }
+            // TODO: Could we use block iterator in here? Would that get stuff into the cache?
             HFileBlock prevBlock = null;
             while (offset < end) {
               if (Thread.interrupted()) {
                 break;
               }
-              long onDiskSize = -1;
-              if (prevBlock != null) {
-                onDiskSize = prevBlock.getNextBlockOnDiskSizeWithHeader();
-              }
+              // Perhaps we got our block from cache? Unlikely as this may be, if it happens, then
+              // the internal-to-hfileblock thread local which holds the overread that gets the
+              // next header, will not have happened...so, pass in the onDiskSize gotten from the
+              // cached block. This 'optimization' triggers extremely rarely I'd say.
+              long onDiskSize = prevBlock != null? prevBlock.getNextBlockOnDiskSize(): -1;
               HFileBlock block = readBlock(offset, onDiskSize, true, false, false, false,
                 null, null);
               // Need not update the current block. Ideally here the readBlock won't find the
@@ -278,11 +284,11 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
           } catch (IOException e) {
             // IOExceptions are probably due to region closes (relocation, etc.)
             if (LOG.isTraceEnabled()) {
-              LOG.trace("Exception encountered while prefetching " + path + ":", e);
+              LOG.trace("File=" + path.toString() + ", offset=" + offset + ", end=" + end, e);
             }
           } catch (Exception e) {
             // Other exceptions are interesting
-            LOG.warn("Exception encountered while prefetching " + path + ":", e);
+            LOG.warn("File=" + path.toString() + ", offset=" + offset + ", end=" + end, e);
           } finally {
             PrefetchExecutor.complete(path);
           }
@@ -474,7 +480,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
     protected final HFile.Reader reader;
     private int currTagsLen;
     // buffer backed keyonlyKV
-    private ByteBufferedKeyOnlyKeyValue bufBackedKeyOnlyKv = new ByteBufferedKeyOnlyKeyValue();
+    private ByteBufferKeyOnlyKeyValue bufBackedKeyOnlyKv = new ByteBufferKeyOnlyKeyValue();
     // A pair for reusing in blockSeek() so that we don't garbage lot of objects
     final ObjectIntPair<ByteBuffer> pair = new ObjectIntPair<ByteBuffer>();
 
@@ -646,9 +652,23 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
       if (len == 1) {
         this.currMemstoreTS = firstByte;
       } else {
+        int remaining = len -1;
         long i = 0;
         offsetFromPos++;
-        for (int idx = 0; idx < len - 1; idx++) {
+        if (remaining >= Bytes.SIZEOF_INT) {
+          // The int read has to be converted to unsigned long so the & op
+          i = (blockBuffer.getIntAfterPosition(offsetFromPos) & 0x00000000ffffffffL);
+          remaining -= Bytes.SIZEOF_INT;
+          offsetFromPos += Bytes.SIZEOF_INT;
+        }
+        if (remaining >= Bytes.SIZEOF_SHORT) {
+          short s = blockBuffer.getShortAfterPosition(offsetFromPos);
+          i = i << 16;
+          i = i | (s & 0xFFFF);
+          remaining -= Bytes.SIZEOF_SHORT;
+          offsetFromPos += Bytes.SIZEOF_SHORT;
+        }
+        for (int idx = 0; idx < remaining; idx++) {
           byte b = blockBuffer.getByteAfterPosition(offsetFromPos + idx);
           i = i << 8;
           i = i | (b & 0xFF);
@@ -683,8 +703,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
         long ll = blockBuffer.getLongAfterPosition(offsetFromPos);
         klen = (int)(ll >> Integer.SIZE);
         vlen = (int)(Bytes.MASK_FOR_LOWER_INT_IN_LONG ^ ll);
-        if (klen < 0 || vlen < 0 || klen > blockBuffer.limit()
-            || vlen > blockBuffer.limit()) {
+        if (checkKeyLen(klen) || checkLen(vlen)) {
           throw new IllegalStateException("Invalid klen " + klen + " or vlen "
               + vlen + ". Block offset: "
               + curBlock.getOffset() + ", block length: " + blockBuffer.limit() + ", position: "
@@ -699,7 +718,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
           // Read short as unsigned, high byte first
           tlen = ((blockBuffer.getByteAfterPosition(offsetFromPos) & 0xff) << 8)
               ^ (blockBuffer.getByteAfterPosition(offsetFromPos + 1) & 0xff);
-          if (tlen < 0 || tlen > blockBuffer.limit()) {
+          if (checkLen(tlen)) {
             throw new IllegalStateException("Invalid tlen " + tlen + ". Block offset: "
                 + curBlock.getOffset() + ", block length: " + blockBuffer.limit() + ", position: "
                 + blockBuffer.position() + " (without header).");
@@ -883,9 +902,8 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
 
         // We are reading the next block without block type validation, because
         // it might turn out to be a non-data block.
-        block = reader.readBlock(block.getOffset()
-            + block.getOnDiskSizeWithHeader(),
-            block.getNextBlockOnDiskSizeWithHeader(), cacheBlocks, pread,
+        block = reader.readBlock(block.getOffset() + block.getOnDiskSizeWithHeader(),
+            block.getNextBlockOnDiskSize(), cacheBlocks, pread,
             isCompaction, true, null, getEffectiveDataBlockEncoding());
         if (block != null && !block.getBlockType().isData()) {
           // Whatever block we read we will be returning it unless
@@ -925,7 +943,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
       } else {
         ByteBuffer buf = blockBuffer.asSubByteBuffer(cellBufSize);
         if (buf.isDirect()) {
-          ret = new OffheapKeyValue(buf, buf.position(), cellBufSize, currTagsLen > 0, seqId);
+          ret = new ByteBufferKeyValue(buf, buf.position(), cellBufSize, seqId);
         } else {
           if (currTagsLen > 0) {
             ret = new SizeCachedKeyValue(buf.array(), buf.arrayOffset() + buf.position(),
@@ -950,7 +968,13 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
         return new KeyValue.KeyOnlyKeyValue(keyBuf.array(), keyBuf.arrayOffset()
             + keyPair.getSecond(), currKeyLen);
       } else {
-        return new ByteBufferedKeyOnlyKeyValue(keyBuf, keyPair.getSecond(), currKeyLen);
+        // Better to do a copy here instead of holding on to this BB so that
+        // we could release the blocks referring to this key. This key is specifically used 
+        // in HalfStoreFileReader to get the firstkey and lastkey by creating a new scanner
+        // every time. So holding onto the BB (incase of DBB) is not advised here.
+        byte[] key = new byte[currKeyLen];
+        ByteBufferUtils.copyFromBufferToArray(key, keyBuf, keyPair.getSecond(), 0, currKeyLen);
+        return new KeyValue.KeyOnlyKeyValue(key, 0, currKeyLen);
       }
     }
 
@@ -1107,6 +1131,14 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
 
     /**
      * @param v
+     * @return True if v &lt;= 0 or v &gt; current block buffer limit.
+     */
+    protected final boolean checkKeyLen(final int v) {
+      return v <= 0 || v > this.blockBuffer.limit();
+    }
+
+    /**
+     * @param v
      * @return True if v < 0 or v > current block buffer limit.
      */
     protected final boolean checkLen(final int v) {
@@ -1117,7 +1149,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
      * Check key and value lengths are wholesome.
      */
     protected final void checkKeyValueLen() {
-      if (checkLen(this.currKeyLen) || checkLen(this.currValueLen)) {
+      if (checkKeyLen(this.currKeyLen) || checkLen(this.currValueLen)) {
         throw new IllegalStateException("Invalid currKeyLen " + this.currKeyLen
             + " or currValueLen " + this.currValueLen + ". Block offset: "
             + this.curBlock.getOffset() + ", block length: "
@@ -1162,7 +1194,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
         return new KeyValue.KeyOnlyKeyValue(keyBuff.array(), keyBuff.arrayOffset()
             + keyBuff.position(), klen);
       } else {
-        return new ByteBufferedKeyOnlyKeyValue(keyBuff, keyBuff.position(), klen);
+        return new ByteBufferKeyOnlyKeyValue(keyBuff, keyBuff.position(), klen);
       }
     }
 
@@ -1349,8 +1381,8 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
       }
 
       long startTimeNs = System.nanoTime();
-      HFileBlock metaBlock = fsBlockReader.readBlockData(metaBlockOffset,
-          blockSize, -1, true).unpack(hfileContext, fsBlockReader);
+      HFileBlock metaBlock = fsBlockReader.readBlockData(metaBlockOffset, blockSize, true).
+          unpack(hfileContext, fsBlockReader);
       deltaTime = System.nanoTime() - startTimeNs;
 
       // Cache the block
@@ -1377,9 +1409,11 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
     if (dataBlockIndexReader == null) {
       throw new IOException("Block index not loaded");
     }
-    if (dataBlockOffset < 0 || dataBlockOffset >= trailer.getLoadOnOpenDataOffset()) {
+    long trailerOffset = trailer.getLoadOnOpenDataOffset();
+    if (dataBlockOffset < 0 || dataBlockOffset >= trailerOffset) {
       throw new IOException("Requested block is out of range: " + dataBlockOffset +
-        ", lastDataBlockOffset: " + trailer.getLastDataBlockOffset());
+        ", lastDataBlockOffset: " + trailer.getLastDataBlockOffset() +
+        ", trailer.getLoadOnOpenDataOffset: " + trailerOffset);
     }
     // For any given block from any given file, synchronize reads for said
     // block.
@@ -1406,13 +1440,16 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
           HFileBlock cachedBlock = getCachedBlock(cacheKey, cacheBlock, useLock, isCompaction,
             updateCacheMetrics, expectedBlockType, expectedDataBlockEncoding);
           if (cachedBlock != null) {
+            if (LOG.isTraceEnabled()) {
+              LOG.trace("From Cache " + cachedBlock);
+            }
             if (Trace.isTracing()) {
               traceScope.getSpan().addTimelineAnnotation("blockCacheHit");
             }
             assert cachedBlock.isUnpacked() : "Packed block leak.";
             if (cachedBlock.getBlockType().isData()) {
               if (updateCacheMetrics) {
-                HFile.dataBlockReadCnt.incrementAndGet();
+                HFile.DATABLOCK_READ_COUNT.incrementAndGet();
               }
               // Validate encoding type for data blocks. We include encoding
               // type in the cache key, and we expect it to match on a cache hit.
@@ -1437,8 +1474,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
         }
         // Load block from filesystem.
         long startTimeNs = System.nanoTime();
-        HFileBlock hfileBlock = fsBlockReader.readBlockData(dataBlockOffset, onDiskBlockSize, -1,
-            pread);
+        HFileBlock hfileBlock = fsBlockReader.readBlockData(dataBlockOffset, onDiskBlockSize, pread);
         deltaTimeNs = System.nanoTime() - startTimeNs;
         validateBlockType(hfileBlock, expectedBlockType);
         HFileBlock unpacked = hfileBlock.unpack(hfileContext, fsBlockReader);
@@ -1452,7 +1488,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
         }
 
         if (updateCacheMetrics && hfileBlock.getBlockType().isData()) {
-          HFile.dataBlockReadCnt.incrementAndGet();
+          HFile.DATABLOCK_READ_COUNT.incrementAndGet();
         }
 
         return unpacked;
@@ -1808,6 +1844,7 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
    * @return Scanner on this file.
    */
   @Override
+  @VisibleForTesting
   public HFileScanner getScanner(boolean cacheBlocks, final boolean pread) {
     return getScanner(cacheBlocks, pread, false);
   }

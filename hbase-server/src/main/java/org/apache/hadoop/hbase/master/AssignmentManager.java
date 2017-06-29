@@ -858,7 +858,7 @@ public class AssignmentManager extends ZooKeeperListener {
       case RS_ZK_REGION_CLOSED:
       case RS_ZK_REGION_FAILED_OPEN:
         // Region is closed, insert into RIT and handle it
-        regionStates.updateRegionState(regionInfo, State.CLOSED, sn);
+        regionStates.setRegionStateTOCLOSED(regionInfo, sn);
         if (!replicasToClose.contains(regionInfo)) {
           invokeAssign(regionInfo);
         } else {
@@ -1080,7 +1080,7 @@ public class AssignmentManager extends ZooKeeperListener {
             failedOpenTracker.remove(encodedName);
           } else {
             // Handle this the same as if it were opened and then closed.
-            regionState = regionStates.updateRegionState(rt, State.CLOSED);
+            regionState = regionStates.setRegionStateTOCLOSED(rt.getRegionName(), sn);
             if (regionState != null) {
               // When there are more than one region server a new RS is selected as the
               // destination and the same is updated in the regionplan. (HBASE-5546)

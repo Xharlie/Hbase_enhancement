@@ -27,6 +27,7 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.ChoreService;
+import org.apache.hadoop.hbase.CompatibilityFactory;
 import org.apache.hadoop.hbase.CoordinatedStateManager;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
@@ -35,9 +36,12 @@ import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.Waiter;
 import org.apache.hadoop.hbase.client.ClusterConnection;
+import org.apache.hadoop.hbase.master.MetricsMaster;
+import org.apache.hadoop.hbase.master.MetricsMasterWrapperStub;
 import org.apache.hadoop.hbase.replication.ReplicationFactory;
 import org.apache.hadoop.hbase.replication.ReplicationQueues;
 import org.apache.hadoop.hbase.replication.regionserver.Replication;
+import org.apache.hadoop.hbase.test.MetricsAssertHelper;
 import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
 import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
 import org.junit.AfterClass;
@@ -49,6 +53,9 @@ import org.junit.experimental.categories.Category;
 public class TestLogsCleaner {
 
   private final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+
+  private final static MetricsAssertHelper HELPER =
+      CompatibilityFactory.getInstance(MetricsAssertHelper.class);
 
   /**
    * @throws java.lang.Exception
@@ -124,8 +131,16 @@ public class TestLogsCleaner {
 
     assertEquals(34, fs.listStatus(oldLogDir).length);
 
-    LogCleaner cleaner  = new LogCleaner(1000, server, conf, fs, oldLogDir);
+    conf.setInt(LogCleaner.LOGFILE_DELETE_THREAD_NUMBER, 2);
+    MetricsMaster masterMetrics = new MetricsMaster(new MetricsMasterWrapperStub());
+    LogCleaner cleaner = new LogCleaner(1000, server, conf, fs, oldLogDir, masterMetrics);
+    assertEquals(2, cleaner.getCleanerThreads().size());
     cleaner.chore();
+    conf.setInt(LogCleaner.LOGFILE_DELETE_THREAD_NUMBER, 3);
+    cleaner.onConfigurationChange(conf);
+    assertEquals(3, cleaner.getCleanerThreads().size());
+    // old WAL number will be recorded in metrics after chore
+    HELPER.assertCounter("oldWALNumber", 34, masterMetrics.getMetricsSource());
 
     // We end up with the current log file, a newer one and the 3 old log
     // files which are scheduled for replication
@@ -139,6 +154,10 @@ public class TestLogsCleaner {
     for (FileStatus file : fs.listStatus(oldLogDir)) {
       System.out.println("Kept log files: " + file.getPath().getName());
     }
+    assertEquals(29, cleaner.getNumOfDeletedLogFiles());
+    // trigger chore again and confirm old WAL number is updated
+    cleaner.chore();
+    HELPER.assertCounter("oldWALNumber", 5, masterMetrics.getMetricsSource());
   }
 
   static class DummyServer implements Server {

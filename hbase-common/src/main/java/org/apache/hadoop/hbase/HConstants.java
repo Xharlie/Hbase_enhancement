@@ -65,7 +65,9 @@ public final class HConstants {
   public static final byte[] RPC_HEADER = new byte[] { 'H', 'B', 'a', 's' };
   public static final byte RPC_CURRENT_VERSION = 0;
 
-  // HFileBlock constants.
+  // HFileBlock constants. TODO!!!! THESE DEFINES BELONG IN HFILEBLOCK, NOT UP HERE.
+  // Needed down in hbase-common though by encoders but these encoders should not be dealing
+  // in the internals of hfileblocks. Fix encapsulation.
 
   /** The size data structures with minor version is 0 */
   public static final int HFILEBLOCK_HEADER_SIZE_NO_CHECKSUM = MAGIC_LENGTH + 2 * Bytes.SIZEOF_INT
@@ -166,6 +168,9 @@ public final class HConstants {
 
   public static final int ZK_CFG_PROPERTY_PREFIX_LEN =
       ZK_CFG_PROPERTY_PREFIX.length();
+
+  /** common suffix for hfile which bulkload succeedly */
+  public static final String HFILE_BULKLOAD_SUCCEED_SUFFIX =  "_BULKLOAD_SUCCEED_";
 
   /**
    * The ZK client port key in the ZK properties map. The name reflects the
@@ -517,7 +522,12 @@ public final class HConstants {
 
   /**
    * Timestamp to use when we want to refer to the oldest cell.
+   * Special! Used in fake Cells only. Should never be the timestamp on an actual Cell returned to
+   * a client.
+   * @deprecated Should not be public since hbase-1.3.0. For internal use only. Move internal to
+   * Scanners flagged as special timestamp value never to be returned as timestamp on a Cell.
    */
+  @Deprecated
   public static final long OLDEST_TIMESTAMP = Long.MIN_VALUE;
 
   /**
@@ -624,6 +634,13 @@ public final class HConstants {
       "hbase.server.scanner.max.result.size";
 
   /**
+   * Parameter name for maximum number of bytes returned when calling a scanner's next method from Get.
+   * this parameter only used by Get, if a row large enough, it will return to client by several RPCs
+   * Controlled by the server.
+   */
+  public static final String HBASE_SERVER_GET_MAX_RESULT_SIZE_KEY =
+      "hbase.server.get.max.result.size";
+  /**
    * Maximum number of bytes returned when calling a scanner's next method.
    * Note that when a single row is larger than this limit the row is still
    * returned completely.
@@ -641,6 +658,14 @@ public final class HConstants {
    * The default value is 100MB. (a client would rarely request larger chunks on purpose)
    */
   public static final long DEFAULT_HBASE_SERVER_SCANNER_MAX_RESULT_SIZE = 100 * 1024 * 1024;
+
+  /**
+   * Maximum number of bytes returned when calling a scanner's next method.
+   * Safety setting to protect the region server.
+   *
+   * The default value is Long.MAX_VALUE. (that is a row with any size would return in one RPC)
+   */
+  public static final long DEFAULT_HBASE_SERVER_GET_MAX_RESULT_SIZE = Long.MAX_VALUE;
 
   /**
    * Parameter name for client pause value, used mostly as value to wait
@@ -1237,6 +1262,9 @@ public final class HConstants {
   public static final String INITIAL_CORE_POOL_SIZE = "hbase.server.chore.corepoolsize.initial";
   /** Set default to 5 since chores such as HFileCleaner and LogCleaner may be time costing */
   public static final int DEFAULT_INITIAL_CORE_POOL_SIZE = 5;
+
+  public static String EMBEDDED_MODE = "hbase.embedded";
+  public static String EMBEDDED_DB_OPERATOR_CLASS = "hbase.embedded.operator.class";
 
   private HConstants() {
     // Can't be instantiated with this ctor.

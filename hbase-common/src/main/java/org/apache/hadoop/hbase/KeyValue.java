@@ -37,7 +37,6 @@ import java.util.Map;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.io.util.StreamUtils;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -81,11 +80,14 @@ import com.google.common.annotations.VisibleForTesting;
  * and actual tag bytes length.
  */
 @InterfaceAudience.Private
-public class KeyValue implements Cell, HeapSize, Cloneable, SettableSequenceId,
-    SettableTimestamp, Streamable {
+public class KeyValue implements ExtendedCell {
   private static final ArrayList<Tag> EMPTY_ARRAY_LIST = new ArrayList<Tag>();
 
   static final Log LOG = LogFactory.getLog(KeyValue.class);
+  public static final long FIXED_OVERHEAD = ClassSize.OBJECT + // the KeyValue object itself
+      ClassSize.REFERENCE + // pointer to "bytes"
+      2 * Bytes.SIZEOF_INT + // offset, length
+      Bytes.SIZEOF_LONG;// memstoreTS
 
   /**
    * Colon character in UTF-8
@@ -2524,25 +2526,28 @@ public class KeyValue implements Cell, HeapSize, Cloneable, SettableSequenceId,
   @Deprecated
   public static long oswrite(final KeyValue kv, final OutputStream out, final boolean withTags)
       throws IOException {
-    return kv.write(out, withTags);
-  }
-
-  @Override
-  public int write(OutputStream out) throws IOException {
-    return write(out, true);
+    ByteBufferUtils.putInt(out, kv.getSerializedSize(withTags));
+    return kv.write(out, withTags) + Bytes.SIZEOF_INT;
   }
 
   @Override
   public int write(OutputStream out, boolean withTags) throws IOException {
-    // In KeyValueUtil#oswrite we do a Cell serialization as KeyValue. Any changes doing here, pls
-    // check KeyValueUtil#oswrite also and do necessary changes.
-    int length = this.length;
-    if (!withTags) {
-      length = this.getKeyLength() + this.getValueLength() + KEYVALUE_INFRASTRUCTURE_SIZE;
+    int len = getSerializedSize(withTags);
+    out.write(this.bytes, this.offset, len);
+    return len;
+  }
+
+  @Override
+  public int getSerializedSize(boolean withTags) {
+    if (withTags) {
+      return this.length;
     }
-    ByteBufferUtils.putInt(out, length);
-    out.write(this.bytes, this.offset, length);
-    return length + Bytes.SIZEOF_INT;
+    return this.getKeyLength() + this.getValueLength() + KEYVALUE_INFRASTRUCTURE_SIZE;
+  }
+
+  @Override
+  public void write(ByteBuffer buf, int offset) {
+    ByteBufferUtils.copyFromArrayToBuffer(buf, offset, this.bytes, this.offset, this.length);
   }
 
   /**
@@ -2650,13 +2655,9 @@ public class KeyValue implements Cell, HeapSize, Cloneable, SettableSequenceId,
    */
   @Override
   public long heapSize() {
-    int sum = 0;
-    sum += ClassSize.OBJECT;// the KeyValue object itself
-    sum += ClassSize.REFERENCE;// pointer to "bytes"
+    long sum = FIXED_OVERHEAD;
     sum += ClassSize.align(ClassSize.ARRAY);// "bytes"
     sum += ClassSize.align(length);// number of bytes of data in the "bytes" array
-    sum += 2 * Bytes.SIZEOF_INT;// offset, length
-    sum += Bytes.SIZEOF_LONG;// memstoreTS
     return ClassSize.align(sum);
   }
 
@@ -2669,15 +2670,11 @@ public class KeyValue implements Cell, HeapSize, Cloneable, SettableSequenceId,
    */
   @Deprecated
   public long heapSizeWithoutTags() {
-    int sum = 0;
-    sum += ClassSize.OBJECT;// the KeyValue object itself
-    sum += ClassSize.REFERENCE;// pointer to "bytes"
+    long sum = FIXED_OVERHEAD;
     sum += ClassSize.align(ClassSize.ARRAY);// "bytes"
     sum += KeyValue.KEYVALUE_INFRASTRUCTURE_SIZE;
     sum += getKeyLength();
     sum += getValueLength();
-    sum += 2 * Bytes.SIZEOF_INT;// offset, length
-    sum += Bytes.SIZEOF_LONG;// memstoreTS
     return ClassSize.align(sum);
   }
 
@@ -2852,6 +2849,20 @@ public class KeyValue implements Cell, HeapSize, Cloneable, SettableSequenceId,
     public long heapSize() {
       return super.heapSize() + Bytes.SIZEOF_SHORT;
     }
+    @Override
+    public int write(OutputStream out, boolean withTags) throws IOException {
+      // This type of Cell is used only to maintain some internal states. We never allow this type
+      // of Cell to be returned back over the RPC
+      throw new IllegalStateException("A reader should never return this type of a Cell");
+    }
+  }
+
+  @Override
+  public Cell deepClone() {
+    byte[] copy = Bytes.copy(this.bytes, this.offset, this.length);
+    KeyValue kv = new KeyValue(copy, 0, copy.length);
+    kv.setSequenceId(this.getSequenceId());
+    return kv;
   }
 
   @Override

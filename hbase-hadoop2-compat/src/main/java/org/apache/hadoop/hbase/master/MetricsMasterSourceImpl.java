@@ -36,6 +36,7 @@ public class MetricsMasterSourceImpl
 
   private final MetricsMasterWrapper masterWrapper;
   private MutableCounterLong clusterRequestsCounter;
+  private volatile long oldWALNumber;
 
   public MetricsMasterSourceImpl(MetricsMasterWrapper masterWrapper) {
     this(METRICS_NAME,
@@ -95,10 +96,16 @@ public class MetricsMasterSourceImpl
           .tag(Interns.info(CLUSTER_ID_NAME, CLUSTER_ID_DESC), masterWrapper.getClusterId())
           .tag(Interns.info(IS_ACTIVE_MASTER_NAME,
               IS_ACTIVE_MASTER_DESC),
-              String.valueOf(masterWrapper.getIsActiveMaster()));
+              String.valueOf(masterWrapper.getIsActiveMaster()))
+          .addCounter(Interns.info(OLD_WAL_COUNTER_NAME, OLD_WAL_COUNTER_NAME_DESC), oldWALNumber);
     }
 
     metricsRegistry.snapshot(metricsRecordBuilder, all);
+  }
+
+  @Override
+  public void updateOldWALNumber(long oldWALNumber) {
+    this.oldWALNumber = oldWALNumber;
   }
 
 }

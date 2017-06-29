@@ -331,6 +331,9 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
   /** jetty server for master to redirect requests to regionserver infoServer */
   private org.mortbay.jetty.Server masterJettyServer;
 
+  /** whether we are in embedded mode */
+  private final boolean isEmbedded;
+
   public static class RedirectServlet extends HttpServlet {
     private static final long serialVersionUID = 2894774810058302472L;
     private static int regionServerInfoPort;
@@ -435,6 +438,7 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
     } else {
       activeMasterManager = null;
     }
+    this.isEmbedded = conf.getBoolean(HConstants.EMBEDDED_MODE, false);
   }
 
   // return the actual infoPort, -1 means disable info server.
@@ -498,7 +502,7 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
    */
   @Override
   protected void waitForMasterActive(){
-    boolean tablesOnMaster = BaseLoadBalancer.tablesOnMaster(conf);
+    boolean tablesOnMaster = isEmbedded || BaseLoadBalancer.tablesOnMaster(conf);
     while (!(tablesOnMaster && isActiveMaster)
         && !isStopped() && !isAborted()) {
       sleeper.sleep();
@@ -726,7 +730,7 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
     this.initializationBeforeMetaAssignment = true;
 
     // Wait for regionserver to finish initialization.
-    if (BaseLoadBalancer.tablesOnMaster(conf)) {
+    if (isEmbedded || BaseLoadBalancer.tablesOnMaster(conf)) {
       waitForServerOnline();
     }
 
@@ -792,6 +796,7 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
     LOG.info("Master has completed initialization");
     configurationManager.registerObserver(this.balancer);
     configurationManager.registerObserver(this.hfileCleaner);
+    configurationManager.registerObserver(this.logCleaner);
     initialized = true;
     
     status.setStatus("Starting quota manager");
@@ -1115,7 +1120,7 @@ public class HMaster extends HRegionServer implements MasterServices, Server {
    this.logCleaner =
       new LogCleaner(cleanerInterval,
          this, conf, getMasterFileSystem().getFileSystem(),
-         getMasterFileSystem().getOldLogDir());
+         getMasterFileSystem().getOldLogDir(), metricsMaster);
     getChoreService().scheduleChore(logCleaner);
 
    //start the hfile archive cleaner thread

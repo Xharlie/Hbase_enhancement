@@ -22,19 +22,17 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 
-import org.apache.hadoop.hbase.ByteBufferedCell;
+import org.apache.hadoop.hbase.ByteBufferCell;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.Type;
-import org.apache.hadoop.hbase.ByteBufferedKeyOnlyKeyValue;
+import org.apache.hadoop.hbase.ByteBufferKeyOnlyKeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
-import org.apache.hadoop.hbase.Streamable;
-import org.apache.hadoop.hbase.SettableSequenceId;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.io.TagCompressionContext;
 import org.apache.hadoop.hbase.io.hfile.BlockType;
 import org.apache.hadoop.hbase.io.hfile.HFileContext;
@@ -52,7 +50,9 @@ import org.apache.hadoop.io.WritableUtils;
  */
 @InterfaceAudience.Private
 abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
-
+  /**
+   * TODO: This datablockencoder is dealing in internals of hfileblocks. Purge reference to HFBs
+   */
   private static int INITIAL_KEY_BUFFER_SIZE = 512;
 
   @Override
@@ -281,8 +281,7 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
    */
   // We return this as a Cell to the upper layers of read flow and might try setting a new SeqId
   // there. So this has to be an instance of SettableSequenceId.
-  protected static class OnheapDecodedCell implements Cell, HeapSize, SettableSequenceId,
-      Streamable {
+  protected static class OnheapDecodedCell implements ExtendedCell {
     private static final long FIXED_OVERHEAD = ClassSize.align(ClassSize.OBJECT
         + (3 * ClassSize.REFERENCE) + (2 * Bytes.SIZEOF_LONG) + (7 * Bytes.SIZEOF_INT)
         + (Bytes.SIZEOF_SHORT) + (2 * Bytes.SIZEOF_BYTE) + (3 * ClassSize.ARRAY));
@@ -430,15 +429,8 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
     }
 
     @Override
-    public int write(OutputStream out) throws IOException {
-      return write(out, true);
-    }
-
-    @Override
     public int write(OutputStream out, boolean withTags) throws IOException {
-      int lenToWrite = KeyValueUtil.length(rowLength, familyLength, qualifierLength, valueLength,
-          tagsLength, withTags);
-      ByteBufferUtils.putInt(out, lenToWrite);
+      int lenToWrite = getSerializedSize(withTags);
       ByteBufferUtils.putInt(out, keyOnlyBuffer.length);
       ByteBufferUtils.putInt(out, valueLength);
       // Write key
@@ -453,7 +445,37 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
         out.write((byte) (0xff & this.tagsLength));
         out.write(this.tagsBuffer, this.tagsOffset, this.tagsLength);
       }
-      return lenToWrite + Bytes.SIZEOF_INT;
+      return lenToWrite;
+    }
+
+    @Override
+    public int getSerializedSize(boolean withTags) {
+      return KeyValueUtil.length(rowLength, familyLength, qualifierLength, valueLength, tagsLength,
+          withTags);
+    }
+
+    @Override
+    public void write(ByteBuffer buf, int offset) {
+      // This is not used in actual flow. Throwing UnsupportedOperationException
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setTimestamp(long ts) throws IOException {
+      // This is not used in actual flow. Throwing UnsupportedOperationException
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setTimestamp(byte[] ts, int tsOffset) throws IOException {
+      // This is not used in actual flow. Throwing UnsupportedOperationException
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Cell deepClone() {
+      // This is not used in actual flow. Throwing UnsupportedOperationException
+      throw new UnsupportedOperationException();
     }
 
 	@Override
@@ -477,8 +499,7 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
 	}
   }
 
-  protected static class OffheapDecodedCell extends ByteBufferedCell implements HeapSize,
-      SettableSequenceId, Streamable {
+  protected static class OffheapDecodedCell extends ByteBufferCell implements ExtendedCell {
     private static final long FIXED_OVERHEAD = ClassSize.align(ClassSize.OBJECT
         + (3 * ClassSize.REFERENCE) + (2 * Bytes.SIZEOF_LONG) + (7 * Bytes.SIZEOF_INT)
         + (Bytes.SIZEOF_SHORT) + (2 * Bytes.SIZEOF_BYTE) + (3 * ClassSize.BYTE_BUFFER));
@@ -663,7 +684,7 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
 
     @Override
     public long heapSize() {
-      return FIXED_OVERHEAD + rowLength + familyLength + qualifierLength + valueLength + tagsLength;
+      return FIXED_OVERHEAD;
     }
 
     @Override
@@ -672,16 +693,8 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
     }
 
     @Override
-    public int write(OutputStream out) throws IOException {
-      return write(out, true);
-    }
-
-    @Override
     public int write(OutputStream out, boolean withTags) throws IOException {
-      int lenToWrite =
-          KeyValueUtil.length(rowLength, familyLength, qualifierLength, valueLength, tagsLength,
-            withTags);
-      ByteBufferUtils.putInt(out, lenToWrite);
+      int lenToWrite = getSerializedSize(withTags);
       ByteBufferUtils.putInt(out, keyBuffer.capacity());
       ByteBufferUtils.putInt(out, valueLength);
       // Write key
@@ -696,7 +709,37 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
         out.write((byte) (0xff & this.tagsLength));
         ByteBufferUtils.copyBufferToStream(out, this.tagsBuffer, this.tagsOffset, this.tagsLength);
       }
-      return lenToWrite + Bytes.SIZEOF_INT;
+      return lenToWrite;
+    }
+
+    @Override
+    public int getSerializedSize(boolean withTags) {
+      return KeyValueUtil.length(rowLength, familyLength, qualifierLength, valueLength, tagsLength,
+          withTags);
+    }
+
+    @Override
+    public void setTimestamp(long ts) throws IOException {
+      // This is not used in actual flow. Throwing UnsupportedOperationException
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setTimestamp(byte[] ts, int tsOffset) throws IOException {
+      // This is not used in actual flow. Throwing UnsupportedOperationException
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void write(ByteBuffer buf, int offset) {
+      // This is not used in actual flow. Throwing UnsupportedOperationException
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Cell deepClone() {
+      // This is not used in actual flow. Throwing UnsupportedOperationException
+      throw new UnsupportedOperationException();
     }
 
     @Override
@@ -795,38 +838,6 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
       dup.position(tmpPair.getSecond());
       dup.limit(tmpPair.getSecond() + current.valueLength);
       return dup.slice();
-    }
-
-    @Override
-    public ByteBuffer getKeyValueBuffer() {
-      ByteBuffer kvBuffer = createKVBuffer();
-      kvBuffer.putInt(current.keyLength);
-      kvBuffer.putInt(current.valueLength);
-      kvBuffer.put(current.keyBuffer, 0, current.keyLength);
-      currentBuffer.get(kvBuffer, current.valueOffset, current.valueLength);
-      if (current.tagsLength > 0) {
-        // Put short as unsigned
-        kvBuffer.put((byte) (current.tagsLength >> 8 & 0xff));
-        kvBuffer.put((byte) (current.tagsLength & 0xff));
-        if (current.tagsOffset != -1) {
-          // the offset of the tags bytes in the underlying buffer is marked. So the temp
-          // buffer,tagsBuffer was not been used.
-          currentBuffer.get(kvBuffer, current.tagsOffset, current.tagsLength);
-        } else {
-          // When tagsOffset is marked as -1, tag compression was present and so the tags were
-          // uncompressed into temp buffer, tagsBuffer. Let us copy it from there
-          kvBuffer.put(current.tagsBuffer, 0, current.tagsLength);
-        }
-      }
-      kvBuffer.rewind();
-      return kvBuffer;
-    }
-
-    protected ByteBuffer createKVBuffer() {
-      int kvBufSize = (int) KeyValue.getKeyValueDataStructureSize(current.keyLength,
-          current.valueLength, current.tagsLength);
-      ByteBuffer kvBuffer = ByteBuffer.allocate(kvBufSize);
-      return kvBuffer;
     }
 
     @Override
@@ -1080,10 +1091,8 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
         // When tag compression is enabled, tagCompressionContext will have a not null value. Write
         // the tags using Dictionary compression in such a case
         if (tagCompressionContext != null) {
-          // TODO : Make Dictionary interface to work with BBs and then change the corresponding
-          // compress tags code to work with BB
-          tagCompressionContext
-              .compressTags(out, cell.getTagsArray(), cell.getTagsOffset(), tagsLength);
+          // Not passing tagsLength considering that parsing of the tagsLength is not costly
+          CellUtil.compressTags(out, cell, tagCompressionContext);
         } else {
           CellUtil.writeTags(out, cell, tagsLength);
         }
@@ -1220,8 +1229,8 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
     BufferedDataBlockEncodingState state = (BufferedDataBlockEncodingState) encodingCtx
         .getEncodingState();
     // Write the unencodedDataSizeWritten (with header size)
-    Bytes.putInt(uncompressedBytesWithHeader, HConstants.HFILEBLOCK_HEADER_SIZE
-        + DataBlockEncoding.ID_SIZE, state.unencodedDataSizeWritten
+    Bytes.putInt(uncompressedBytesWithHeader,
+      HConstants.HFILEBLOCK_HEADER_SIZE + DataBlockEncoding.ID_SIZE, state.unencodedDataSizeWritten
         );
     if (encodingCtx.getDataBlockEncoding() != DataBlockEncoding.NONE) {
       encodingCtx.postEncoding(BlockType.ENCODED_DATA);
@@ -1235,7 +1244,7 @@ abstract class BufferedDataBlockEncoder implements DataBlockEncoder {
       return new KeyValue.KeyOnlyKeyValue(key.array(), key.arrayOffset() + key.position(),
           keyLength);
     } else {
-      return new ByteBufferedKeyOnlyKeyValue(key, key.position(), keyLength);
+      return new ByteBufferKeyOnlyKeyValue(key, key.position(), keyLength);
     }
   }
 }

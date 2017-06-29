@@ -17,11 +17,11 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import java.io.IOException;
 import java.util.List;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.util.Pair;
 
 /**
@@ -32,7 +32,7 @@ import org.apache.hadoop.hbase.util.Pair;
  * </p>
  */
 @InterfaceAudience.Private
-public interface MemStore extends HeapSize {
+public interface MemStore {
 
   /**
    * Creates a snapshot of the current memstore. Snapshot must be cleared by call to
@@ -57,21 +57,29 @@ public interface MemStore extends HeapSize {
    *
    * @return size of data that is going to be flushed
    */
-  long getFlushableSize();
+  MemstoreSize getFlushableSize();
 
   /**
    * Return the size of the snapshot(s) if any
    * @return size of the memstore snapshot
    */
-  long getSnapshotSize();
+  MemstoreSize getSnapshotSize();
 
   /**
    * Write an update
    * @param cell
-   * @return approximate size of the passed KV and the newly added KV which maybe different from the
-   *         passed in KV.
+   * @param memstoreSize The delta in memstore size will be passed back via this.
+   *        This will include both data size and heap overhead delta.
    */
-  Pair<Long, Cell> add(final Cell cell);
+  void add(final Cell cell, MemstoreSize memstoreSize);
+
+  /**
+   * Write the updates
+   * @param cells
+   * @param memstoreSize The delta in memstore size will be passed back via this.
+   *        This will include both data size and heap overhead delta.
+   */
+  void add(Iterable<Cell> cells, MemstoreSize memstoreSize);
 
   /**
    * @return Oldest timestamp of all the Cells in the MemStore
@@ -86,35 +94,11 @@ public interface MemStore extends HeapSize {
   void rollback(final Cell cell);
 
   /**
-   * Write a delete
-   * @param deleteCell
-   * @return approximate size of the passed key and value.
-   */
-  long delete(final Cell deleteCell);
-
-  /**
    * Find the key that matches <i>row</i> exactly, or the one that immediately precedes it. The
    * target row key is set in state.
    * @param state column/delete tracking state
    */
   void getRowKeyAtOrBefore(final GetClosestRowBeforeTracker state);
-
-  /**
-   * Given the specs of a column, update it, first by inserting a new record,
-   * then removing the old one.  Since there is only 1 KeyValue involved, the memstoreTS
-   * will be set to 0, thus ensuring that they instantly appear to anyone. The underlying
-   * store will ensure that the insert/delete each are atomic. A scanner/reader will either
-   * get the new value, or the old value and all readers will eventually only see the new
-   * value after the old was removed.
-   *
-   * @param row
-   * @param family
-   * @param qualifier
-   * @param newValue
-   * @param now
-   * @return Timestamp
-   */
-  long updateColumnValue(byte[] row, byte[] family, byte[] qualifier, long newValue, long now);
 
   /**
    * Update or insert the specified cells.
@@ -129,18 +113,22 @@ public interface MemStore extends HeapSize {
    * only see each KeyValue update as atomic.
    * @param cells
    * @param readpoint readpoint below which we can safely remove duplicate Cells.
-   * @return change in memstore size
+   * @param memstoreSize The delta in memstore size will be passed back via this.
+   *        This will include both data size and heap overhead delta.
    */
-  long upsert(Iterable<Cell> cells, long readpoint);
+  void upsert(Iterable<Cell> cells, long readpoint, MemstoreSize memstoreSize);
 
   /**
    * @return scanner over the memstore. This might include scanner over the snapshot when one is
    * present.
    */
-  List<KeyValueScanner> getScanners(long readPt);
+  List<KeyValueScanner> getScanners(long readPt) throws IOException;
 
   /**
-   * @return Total memory occupied by this MemStore.
+   * @return Total memory occupied by this MemStore. This won't include any size occupied by the
+   *         snapshot. We assume the snapshot will get cleared soon. This is not thread safe and
+   *         the memstore may be changed while computing its size. It is the responsibility of the
+   *         caller to make sure this doesn't happen.
    */
-  long size();
+  MemstoreSize size();
 }

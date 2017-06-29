@@ -52,6 +52,8 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
   final CountDownLatch latch;
   final int startLogErrorsCnt;
   final int operationTimeout;
+  final List<Action<Row>> actions;
+  final Object[] results;
 
   public AsyncBatchFuture(final HTable table, final List<Action<Row>> actions,
       final Object[] results, int tries, final long retryPause, int startLogErrorsCnt,
@@ -66,6 +68,8 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
     this.tableName = table.getName().getNameAsString();
     this.startLogErrorsCnt = startLogErrorsCnt;
     this.operationTimeout = operationTimeout;
+    this.actions = actions;
+    this.results = results;
     AsyncBatchCallback batchCallback = new AsyncBatchCallbackImpl(results, actions, retryPause);
     doRequest(actions, batchCallback);
   }
@@ -79,6 +83,7 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
     latch.await(operationTimeout, TimeUnit.MILLISECONDS);
     if (latch.getCount() > 0) {
       cancel(true);
+      logErrorInfo(operationTimeout, TimeUnit.MILLISECONDS);
       throw new InterruptedException("Failed to get batch result from table: " + this.tableName
           + " within operation timeout: " + operationTimeout + TimeUnit.MILLISECONDS);
     }
@@ -86,6 +91,23 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
       throw new ExecutionException(toThrow);
     }
     return toReturn;
+  }
+
+  void logErrorInfo(long timeout, TimeUnit unit) {
+    // print which rows have not get.
+    LOG.error(latch.getCount() + " actions have not finished on table=" + this.tableName
+        + ", operationTimeout=" + timeout + " " + unit + ", timeout=" + table.getTimeout());
+    for (Action<Row> action : actions) {
+      Object result = results[action.getOriginalIndex()];
+      if (result == null) {
+        LOG.error("Action on row: " + Bytes.toString(action.getAction().getRow())
+            + " do not return any result.");
+      }
+      if (result instanceof Throwable) {
+        LOG.error("Action on row: " + Bytes.toString(action.getAction().getRow())
+            + " failed and detailed exception:", (Throwable) result);
+      }
+    }
   }
 
   @Override
@@ -124,6 +146,7 @@ public class AsyncBatchFuture extends AsyncFuture<Object[]> {
     latch.await(timeout, unit);
     if (latch.getCount() > 0) {
       cancel(true);
+      logErrorInfo(timeout, unit);
       throw new TimeoutException("Failed to get batch result against table: "
           + this.tableName + " within " + timeout + " " + unit.name().toLowerCase());
     }

@@ -26,7 +26,7 @@ import java.nio.ByteBuffer;
 import java.util.regex.Pattern;
 
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.TestCellUtil.ByteBufferedCellImpl;
+import org.apache.hadoop.hbase.TestCellUtil.ByteBufferCellImpl;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
@@ -107,7 +107,7 @@ public class TestSingleColumnValueFilter {
     assertTrue("less than", filter.filterKeyValue(kv) == Filter.ReturnCode.NEXT_ROW);
     filter.reset();
     byte[] buffer = kv.getBuffer();
-    Cell c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    Cell c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("less than", filter.filterKeyValue(c) == Filter.ReturnCode.NEXT_ROW);
     filter.reset();
 
@@ -116,7 +116,7 @@ public class TestSingleColumnValueFilter {
     assertTrue("Equals 100", filter.filterKeyValue(kv) == Filter.ReturnCode.NEXT_ROW);
     filter.reset();
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("Equals 100", filter.filterKeyValue(c) == Filter.ReturnCode.NEXT_ROW);
     filter.reset();
 
@@ -125,7 +125,7 @@ public class TestSingleColumnValueFilter {
     assertTrue("include 120", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     filter.reset();
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("include 120", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
   }
 
@@ -134,29 +134,29 @@ public class TestSingleColumnValueFilter {
     KeyValue kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER, VAL_2);
     assertTrue("basicFilter1", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     byte[] buffer = kv.getBuffer();
-    Cell c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    Cell c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("basicFilter1", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER, VAL_3);
     assertTrue("basicFilter2", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("basicFilter2", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER, VAL_4);
     assertTrue("basicFilter3", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("basicFilter3", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     assertFalse("basicFilterNotNull", filter.filterRow());
     filter.reset();
     kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER, VAL_1);
     assertTrue("basicFilter4", filter.filterKeyValue(kv) == Filter.ReturnCode.NEXT_ROW);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("basicFilter4", filter.filterKeyValue(c) == Filter.ReturnCode.NEXT_ROW);
     kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER, VAL_2);
     assertTrue("basicFilter4", filter.filterKeyValue(kv) == Filter.ReturnCode.NEXT_ROW);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("basicFilter4", filter.filterKeyValue(c) == Filter.ReturnCode.NEXT_ROW);
     assertFalse("basicFilterAllRemaining", filter.filterAllRemaining());
     assertTrue("basicFilterNotNull", filter.filterRow());
@@ -165,12 +165,12 @@ public class TestSingleColumnValueFilter {
     kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER, VAL_1);
     assertTrue("basicFilter5", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("basicFilter5", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER, VAL_2);
     assertTrue("basicFilter5", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("basicFilter5", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     assertFalse("basicFilterNotNull", filter.filterRow());
   }
@@ -180,14 +180,14 @@ public class TestSingleColumnValueFilter {
     KeyValue kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER, FULLSTRING_1);
     assertTrue("null1", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     byte[] buffer = kv.getBuffer();
-    Cell c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    Cell c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("null1", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     assertFalse("null1FilterRow", filter.filterRow());
     filter.reset();
     kv = new KeyValue(ROW, COLUMN_FAMILY, Bytes.toBytes("qual2"), FULLSTRING_2);
     assertTrue("null2", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("null2", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     assertTrue("null2FilterRow", filter.filterRow());
   }
@@ -199,13 +199,13 @@ public class TestSingleColumnValueFilter {
     assertTrue("substrTrue",
       filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     byte[] buffer = kv.getBuffer();
-    Cell c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    Cell c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("substrTrue", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER,
       FULLSTRING_2);
     assertTrue("substrFalse", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("substrFalse", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     assertFalse("substrFilterAllRemaining", filter.filterAllRemaining());
     assertFalse("substrFilterNotNull", filter.filterRow());
@@ -218,13 +218,13 @@ public class TestSingleColumnValueFilter {
     assertTrue("regexTrue",
       filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     byte[] buffer = kv.getBuffer();
-    Cell c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    Cell c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("regexTrue", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     kv = new KeyValue(ROW, COLUMN_FAMILY, COLUMN_QUALIFIER,
       FULLSTRING_2);
     assertTrue("regexFalse", filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     buffer = kv.getBuffer();
-    c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("regexFalse", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     assertFalse("regexFilterAllRemaining", filter.filterAllRemaining());
     assertFalse("regexFilterNotNull", filter.filterRow());
@@ -237,7 +237,7 @@ public class TestSingleColumnValueFilter {
     assertTrue("regexTrue",
       filter.filterKeyValue(kv) == Filter.ReturnCode.INCLUDE);
     byte[] buffer = kv.getBuffer();
-    Cell c = new ByteBufferedCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
+    Cell c = new ByteBufferCellImpl(ByteBuffer.wrap(buffer), 0, buffer.length);
     assertTrue("regexTrue", filter.filterKeyValue(c) == Filter.ReturnCode.INCLUDE);
     assertFalse("regexFilterAllRemaining", filter.filterAllRemaining());
     assertFalse("regexFilterNotNull", filter.filterRow());

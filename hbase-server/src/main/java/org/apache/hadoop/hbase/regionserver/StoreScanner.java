@@ -22,10 +22,8 @@ package org.apache.hadoop.hbase.regionserver;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.NavigableSet;
-import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -43,6 +41,7 @@ import org.apache.hadoop.hbase.client.IsolationLevel;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.executor.ExecutorService;
 import org.apache.hadoop.hbase.filter.Filter;
+import org.apache.hadoop.hbase.regionserver.MemStoreScanner;
 import org.apache.hadoop.hbase.regionserver.ScanQueryMatcher.MatchCode;
 import org.apache.hadoop.hbase.regionserver.ScannerContext.LimitScope;
 import org.apache.hadoop.hbase.regionserver.ScannerContext.NextState;
@@ -90,7 +89,7 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
 
   // Collects all the KVHeap that are eagerly getting closed during the
   // course of a scan
-  protected Set<KeyValueHeap> heapsForDelayedClose = new HashSet<KeyValueHeap>();
+  protected List<KeyValueHeap> heapsForDelayedClose = new ArrayList<KeyValueHeap>();
 
   /**
    * The number of KVs seen by the scanner. Includes explicitly skipped KVs, but not
@@ -395,8 +394,7 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
 
     // We can only exclude store files based on TTL if minVersions is set to 0.
     // Otherwise, we might have to return KVs that have technically expired.
-    long expiredTimestampCutoff = minVersions == 0 ? oldestUnexpiredTS :
-        Long.MIN_VALUE;
+    long expiredTimestampCutoff = minVersions == 0 ? oldestUnexpiredTS : Long.MIN_VALUE;
 
     // include only those scan files which pass all filters
     for (KeyValueScanner kvs : allScanners) {
@@ -509,8 +507,8 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
       return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
     }
 
-    Cell peeked = this.heap.peek();
-    if (peeked == null) {
+    Cell cell = this.heap.peek();
+    if (cell == null) {
       close(false);// Do all cleanup except heap.close()
       return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
     }
@@ -521,16 +519,13 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
     // If no limits exists in the scope LimitScope.Between_Cells then we are sure we are changing
     // rows. Else it is possible we are still traversing the same row so we must perform the row
     // comparison.
-    if (!scannerContext.hasAnyLimit(LimitScope.BETWEEN_CELLS) || matcher.curCell == null ||
-        !CellUtil.matchingRow(peeked, matcher.curCell)) {
+    if (!scannerContext.hasAnyLimit(LimitScope.BETWEEN_CELLS) || matcher.curCell == null) {
       this.countPerRow = 0;
-      matcher.setToNewRow(peeked);
+      matcher.setToNewRow(cell);
     }
 
     // Clear progress away unless invoker has indicated it should be kept.
     if (!scannerContext.getKeepProgress()) scannerContext.clearProgress();
-    
-    Cell cell;
 
     // Only do a sanity-check if store and comparator are available.
     CellComparator comparator =
@@ -539,7 +534,7 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
     int count = 0;
     long totalBytesRead = 0;
 
-    LOOP: while((cell = this.heap.peek()) != null) {
+    LOOP: do {
       // Update and check the time limit based on the configured value of cellsPerTimeoutCheck
       if ((kvsScanned % cellsPerHeartbeatCheck == 0)) {
         scannerContext.updateTimeProgress();
@@ -571,6 +566,7 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
             if (!matcher.moreRowsMayExistAfter(cell)) {
               return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
             }
+            matcher.curCell = null;
             seekToNextRow(cell);
             break LOOP;
           }
@@ -579,13 +575,18 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
           // also update metric accordingly
           if (this.countPerRow > storeOffset) {
             outResult.add(cell);
+            KeyValueScanner curScanner = heap.getCurrent();
+            if (curScanner instanceof MemStoreScanner) {
+              ((MemStoreScanner) curScanner).setReferenced();
+            }
 
             // Update local tracking information
             count++;
-            totalBytesRead += CellUtil.estimatedSerializedSizeOf(cell);
+            int cellSize = CellUtil.estimatedSerializedSizeOf(cell);
+            totalBytesRead += cellSize;
 
             // Update the progress of the scanner context
-            scannerContext.incrementSizeProgress(CellUtil.estimatedHeapSizeOfWithoutTags(cell));
+            scannerContext.incrementSizeProgress(cellSize, CellUtil.estimatedHeapSizeOf(cell));
             scannerContext.incrementBatchProgress(1);
 
             if (totalBytesRead > maxRowSize) {
@@ -601,6 +602,7 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
             if (!matcher.moreRowsMayExistAfter(cell)) {
               return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
             }
+            matcher.curCell = null;
             seekToNextRow(cell);
           } else if (qcode == ScanQueryMatcher.MatchCode.INCLUDE_AND_SEEK_NEXT_COL) {
             seekAsDirection(matcher.getKeyForNextColumn(cell));
@@ -617,6 +619,13 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
           continue;
 
         case DONE:
+          // Optimization for Gets! If DONE, no more to get on this row, early exit!
+          if (this.scan.isGetScan()) {
+            // Then no more to this row... exit.
+            close(false);// Do all cleanup except heap.close()
+            return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
+          }
+          matcher.curCell = null;
           return scannerContext.setScannerState(NextState.MORE_VALUES).hasMoreValues();
 
         case DONE_SCAN:
@@ -629,7 +638,7 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
           if (!matcher.moreRowsMayExistAfter(cell)) {
             return scannerContext.setScannerState(NextState.NO_MORE_VALUES).hasMoreValues();
           }
-
+          matcher.curCell = null;
           seekToNextRow(cell);
           break;
 
@@ -653,7 +662,7 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
         default:
           throw new RuntimeException("UNEXPECTED");
       }
-    }
+    } while((cell = this.heap.peek()) != null);
 
     if (count > 0) {
       return scannerContext.setScannerState(NextState.MORE_VALUES).hasMoreValues();
@@ -667,21 +676,67 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
     }
   }
 
-  /*
-   * See if we should actually SEEK or rather just SKIP to the next Cell.
-   * (see HBASE-13109)
+  /**
+   * See if we should actually SEEK or rather just SKIP to the next Cell (see HBASE-13109).
+   * This method works together with ColumnTrackers and Filters. ColumnTrackers may issue SEEK
+   * hints, such as seek to next column, next row, or seek to an arbitrary seek key.
+   * This method intercepts these qcodes and decides whether a seek is the most efficient _actual_
+   * way to get us to the requested cell (SEEKs are more expensive than SKIP, SKIP, SKIP inside the
+   * current, loaded block).
+   * It does this by looking at the next indexed key of the current HFile. This key
+   * is then compared with the _SEEK_ key, where a SEEK key is an artificial 'last possible key
+   * on the row' (only in here, we avoid actually creating a SEEK key; in the compare we work with
+   * the current Cell but compare as though it were a seek key; see down in
+   * matcher.compareKeyForNextRow, etc). If the compare gets us onto the
+   * next block we *_SEEK, otherwise we just INCLUDE or SKIP, and let the ColumnTrackers or Filters
+   * go through the next Cell, and so on)
+   *
+   * <p>The ColumnTrackers and Filters must behave correctly in all cases, i.e. if they are past the
+   * Cells they care about they must issues a SKIP or SEEK.
+   *
+   * <p>Other notes:
+   * <ul>
+   * <li>Rows can straddle block boundaries</li>
+   * <li>Versions of columns can straddle block boundaries (i.e. column C1 at T1 might be in a
+   * different block than column C1 at T2)</li>
+   * <li>We want to SKIP and INCLUDE if the chance is high that we'll find the desired Cell after a
+   * few SKIPs...</li>
+   * <li>We want to INCLUDE_AND_SEEK and SEEK when the chance is high that we'll be able to seek
+   * past many Cells, especially if we know we need to go to the next block.</li>
+   * </ul>
+   * <p>A good proxy (best effort) to determine whether INCLUDE/SKIP is better than SEEK is whether
+   * we'll likely end up seeking to the next block (or past the next block) to get our next column.
+   * Example:
+   * <pre>
+   * |    BLOCK 1              |     BLOCK 2                   |
+   * |  r1/c1, r1/c2, r1/c3    |    r1/c4, r1/c5, r2/c1        |
+   *                                   ^         ^
+   *                                   |         |
+   *                           Next Index Key   SEEK_NEXT_ROW (before r2/c1)
+   *
+   *
+   * |    BLOCK 1                       |     BLOCK 2                      |
+   * |  r1/c1/t5, r1/c1/t4, r1/c1/t3    |    r1/c1/t2, r1/c1/T1, r1/c2/T3  |
+   *                                            ^              ^
+   *                                            |              |
+   *                                    Next Index Key        SEEK_NEXT_COL
+   * </pre>
+   * Now imagine we want columns c1 and c3 (see first diagram above), the 'Next Index Key' of r1/c4
+   * is > r1/c3 so we should seek to get to the c1 on the next row, r2. In second case, say we only
+   * want one version of c1, after we have it, a SEEK_COL will be issued to get to c2. Looking at
+   * the 'Next Index Key', it would land us in the next block, so we should SEEK. In other scenarios
+   * where the SEEK will not land us in the next block, it is very likely better to issues a series
+   * of SKIPs.
    */
-  private ScanQueryMatcher.MatchCode optimize(ScanQueryMatcher.MatchCode qcode, Cell cell) {
-    Cell nextIndexedKey = getNextIndexedKey();
-    if (nextIndexedKey == null || nextIndexedKey == HConstants.NO_NEXT_INDEXED_KEY ||
-        store == null) {
-      return qcode;
-    }
+  @VisibleForTesting
+  protected ScanQueryMatcher.MatchCode optimize(ScanQueryMatcher.MatchCode qcode, Cell cell) {
     switch(qcode) {
     case INCLUDE_AND_SEEK_NEXT_COL:
     case SEEK_NEXT_COL:
     {
-      if (matcher.compareKeyForNextColumn(nextIndexedKey, cell) >= 0) {
+      Cell nextIndexedKey = getNextIndexedKey();
+      if (nextIndexedKey != null && nextIndexedKey != HConstants.NO_NEXT_INDEXED_KEY
+          && matcher.compareKeyForNextColumn(nextIndexedKey, cell) >= 0) {
         return qcode == MatchCode.SEEK_NEXT_COL ? MatchCode.SKIP : MatchCode.INCLUDE;
       }
       break;
@@ -689,8 +744,16 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
     case INCLUDE_AND_SEEK_NEXT_ROW:
     case SEEK_NEXT_ROW:
     {
-      if (matcher.compareKeyForNextRow(nextIndexedKey, cell) >= 0) {
-        return qcode == MatchCode.SEEK_NEXT_ROW ? MatchCode.SKIP : MatchCode.INCLUDE;
+      // If it is a Get Scan, then we know that we are done with this row; there are no more
+      // rows beyond the current one: don't try to optimize. We are DONE. Return the *_NEXT_ROW
+      // qcode as is. When the caller gets these flags on a Get Scan, it knows it can shut down the
+      // Scan.
+      if (!this.scan.isGetScan()) {
+        Cell nextIndexedKey = getNextIndexedKey();
+        if (nextIndexedKey != null && nextIndexedKey != HConstants.NO_NEXT_INDEXED_KEY
+            && matcher.compareKeyForNextRow(nextIndexedKey, cell) >= 0) {
+          return qcode == MatchCode.SEEK_NEXT_ROW ? MatchCode.SKIP : MatchCode.INCLUDE;
+        }
       }
       break;
     }
@@ -721,6 +784,17 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
 
     // close scanners to old obsolete Store files
     this.heapsForDelayedClose.add(this.heap);// Don't close now. Delay it till StoreScanner#close
+    if (prevCell != null) {
+      prevCell = KeyValueUtil.toNewKeyCell(this.prevCell);
+    }
+    matcher.beforeShipped();
+    // Close unreferenced MemStore scanners
+    for (MemStoreScanner scanner : heap.getMemstoreScanners()) {
+      if (!scanner.isReferenced()) {
+        scanner.close();
+      }
+    }
+
     this.heap = null; // the re-seeks could be slow (access HDFS) free up memory ASAP
 
     // Let the next() call handle re-creating and seeking
@@ -775,7 +849,7 @@ public class StoreScanner extends NonReversedNonLazyKeyValueScanner
     }
     if ((matcher.curCell == null) || !CellUtil.matchingRows(cell, matcher.curCell)) {
       this.countPerRow = 0;
-      matcher.reset();
+      // The setToNewRow will call reset internally
       matcher.setToNewRow(cell);
     }
   }

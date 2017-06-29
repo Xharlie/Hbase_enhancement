@@ -115,7 +115,7 @@ public class TestChecksum {
               .withHBaseCheckSum(true)
               .build();
         HFileBlock.FSReader hbr = new FSReaderImplTest(is, totalSize, fs, path, meta);
-        HFileBlock b = hbr.readBlockData(0, -1, -1, pread);
+        HFileBlock b = hbr.readBlockData(0, -1, pread);
         b.sanityCheck();
         assertEquals(4936, b.getUncompressedSizeWithoutHeader());
         assertEquals(algo == GZ ? 2173 : 4936, 
@@ -136,17 +136,17 @@ public class TestChecksum {
         // requests. Verify that this is correct.
         for (int i = 0; i < 
              HFileBlock.CHECKSUM_VERIFICATION_NUM_IO_THRESHOLD + 1; i++) {
-          b = hbr.readBlockData(0, -1, -1, pread);
+          b = hbr.readBlockData(0, -1, pread);
           assertEquals(0, HFile.getChecksumFailuresCount());
         }
         // The next read should have hbase checksum verification reanabled,
         // we verify this by assertng that there was a hbase-checksum failure.
-        b = hbr.readBlockData(0, -1, -1, pread);
+        b = hbr.readBlockData(0, -1, pread);
         assertEquals(1, HFile.getChecksumFailuresCount());
 
         // Since the above encountered a checksum failure, we switch
         // back to not checking hbase checksums.
-        b = hbr.readBlockData(0, -1, -1, pread);
+        b = hbr.readBlockData(0, -1, pread);
         assertEquals(0, HFile.getChecksumFailuresCount());
         is.close();
 
@@ -157,7 +157,7 @@ public class TestChecksum {
         assertEquals(false, newfs.useHBaseChecksum());
         is = new FSDataInputStreamWrapper(newfs, path);
         hbr = new FSReaderImplTest(is, totalSize, newfs, path, meta);
-        b = hbr.readBlockData(0, -1, -1, pread);
+        b = hbr.readBlockData(0, -1, pread);
         is.close();
         b.sanityCheck();
         b = b.unpack(meta, hbr);
@@ -241,7 +241,7 @@ public class TestChecksum {
                .build();
         HFileBlock.FSReader hbr = new HFileBlock.FSReaderImpl(new FSDataInputStreamWrapper(
             is, nochecksum), totalSize, hfs, path, meta);
-        HFileBlock b = hbr.readBlockData(0, -1, -1, pread);
+        HFileBlock b = hbr.readBlockData(0, -1, pread);
         is.close();
         b.sanityCheck();
         assertEquals(dataSize, b.getUncompressedSizeWithoutHeader());
@@ -286,7 +286,7 @@ public class TestChecksum {
     }
 
     @Override
-    protected boolean validateBlockChecksum(HFileBlock block, 
+    protected boolean validateBlockChecksum(HFileBlock block, long offset,
       byte[] data, int hdrSize) throws IOException {
       return false;  // checksum validation failure
     }

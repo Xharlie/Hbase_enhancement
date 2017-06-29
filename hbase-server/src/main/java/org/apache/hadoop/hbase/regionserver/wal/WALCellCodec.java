@@ -21,19 +21,23 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.codec.BaseDecoder;
 import org.apache.hadoop.hbase.codec.BaseEncoder;
 import org.apache.hadoop.hbase.codec.Codec;
-import org.apache.hadoop.hbase.codec.KeyValueCodec;
+import org.apache.hadoop.hbase.codec.KeyValueCodecWithTags;
+import org.apache.hadoop.hbase.io.ByteBufferInputStream;
 import org.apache.hadoop.hbase.io.util.Dictionary;
 import org.apache.hadoop.hbase.io.util.StreamUtils;
+import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
 import org.apache.hadoop.io.IOUtils;
@@ -197,43 +201,22 @@ public class WALCellCodec implements Codec {
       // To support tags
       int tagsLength = cell.getTagsLength();
       StreamUtils.writeRawVInt32(out, tagsLength);
-
-      // Write row, qualifier, and family; use dictionary
-      // compression as they're likely to have duplicates.
-      write(cell.getRowArray(), cell.getRowOffset(), cell.getRowLength(), compression.rowDict);
-      write(cell.getFamilyArray(), cell.getFamilyOffset(), cell.getFamilyLength(),
-          compression.familyDict);
-      write(cell.getQualifierArray(), cell.getQualifierOffset(), cell.getQualifierLength(),
-          compression.qualifierDict);
-
+      CellUtil.compressRow(out, cell, compression.rowDict);
+      CellUtil.compressFamily(out, cell, compression.familyDict);
+      CellUtil.compressQualifier(out, cell, compression.qualifierDict);
       // Write timestamp, type and value as uncompressed.
       StreamUtils.writeLong(out, cell.getTimestamp());
       out.write(cell.getTypeByte());
-      out.write(cell.getValueArray(), cell.getValueOffset(), cell.getValueLength());
+      CellUtil.writeValue(out, cell, cell.getValueLength());
       if (tagsLength > 0) {
         if (compression.tagCompressionContext != null) {
           // Write tags using Dictionary compression
-          compression.tagCompressionContext.compressTags(out, cell.getTagsArray(),
-              cell.getTagsOffset(), tagsLength);
+          CellUtil.compressTags(out, cell, compression.tagCompressionContext);
         } else {
           // Tag compression is disabled within the WAL compression. Just write the tags bytes as
           // it is.
-          out.write(cell.getTagsArray(), cell.getTagsOffset(), tagsLength);
+          CellUtil.writeTags(out, cell, tagsLength);
         }
-      }
-    }
-
-    private void write(byte[] data, int offset, int length, Dictionary dict) throws IOException {
-      short dictIdx = Dictionary.NOT_IN_DICTIONARY;
-      if (dict != null) {
-        dictIdx = dict.findEntry(data, offset, length);
-      }
-      if (dictIdx == Dictionary.NOT_IN_DICTIONARY) {
-        out.write(Dictionary.NOT_IN_DICTIONARY);
-        StreamUtils.writeRawVInt32(out, length);
-        out.write(data, offset, length);
-      } else {
-        StreamUtils.writeShort(out, dictIdx);
       }
     }
   }
@@ -336,6 +319,7 @@ public class WALCellCodec implements Codec {
     public void write(Cell cell) throws IOException {
       checkFlushed();
       // Make sure to write tags into WAL
+      ByteBufferUtils.putInt(this.out, KeyValueUtil.getSerializedSize(cell, true));
       KeyValueUtil.oswrite(cell, this.out, true);
     }
   }
@@ -343,7 +327,12 @@ public class WALCellCodec implements Codec {
   @Override
   public Decoder getDecoder(InputStream is) {
     return (compression == null)
-        ? new KeyValueCodec.KeyValueDecoder(is) : new CompressedKvDecoder(is, compression);
+        ? new KeyValueCodecWithTags.KeyValueDecoder(is) : new CompressedKvDecoder(is, compression);
+  }
+
+  @Override
+  public Decoder getDecoder(ByteBuffer buf) {
+    return getDecoder(new ByteBufferInputStream(buf));
   }
 
   @Override

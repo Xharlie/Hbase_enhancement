@@ -18,14 +18,14 @@ package org.apache.hadoop.hbase.io.encoding;
 
 import java.nio.ByteBuffer;
 
-import org.apache.hadoop.hbase.ByteBufferedCell;
-import org.apache.hadoop.hbase.ByteBufferedKeyOnlyKeyValue;
+import org.apache.hadoop.hbase.ByteBufferCell;
+import org.apache.hadoop.hbase.ByteBufferKeyOnlyKeyValue;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.OffheapKeyValue;
+import org.apache.hadoop.hbase.ByteBufferKeyValue;
 import org.apache.hadoop.hbase.SizeCachedKeyValue;
 import org.apache.hadoop.hbase.SizeCachedNoTagsKeyValue;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
@@ -103,34 +103,6 @@ public class RowIndexSeekerV1 extends AbstractEncodedSeeker {
     return dup.slice();
   }
 
-  @Override
-  public ByteBuffer getKeyValueBuffer() {
-    return getKeyValueBuffer(false);
-  }
-
-  ByteBuffer getKeyValueBuffer(boolean addMvcc) {
-    Cell cell = current.toCell();
-    ByteBuffer kvBuffer = createKVBuffer(addMvcc);
-    kvBuffer.putInt(current.keyLength);
-    kvBuffer.putInt(current.valueLength);
-    ByteBufferUtils.copyFromBufferToBuffer(current.keyBuffer, kvBuffer,
-      current.keyBuffer.position(), current.keyLength);
-    kvBuffer.put(CellUtil.cloneValue(cell));
-    if (current.tagsLength > 0) {
-      // Put short as unsigned
-      kvBuffer.put((byte) (current.tagsLength >> 8 & 0xff));
-      kvBuffer.put((byte) (current.tagsLength & 0xff));
-      if (current.tagsOffset != -1) {
-        kvBuffer.put(CellUtil.cloneTags(cell));
-      }
-    }
-    if (addMvcc && includesMvcc()) {
-      ByteBufferUtils.writeVLong(kvBuffer, cell.getSequenceId());
-    }
-    kvBuffer.rewind();
-    return kvBuffer;
-  }
-
   protected ByteBuffer createKVBuffer(boolean addMvcc) {
     int kvBufSize =
         (int) KeyValue.getKeyValueDataStructureSize(current.keyLength, current.valueLength,
@@ -194,10 +166,10 @@ public class RowIndexSeekerV1 extends AbstractEncodedSeeker {
   }
 
   private int compareRows(ByteBuffer row, Cell seekCell) {
-    if (seekCell instanceof ByteBufferedCell) {
+    if (seekCell instanceof ByteBufferCell) {
       return ByteBufferUtils.compareTo(row, row.position(), row.remaining(),
-          ((ByteBufferedCell) seekCell).getRowByteBuffer(),
-          ((ByteBufferedCell) seekCell).getRowPosition(),
+          ((ByteBufferCell) seekCell).getRowByteBuffer(),
+          ((ByteBufferCell) seekCell).getRowPosition(),
           seekCell.getRowLength());
     } else {
       return ByteBufferUtils.compareTo(row, row.position(), row.remaining(),
@@ -359,7 +331,7 @@ public class RowIndexSeekerV1 extends AbstractEncodedSeeker {
     protected long memstoreTS;
     protected int nextKvOffset;
     // buffer backed keyonlyKV
-    private ByteBufferedKeyOnlyKeyValue currentKey = new ByteBufferedKeyOnlyKeyValue();
+    private ByteBufferKeyOnlyKeyValue currentKey = new ByteBufferKeyOnlyKeyValue();
 
     protected boolean isValid() {
       return valueOffset != -1;
@@ -367,7 +339,7 @@ public class RowIndexSeekerV1 extends AbstractEncodedSeeker {
 
     protected void invalidate() {
       valueOffset = -1;
-      currentKey = new ByteBufferedKeyOnlyKeyValue();
+      currentKey = new ByteBufferKeyOnlyKeyValue();
       currentBuffer = null;
     }
 
@@ -426,8 +398,7 @@ public class RowIndexSeekerV1 extends AbstractEncodedSeeker {
         currentBuffer.asSubByteBuffer(startOffset, cellBufSize, tmpPair);
         ByteBuffer buf = tmpPair.getFirst();
         if (buf.isDirect()) {
-          ret = new OffheapKeyValue(buf, tmpPair.getSecond(), cellBufSize,
-              tagsLength > 0, seqId);
+          ret = new ByteBufferKeyValue(buf, tmpPair.getSecond(), cellBufSize, seqId);
         } else {
           if (tagsLength > 0) {
             ret = new SizeCachedKeyValue(buf.array(), buf.arrayOffset()

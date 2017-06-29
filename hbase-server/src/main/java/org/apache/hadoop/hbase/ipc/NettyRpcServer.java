@@ -44,6 +44,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFactory;
+import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelPipeline;
@@ -68,6 +69,7 @@ import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
+import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.generated.RPCProtos.RequestHeader;
 import org.apache.hadoop.hbase.security.AccessDeniedException;
@@ -78,6 +80,7 @@ import org.apache.hadoop.hbase.security.SaslUtil;
 import org.apache.hadoop.hbase.security.HBaseSaslRpcServer.SaslDigestCallbackHandler;
 import org.apache.hadoop.hbase.security.HBaseSaslRpcServer.SaslGssCallbackHandler;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.AuthorizationException;
 import org.apache.hadoop.security.authorize.ProxyUsers;
@@ -432,7 +435,7 @@ public class NettyRpcServer extends RpcServer {
               .getTraceInfo().getParentId()) : null;
       Call call =
           new Call(id, this.service, md, header, param, cellScanner, this, totalRequestSize,
-              traceInfo, RpcServer.getRemoteIp());
+              traceInfo, this.addr);
       if (!scheduler.dispatch(new CallRunner(NettyRpcServer.this, call))) {
         callQueueSize.add(-1 * call.getSize());
 
@@ -644,13 +647,6 @@ public class NettyRpcServer extends RpcServer {
       super(id, service, md, header, param, cellScanner, connection, size, tinfo, remoteAddress);
     }
 
-    /**
-     * Call is done. Execution happened and we returned results to client. It is now safe to
-     * cleanup.
-     */
-    void done() {
-    }
-
     @Override
     public synchronized void endDelay(Object result) throws IOException {
       throw new IOException("Not support delay response");
@@ -690,17 +686,13 @@ public class NettyRpcServer extends RpcServer {
      * respond to client. This is called by the RPC code in the context of the Handler thread.
      */
     public synchronized void sendResponseIfReady() throws IOException {
-      getConnection().channel.write(response);
+      getConnection().channel.write(response).addListener(new CallWriteListener(this));
     }
 
     public synchronized void sendResponseIfReady(ChannelFutureListener listener) throws IOException {
       getConnection().channel.write(response).addListener(listener);
     }
 
-    @Override
-    public InetAddress getInetAddress() {
-      return ((InetSocketAddress) getConnection().channel.getRemoteAddress()).getAddress();
-    }
   }
 
   class MessageDecoder extends FrameDecoder {
@@ -945,6 +937,20 @@ public class NettyRpcServer extends RpcServer {
 
   }
 
+  class CallWriteListener implements ChannelFutureListener {
+    private Call call;
+
+    CallWriteListener(Call call) {
+      this.call = call;
+    }
+
+    @Override
+    public void operationComplete(ChannelFuture future) throws Exception {
+      call.done();
+    }
+
+  }
+
   @Override
   public void setSocketSendBufSize(int size) {
   }
@@ -965,5 +971,14 @@ public class NettyRpcServer extends RpcServer {
   public int getResponseQueueLength() {
     // TODO Auto-generated method stub
     return 0;
+  }
+
+  @Override
+  public Pair<Message, CellScanner> call(BlockingService service, MethodDescriptor md,
+      Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status)
+      throws IOException {
+    Call fakeCall = new Call(-1, service, md, null, param, cellScanner, null, -1, null, null);
+    fakeCall.setReceiveTime(receiveTime);
+    return call(fakeCall, status);
   }
 }

@@ -29,6 +29,7 @@ import org.apache.hadoop.hbase.NoTagsKeyValue;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
 import org.apache.hadoop.hbase.io.ByteBufferInputStream;
 import org.apache.hadoop.hbase.io.util.StreamUtils;
+import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.io.IOUtils;
 
 /**
@@ -59,6 +60,7 @@ public class KeyValueCodec implements Codec {
     public void write(Cell cell) throws IOException {
       checkFlushed();
       // Do not write tags over RPC
+      ByteBufferUtils.putInt(this.out, KeyValueUtil.getSerializedSize(cell, false));
       KeyValueUtil.oswrite(cell, out, false);
     }
   }
@@ -92,12 +94,46 @@ public class KeyValueCodec implements Codec {
     }
   }
 
+  public static class ByteBufferedKeyValueDecoder implements Codec.Decoder {
+
+    protected final ByteBuffer buf;
+    protected Cell current = null;
+
+    public ByteBufferedKeyValueDecoder(ByteBuffer buf) {
+      this.buf = buf;
+    }
+
+    @Override
+    public boolean advance() throws IOException {
+      if (this.buf.remaining() <= 0) return false;
+      int len = ByteBufferUtils.toInt(buf);
+      assert buf.hasArray();
+      this.current = createCell(buf.array(), buf.arrayOffset() + buf.position(), len);
+      buf.position(buf.position() + len);
+      return true;
+    }
+
+    @Override
+    public Cell current() {
+      return this.current;
+    }
+
+    protected Cell createCell(byte[] buf, int offset, int len) {
+      return new NoTagsKeyValue(buf, offset, len);
+    }
+  }
+
   /**
    * Implementation depends on {@link InputStream#available()}
    */
   @Override
   public Decoder getDecoder(final InputStream is) {
     return new KeyValueDecoder(is);
+  }
+
+  @Override
+  public Decoder getDecoder(ByteBuffer buf) {
+    return new ByteBufferedKeyValueDecoder(buf);
   }
 
   @Override

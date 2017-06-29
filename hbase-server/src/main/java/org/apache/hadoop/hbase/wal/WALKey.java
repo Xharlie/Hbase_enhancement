@@ -29,20 +29,10 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
-import org.apache.hadoop.hbase.regionserver.Region;
-import org.apache.hadoop.hbase.regionserver.ResponseToolKit;
-import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 import org.apache.hadoop.hbase.util.ByteStringer;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.exceptions.TimeoutIOException;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
@@ -84,7 +74,6 @@ import org.apache.hadoop.hbase.regionserver.wal.WALCellCodec;
 // TODO: Cleanup. We have logSeqNum and then WriteEntry, both are sequence id'ing. Fix.
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.REPLICATION)
 public class WALKey implements SequenceId, Comparable<WALKey> {
-  private static final Log LOG = LogFactory.getLog(WALKey.class);
 
   @InterfaceAudience.Private // For internal use only.
   public MultiVersionConsistencyControl getMvcc() {
@@ -101,46 +90,10 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
    */
   @InterfaceAudience.Private // For internal use only.
   public MultiVersionConsistencyControl.WriteEntry getWriteEntry() throws InterruptedIOException {
-    if (this.preAssignedWriteEntry != null) {
-      // don't wait for seqNumAssignedLatch if writeEntry is preassigned
-      return this.preAssignedWriteEntry;
-    }
-    try {
-      this.seqNumAssignedLatch.await();
-    } catch (InterruptedException ie) {
-      // If interrupted... clear out our entry else we can block up mvcc.
-      MultiVersionConsistencyControl mvcc = getMvcc();
-      LOG.debug("mvcc=" + mvcc + ", writeEntry=" + this.writeEntry);
-      if (mvcc != null) {
-        if (this.writeEntry != null) {
-          mvcc.advanceMemstore(this.writeEntry);
-        }
-      }
-      InterruptedIOException iie = new InterruptedIOException();
-      iie.initCause(ie);
-      throw iie;
+    if (this.writeEntry == null) {
+      throw new RuntimeException("NULL writeEntry when trying to get it!!!");
     }
     return this.writeEntry;
-  }
-
-  /**
-   * @return The preassigned writeEntry, if any
-   */
-  @InterfaceAudience.Private // For internal use only.
-  public MultiVersionConsistencyControl.WriteEntry getPreAssignedWriteEntry() {
-    return this.preAssignedWriteEntry;
-  }
-
-  /**
-   * Preassign writeEntry
-   * @param writeEntry the entry to assign
-   */
-  @InterfaceAudience.Private // For internal use only.
-  public void setPreAssignedWriteEntry(MultiVersionConsistencyControl.WriteEntry writeEntry) {
-    if (writeEntry != null) {
-      this.preAssignedWriteEntry = writeEntry;
-      this.logSeqNum = writeEntry.getWriteNumber();
-    }
   }
 
   /**
@@ -161,11 +114,7 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
       throw new RuntimeException("Non-null writeEntry when trying to set one!!!");
     }
     this.writeEntry = writeEntry;
-    // Set our sequenceid now using WriteEntry.
-    if (this.writeEntry != null) {
-      this.logSeqNum = this.writeEntry.getWriteNumber();
-    }
-    this.seqNumAssignedLatch.countDown();
+    this.logSeqNum = this.writeEntry.getWriteNumber();
   }
 
   // should be < 0 (@see HLogKey#readFields(DataInput))
@@ -229,7 +178,6 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
   @InterfaceAudience.Private
   protected long logSeqNum;
   private long origLogSeqNum = 0;
-  private CountDownLatch seqNumAssignedLatch = new CountDownLatch(1);
   // Time at which this edit was written.
   // visible for deprecated HLogKey
   @InterfaceAudience.Private
@@ -240,13 +188,12 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
   @InterfaceAudience.Private
   protected List<UUID> clusterIds;
 
-  private NavigableMap<byte[], Integer> scopes;
+  private NavigableMap<byte[], Integer> replicationScope;
 
   private long nonceGroup = HConstants.NO_NONCE;
   private long nonce = HConstants.NO_NONCE;
   private MultiVersionConsistencyControl mvcc;
-  private volatile MultiVersionConsistencyControl.WriteEntry writeEntry;
-  public MultiVersionConsistencyControl.WriteEntry preAssignedWriteEntry = null;
+  private MultiVersionConsistencyControl.WriteEntry writeEntry;
   public static final List<UUID> EMPTY_UUIDS = Collections.unmodifiableList(new ArrayList<UUID>());
 
   // visible for deprecated HLogKey
@@ -255,7 +202,12 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
 
   public WALKey() {
     init(null, null, 0L, HConstants.LATEST_TIMESTAMP,
-        new ArrayList<UUID>(), HConstants.NO_NONCE, HConstants.NO_NONCE, null);
+        new ArrayList<UUID>(), HConstants.NO_NONCE, HConstants.NO_NONCE, null, null);
+  }
+
+  public WALKey(final NavigableMap<byte[], Integer> replicationScope) {
+    init(null, null, 0L, HConstants.LATEST_TIMESTAMP,
+        new ArrayList<UUID>(), HConstants.NO_NONCE, HConstants.NO_NONCE, null, replicationScope);
   }
 
   @VisibleForTesting
@@ -265,11 +217,16 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
     List<UUID> clusterIds = new ArrayList<UUID>();
     clusterIds.add(clusterId);
     init(encodedRegionName, tablename, logSeqNum, now, clusterIds,
-        HConstants.NO_NONCE, HConstants.NO_NONCE, null);
+        HConstants.NO_NONCE, HConstants.NO_NONCE, null, null);
   }
 
   public WALKey(final byte[] encodedRegionName, final TableName tablename) {
     this(encodedRegionName, tablename, System.currentTimeMillis());
+  }
+  
+  public WALKey(final byte[] encodedRegionName, final TableName tablename,
+          final NavigableMap<byte[], Integer> replicationScope) {
+    this(encodedRegionName, tablename, System.currentTimeMillis(), replicationScope);
   }
 
   public WALKey(final byte[] encodedRegionName, final TableName tablename, final long now) {
@@ -280,7 +237,20 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
         EMPTY_UUIDS,
         HConstants.NO_NONCE,
         HConstants.NO_NONCE,
-        null);
+        null, null);
+  }
+
+  // TODO: Fix being able to pass in sequenceid.
+  public WALKey(final byte[] encodedRegionName, final TableName tablename, final long now,
+      final NavigableMap<byte[], Integer> replicationScope) {
+    init(encodedRegionName, tablename, NO_SEQUENCE_ID, now, EMPTY_UUIDS, HConstants.NO_NONCE,
+        HConstants.NO_NONCE, null, replicationScope);
+  }
+
+  public WALKey(final byte[] encodedRegionName, final TableName tablename, final long now,
+      MultiVersionConsistencyControl mvcc, final NavigableMap<byte[], Integer> replicationScope) {
+    init(encodedRegionName, tablename, NO_SEQUENCE_ID, now, EMPTY_UUIDS, HConstants.NO_NONCE,
+        HConstants.NO_NONCE, mvcc, replicationScope);
   }
 
   public WALKey(final byte[] encodedRegionName,
@@ -294,7 +264,33 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
         EMPTY_UUIDS,
         HConstants.NO_NONCE,
         HConstants.NO_NONCE,
-        mvcc);
+        mvcc, null);
+  }
+
+  /**
+   * Create the log key for writing to somewhere.
+   * We maintain the tablename mainly for debugging purposes.
+   * A regionName is always a sub-table object.
+   * <p>Used by log splitting and snapshots.
+   *
+   * @param encodedRegionName Encoded name of the region as returned by
+   *                         <code>HRegionInfo#getEncodedNameAsBytes()</code>.
+   * @param tablename         - name of table
+   * @param logSeqNum         - log sequence number
+   * @param now               Time at which this edit was written.
+   * @param clusterIds        the clusters that have consumed the change(used in Replication)
+   * @param nonceGroup        the nonceGroup
+   * @param nonce             the nonce
+   * @param mvcc              the mvcc associate the WALKey
+   * @param replicationScope  the non-default replication scope
+   *                          associated with the region's column families
+   */
+  // TODO: Fix being able to pass in sequenceid.
+  public WALKey(final byte[] encodedRegionName, final TableName tablename, long logSeqNum,
+      final long now, List<UUID> clusterIds, long nonceGroup, long nonce,
+      MultiVersionConsistencyControl mvcc, final NavigableMap<byte[], Integer> replicationScope) {
+    init(encodedRegionName, tablename, logSeqNum, now, clusterIds, nonceGroup, nonce, mvcc,
+        replicationScope);
   }
 
   /**
@@ -318,7 +314,7 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
                 long nonceGroup,
                 long nonce,
                 MultiVersionConsistencyControl mvcc) {
-    init(encodedRegionName, tablename, logSeqNum, now, clusterIds, nonceGroup, nonce, mvcc);
+    init(encodedRegionName, tablename, logSeqNum, now, clusterIds, nonceGroup, nonce, mvcc, null);
   }
 
   /**
@@ -328,7 +324,7 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
    *
    * @param encodedRegionName Encoded name of the region as returned by
    *                          <code>HRegionInfo#getEncodedNameAsBytes()</code>.
-   * @param tablename
+   * @param tablename         the tablename
    * @param now               Time at which this edit was written.
    * @param clusterIds        the clusters that have consumed the change(used in Replication)
    * @param nonceGroup
@@ -338,7 +334,7 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
   public WALKey(final byte[] encodedRegionName, final TableName tablename,
                 final long now, List<UUID> clusterIds, long nonceGroup,
                 final long nonce, final MultiVersionConsistencyControl mvcc) {
-    init(encodedRegionName, tablename, NO_SEQUENCE_ID, now, clusterIds, nonceGroup, nonce, mvcc);
+    init(encodedRegionName, tablename, NO_SEQUENCE_ID, now, clusterIds, nonceGroup, nonce, mvcc, null);
   }
 
   /**
@@ -366,7 +362,60 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
         EMPTY_UUIDS,
         nonceGroup,
         nonce,
-        mvcc);
+        mvcc, null);
+  }
+
+  /**
+   * Create the log key for writing to somewhere.
+   * We maintain the tablename mainly for debugging purposes.
+   * A regionName is always a sub-table object.
+   *
+   * @param encodedRegionName Encoded name of the region as returned by
+   *                          <code>HRegionInfo#getEncodedNameAsBytes()</code>.
+   * @param tablename
+   * @param logSeqNum
+   * @param nonceGroup
+   * @param nonce
+   * @param replicationScope
+   */
+  public WALKey(final byte[] encodedRegionName,
+                final TableName tablename,
+                long logSeqNum,
+                long nonceGroup,
+                long nonce,
+                final MultiVersionConsistencyControl mvcc,
+                final NavigableMap<byte[], Integer> replicationScope) {
+    init(encodedRegionName,
+        tablename,
+        logSeqNum,
+        EnvironmentEdgeManager.currentTime(),
+        EMPTY_UUIDS,
+        nonceGroup,
+        nonce,
+        mvcc, replicationScope);
+  }
+
+  /**
+   * Create the log key for writing to somewhere.
+   * We maintain the tablename mainly for debugging purposes.
+   * A regionName is always a sub-table object.
+   *
+   * @param encodedRegionName Encoded name of the region as returned by
+   *                          <code>HRegionInfo#getEncodedNameAsBytes()</code>.
+   * @param tablename
+   * @param now               Time at which this edit was written.
+   * @param clusterIds        the clusters that have consumed the change(used in Replication)
+   * @param nonceGroup        the nonceGroup
+   * @param nonce             the nonce
+   * @param mvcc mvcc control used to generate sequence numbers and control read/write points
+   * @param replicationScope  the non-default replication scope of the column families
+   */
+  public WALKey(final byte[] encodedRegionName, final TableName tablename,
+                final long now, List<UUID> clusterIds, long nonceGroup,
+                final long nonce, final MultiVersionConsistencyControl mvcc,
+                NavigableMap<byte[], Integer> replicationScope) {
+    init(encodedRegionName, tablename, NO_SEQUENCE_ID, now, clusterIds, nonceGroup, nonce, mvcc,
+        replicationScope);
   }
 
   @InterfaceAudience.Private
@@ -377,7 +426,8 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
                       List<UUID> clusterIds,
                       long nonceGroup,
                       long nonce,
-                      MultiVersionConsistencyControl mvcc) {
+                      MultiVersionConsistencyControl mvcc,
+                      NavigableMap<byte[], Integer> replicationScope) {
     this.logSeqNum = logSeqNum;
     this.writeTime = now;
     this.clusterIds = clusterIds;
@@ -386,6 +436,7 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
     this.nonceGroup = nonceGroup;
     this.nonce = nonce;
     this.mvcc = mvcc;
+    this.replicationScope = replicationScope;
   }
 
   /**
@@ -433,36 +484,6 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
    */
   @Override
   public long getSequenceId() throws IOException {
-    return getSequenceId(-1);
-  }
-
-  /**
-   * Wait for sequence number to be assigned &amp; return the assigned value.
-   * @param maxWaitForSeqId maximum time to wait in milliseconds for sequenceid
-   * @return long the new assigned sequence number
-   * @throws IOException
-   */
-  public long getSequenceId(final long maxWaitForSeqId) throws IOException {
-    // TODO: This implementation waiting on a latch is problematic because if a higher level
-    // determines we should stop or abort, there is no global list of all these blocked WALKeys
-    // waiting on a sequence id; they can't be cancelled... interrupted. See getNextSequenceId.
-    //
-    // UPDATE: I think we can remove the timeout now we are stamping all walkeys with sequenceid,
-    // even those that have failed (previously we were not... so they would just hang out...).
-    // St.Ack 20150910
-    try {
-      if (maxWaitForSeqId < 0) {
-        this.seqNumAssignedLatch.await();
-      } else if (!this.seqNumAssignedLatch.await(maxWaitForSeqId, TimeUnit.MILLISECONDS)) {
-        throw new TimeoutIOException("Failed to get sequenceid after " + maxWaitForSeqId +
-          "ms; WAL system stuck or has gone away?");
-      }
-    } catch (InterruptedException ie) {
-      LOG.warn("Thread interrupted waiting for next log sequence number");
-      InterruptedIOException iie = new InterruptedIOException();
-      iie.initCause(ie);
-      throw iie;
-    }
     return this.logSeqNum;
   }
 
@@ -473,8 +494,8 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
     return this.writeTime;
   }
 
-  public NavigableMap<byte[], Integer> getScopes() {
-    return scopes;
+  public NavigableMap<byte[], Integer> getReplicationScopes() {
+    return replicationScope;
   }
 
   /** @return The nonce group */
@@ -487,8 +508,14 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
     return nonce;
   }
 
-  public void setScopes(NavigableMap<byte[], Integer> scopes) {
-    this.scopes = scopes;
+  private void setReplicationScope(NavigableMap<byte[], Integer> replicationScope) {
+    this.replicationScope = replicationScope;
+  }
+
+  public void serializeReplicationScope(boolean serialize) {
+    if (!serialize) {
+      setReplicationScope(null);
+    }
   }
 
   public void readOlderScopes(NavigableMap<byte[], Integer> scopes) {
@@ -505,7 +532,7 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
         }
       }
       if (scopes.size() > 0) {
-        this.scopes = scopes;
+        this.replicationScope = scopes;
       }
     }
   }
@@ -651,8 +678,8 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
       uuidBuilder.setMostSigBits(clusterId.getMostSignificantBits());
       builder.addClusterIds(uuidBuilder.build());
     }
-    if (scopes != null) {
-      for (Map.Entry<byte[], Integer> e : scopes.entrySet()) {
+    if (replicationScope != null) {
+      for (Map.Entry<byte[], Integer> e : replicationScope.entrySet()) {
         ByteString family = (compressionContext == null) ? ByteStringer.wrap(e.getKey())
             : compressor.compress(e.getKey(), compressionContext.familyDict);
         builder.addScopes(FamilyScope.newBuilder()
@@ -691,13 +718,13 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
     if (walKey.hasNonce()) {
       this.nonce = walKey.getNonce();
     }
-    this.scopes = null;
+    this.replicationScope = null;
     if (walKey.getScopesCount() > 0) {
-      this.scopes = new TreeMap<byte[], Integer>(Bytes.BYTES_COMPARATOR);
+      this.replicationScope = new TreeMap<byte[], Integer>(Bytes.BYTES_COMPARATOR);
       for (FamilyScope scope : walKey.getScopesList()) {
         byte[] family = (compressionContext == null) ? scope.getFamily().toByteArray() :
           uncompressor.uncompress(scope.getFamily(), compressionContext.familyDict);
-        this.scopes.put(family, scope.getScopeType().getNumber());
+        this.replicationScope.put(family, scope.getScopeType().getNumber());
       }
     }
     this.logSeqNum = walKey.getLogSequenceNumber();
@@ -706,18 +733,4 @@ public class WALKey implements SequenceId, Comparable<WALKey> {
       this.origLogSeqNum = walKey.getOrigSequenceNumber();
     }
   }
-
-  public volatile int firstIndex;
-  public volatile int lastIndexExclusive;
-  public volatile boolean success = false;
-  public volatile boolean locked = false;
-  public volatile long sequence;
-  public volatile WALEdit walEdit;
-  public volatile long addedSize = 0;
-  public void setMultiIndex(int firstIndex, int lastIndexExclusive) {
-    this.firstIndex = firstIndex;
-    this.lastIndexExclusive = lastIndexExclusive;
-  }
-  public volatile List<Region.RowLock> acquiredRowLocks;
-  public volatile ResponseToolKit responseTK;
 }

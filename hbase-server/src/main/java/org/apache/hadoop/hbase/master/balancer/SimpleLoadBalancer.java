@@ -290,7 +290,7 @@ public class SimpleLoadBalancer extends BaseLoadBalancer {
         return null;
       }
       clusterMap = new HashMap<ServerName, List<HRegionInfo>>(clusterMap);
-      clusterMap.remove(masterServerName);
+      if (!isEmbedded) clusterMap.remove(masterServerName);
     }
     long startTime = System.currentTimeMillis();
 

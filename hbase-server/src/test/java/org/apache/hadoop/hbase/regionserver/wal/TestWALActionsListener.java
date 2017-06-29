@@ -28,12 +28,15 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.*;
+import org.apache.hadoop.hbase.regionserver.MultiVersionConsistencyControl;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALKey;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -92,6 +95,7 @@ public class TestWALActionsListener {
              SOME_BYTES, SOME_BYTES, false);
     final WAL wal = wals.getWAL(hri.getEncodedNameAsBytes(), hri.getTable().getNamespace());
 
+    MultiVersionConsistencyControl mvcc = new MultiVersionConsistencyControl();
     for (int i = 0; i < 20; i++) {
       byte[] b = Bytes.toBytes(i+"");
       KeyValue kv = new KeyValue(b,b,b);
@@ -99,9 +103,14 @@ public class TestWALActionsListener {
       edit.add(kv);
       HTableDescriptor htd = new HTableDescriptor();
       htd.addFamily(new HColumnDescriptor(b));
+      NavigableMap<byte[], Integer> scopes = new TreeMap<byte[], Integer>(
+              Bytes.BYTES_COMPARATOR);
+      for(byte[] fam : htd.getFamiliesKeys()) {
+        scopes.put(fam, 0);
+      }
 
-      final long txid = wal.append(htd, hri, new WALKey(hri.getEncodedNameAsBytes(),
-          TableName.valueOf(b), 0), edit, true);
+      final long txid = wal.append(hri, new WALKey(hri.getEncodedNameAsBytes(),
+          TableName.valueOf(b), 0, mvcc, scopes), edit, true);
       wal.sync(txid);
       if (i == 10) {
         wal.registerWALActionsListener(laterobserver);
